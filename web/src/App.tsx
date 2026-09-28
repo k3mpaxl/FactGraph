@@ -285,7 +285,7 @@ function EvidenceWindow({ facts, from, to, onFromChange, onToChange, onReset }: 
 }
 
 function ActivityPanel({ actions }: { actions: BoardAction[] }) {
-  return <section className="activity-panel"><div className="card-header"><div><div className="card-title"><Activity size={18} /> Activity</div><span>Synchronised changes on this board</span></div><span className="mini-count">{actions.length} {actions.length === 1 ? 'action' : 'actions'}</span></div><div className="activity-list">{actions.length ? [...actions].slice(-6).reverse().map(action => <div key={action.id} className="activity-item"><span className="activity-mark" style={{ background: peerColor(action.actor) }} /><span><strong>{actionLabel(action)}</strong><small>{action.author} · {date(action.at)}</small></span></div>) : <span className="timeline-empty">No actions yet.</span>}</div></section>
+  return <section className="activity-panel"><div className="card-header"><div><div className="card-title"><Activity size={18} /> Activity</div><span>Synchronised changes on this board</span></div><span className="mini-count">{actions.length} {actions.length === 1 ? 'action' : 'actions'}</span></div><div className="activity-list">{actions.length ? [...actions].slice(-6).reverse().map(action => <div key={action.id} className="activity-item"><span className="activity-mark" style={{ background: peerColor(action.actor) }} /><span><strong>{actionLabel(action)}</strong><small><b className={`activity-source ${action.author.toLowerCase()}`}>{action.author}</b> · {date(action.at)}</small></span></div>) : <span className="timeline-empty">No actions yet.</span>}</div></section>
 }
 
 export default function App() {

@@ -7,6 +7,7 @@ when a peer joins and keep their own durable copy in IndexedDB.
 from __future__ import annotations
 
 import asyncio
+import csv
 from dataclasses import dataclass
 from pathlib import Path
 from uuid import UUID
@@ -35,7 +36,7 @@ class Peer:
 # Presence only. No board data or action history is retained on the server.
 rooms: dict[str, dict[str, Peer]] = {}
 rooms_lock = asyncio.Lock()
-pending: dict[str, tuple[str, asyncio.Future[dict]]] = {}
+pending: dict[str, tuple[WebSocket, asyncio.Future[dict]]] = {}
 
 
 def valid_uuid(value: str) -> bool:
@@ -63,6 +64,7 @@ async def browser_command(board_id: str, operation: str, **values) -> dict:
 
     if not valid_uuid(board_id):
         raise HTTPException(422, "Ungültige Board-UUID")
+    board_id = str(UUID(board_id))
     request_id = str(uuid4())
     loop = asyncio.get_running_loop()
     async with rooms_lock:
@@ -71,10 +73,10 @@ async def browser_command(board_id: str, operation: str, **values) -> dict:
             raise HTTPException(409, "Board offline: zuerst die Board-URL in einem Browser öffnen")
         actor, peer = next(iter(room.items()))
         future: asyncio.Future[dict] = loop.create_future()
-        pending[request_id] = (actor, future)
+        pending[request_id] = (peer.websocket, future)
     try:
         await peer.websocket.send_json({"type": "api-command", "requestId": request_id,
-                                        "operation": operation, **values})
+                                        "boardId": board_id, "operation": operation, **values})
         result = await asyncio.wait_for(future, timeout=30)
         if not result.get("ok"):
             raise HTTPException(422, str(result.get("error") or "Browser hat den Auftrag abgelehnt"))
@@ -116,6 +118,7 @@ class RelationInput(BaseModel):
     stance: str = "supports"
     confidence: float = 1
     valid_from: str | None = None
+    valid_to: str | None = None
     id: str | None = None
 
 
@@ -127,6 +130,8 @@ class SourceInput(BaseModel):
 
 
 class EvidenceInput(BaseModel):
+    valid_from: str | None = None
+    valid_to: str | None = None
     stance: str = "supports"
     confidence: float = Field(default=1, ge=0, le=1)
     source_id: str | None = None
@@ -189,7 +194,7 @@ async def board_status(board_id: str):
     if not valid_uuid(board_id):
         raise HTTPException(422, "Ungültige Board-UUID")
     async with rooms_lock:
-        peers = len(rooms.get(board_id, {}))
+        peers = len(rooms.get(str(UUID(board_id)), {}))
     return {"board_id": board_id, "online_browsers": peers,
             "durable_storage": "browser-indexeddb"}
 
@@ -206,7 +211,33 @@ async def create_entity(board_id: str, body: EntityInput):
     except ValueError as error:
         raise HTTPException(422, str(error)) from error
     accepted = await apply_drafts(board_id, drafts)
-    return {"id": entity_id, "accepted_actions": accepted}
+    return {"board_id": str(UUID(board_id)), "id": entity_id, "accepted_actions": accepted}
+
+
+class EntityUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1)
+    kind: str | None = Field(default=None, min_length=1)
+    description: str | None = None
+
+
+@app.patch("/api/boards/{board_id}/entities/{entity_id}")
+async def update_entity(board_id: str, entity_id: str, body: EntityUpdate):
+    index = (await browser_command(board_id, "index"))["index"]
+    if entity_id not in {entity["id"] for entity in index["entities"]}:
+        raise HTTPException(404, "Entität existiert im Board nicht")
+    values = body.model_dump(exclude_none=True)
+    if any(not values[key].strip() for key in ("name", "kind") if key in values):
+        raise HTTPException(422, "Name und Typ dürfen nicht leer sein")
+    accepted = await apply_drafts(board_id, [action("entity.update", {"id": entity_id, **values})])
+    return {"board_id": str(UUID(board_id)), "id": entity_id, "accepted_actions": accepted}
+
+
+@app.get("/api/boards")
+async def online_boards():
+    async with rooms_lock:
+        return {"boards": [{"board_id": key, "online_browsers": len(peers),
+                            "board_url": f"/boards/{key}", "api_url": f"/api/boards/{key}"}
+                           for key, peers in rooms.items()]}
 
 
 @app.post("/api/boards/{board_id}/relations", status_code=201)
@@ -215,7 +246,7 @@ async def create_relation(board_id: str, body: RelationInput):
         relation_id, drafts = relation_actions(body.subject_id, body.predicate,
             body.object_id, source_id=body.source_id, note=body.note,
             stance=body.stance, confidence=body.confidence,
-            valid_from=body.valid_from, relation_id=body.id)
+            valid_from=body.valid_from, valid_to=body.valid_to, relation_id=body.id)
     except ValueError as error:
         raise HTTPException(422, str(error)) from error
     index = (await browser_command(board_id, "index"))["index"]
@@ -252,7 +283,7 @@ async def create_evidence(board_id: str, relation_id: str, body: EvidenceInput):
     accepted = await apply_drafts(board_id, [action("assertion.add", {
         "id": evidence_id, "fact_id": relation_id, "stance": body.stance,
         "confidence": body.confidence, "source_id": body.source_id,
-        "note": body.note})])
+        "note": body.note, "valid_from": body.valid_from, "valid_to": body.valid_to})])
     return {"id": evidence_id, "accepted_actions": accepted}
 
 
@@ -318,19 +349,20 @@ async def add_source(board_id: str, title: str, uri: str = "", excerpt: str = ""
 
 @mcp.tool
 async def link_entities(board_id: str, subject_id: str, predicate: str,
-                        object_id: str, note: str = "", source_id: str | None = None) -> dict:
+                        object_id: str, note: str = "", source_id: str | None = None,
+                        valid_from: str | None = None, valid_to: str | None = None) -> dict:
     """Create a directed relationship and optional supporting evidence on an open board."""
     return await create_relation(board_id, RelationInput(subject_id=subject_id,
-        predicate=predicate, object_id=object_id, note=note, source_id=source_id))
+        predicate=predicate, object_id=object_id, note=note, source_id=source_id, valid_from=valid_from, valid_to=valid_to))
 
 
 @mcp.tool
 async def add_evidence(board_id: str, relation_id: str, note: str,
                        source_id: str | None = None, stance: str = "supports",
-                       confidence: float = 1) -> dict:
+                       confidence: float = 1, valid_from: str | None = None, valid_to: str | None = None) -> dict:
     """Attach a supporting or refuting statement to an existing relation."""
     return await create_evidence(board_id, relation_id, EvidenceInput(note=note,
-        source_id=source_id, stance=stance, confidence=confidence))
+        source_id=source_id, stance=stance, confidence=confidence, valid_from=valid_from, valid_to=valid_to))
 
 
 @mcp.tool
@@ -357,6 +389,7 @@ async def board_socket(websocket: WebSocket, board_id: str):
         await websocket.close(code=1008)
         return
 
+    board_id = str(UUID(board_id))
     await websocket.accept()
     async with rooms_lock:
         room = rooms.setdefault(board_id, {})
@@ -382,7 +415,7 @@ async def board_socket(websocket: WebSocket, board_id: str):
                 actions = message.get("actions")
                 if isinstance(actions, list) and len(actions) <= 1000:
                     target = message.get("target")
-                    await send_to_room(board_id, {"type": "actions", "from": actor, "actions": actions},
+                    await send_to_room(board_id, {"type": "actions", "from": actor, "actions": actions, "deferRender": message.get("deferRender") is True},
                                        exclude=actor, target=target if isinstance(target, str) else None)
             elif kind == "sync-request":
                 await send_to_room(board_id, {"type": "sync-request", "from": actor}, exclude=actor)
@@ -395,7 +428,7 @@ async def board_socket(websocket: WebSocket, board_id: str):
                     await send_to_room(board_id, {"type": "peer-profile", "peer": {"id": actor, "name": updated}}, exclude=actor)
             elif kind == "api-result" and isinstance(message.get("requestId"), str):
                 entry = pending.get(message["requestId"])
-                if entry and entry[0] == actor and not entry[1].done():
+                if entry and entry[0] is websocket and not entry[1].done():
                     entry[1].set_result(message)
     except (WebSocketDisconnect, RuntimeError):
         pass
@@ -411,7 +444,7 @@ async def board_socket(websocket: WebSocket, board_id: str):
                 removed = False
         if removed:
             for request_id, (writer, future) in list(pending.items()):
-                if writer == actor and not future.done():
+                if writer is websocket and not future.done():
                     future.set_result({"ok": False, "error": "Browser-Verbindung unterbrochen"})
             await send_to_room(board_id, {"type": "peer-left", "id": actor})
 
@@ -426,4 +459,6 @@ if WEB_DIR.is_dir():
         requested = (WEB_DIR / path).resolve()
         if requested.is_file() and requested.is_relative_to(WEB_DIR.resolve()):
             return FileResponse(requested)
+        if path == "api" or path.startswith("api/"):
+            raise HTTPException(404, "Unbekannter API-Endpunkt; siehe /docs")
         return FileResponse(WEB_DIR / "index.html")

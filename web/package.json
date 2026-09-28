@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
-    "build": "tsc -b && vite build"
+    "build": "tsc -b && vite build",
+    "test": "tsc src/board.ts src/timeline.ts --outDir node_modules/.cache/factgraph-tests --module commonjs --target es2022 --skipLibCheck && node tests/timeline.cjs ./node_modules/.cache/factgraph-tests"
   },
   "dependencies": {
     "cytoscape": "^3.30.4",

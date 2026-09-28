@@ -14,7 +14,7 @@ export type Source = {
 export type Assertion = {
   id: string; fact_id: string; stance: 'supports' | 'refutes';
   confidence: number; source_id: string | null; note: string;
-  created_at: string; retracted_at: string | null;
+  valid_from: string | null; valid_to: string | null; created_at: string; retracted_at: string | null;
 }
 export type TruthState = 'supported' | 'disputed' | 'refuted' | 'unknown'
 export type Fact = {

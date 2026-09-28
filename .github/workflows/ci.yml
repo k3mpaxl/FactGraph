@@ -34,7 +34,7 @@ jobs:
           cache-dependency-path: web/package-lock.json
 
       - name: Build frontend
-        run: npm ci && npm run build
+        run: npm ci && npm test && npm run build
         working-directory: web
 
   docker-build:

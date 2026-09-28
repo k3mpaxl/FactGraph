@@ -175,3 +175,13 @@ FACTGRAPH_BIND_IP=0.0.0.0 docker compose -f deploy/compose.yaml up -d
 .venv/bin/python -m unittest discover -s tests -v
 cd web && npm run build
 ```
+
+## Evidenzzeit und Bearbeitung
+
+Die Zeitachse zeigt aktive Belege chronologisch mit Uhrzeit in UTC. `valid_from` und `valid_to` beschreiben den Evidenzzeitraum; ein einzelner Beginn ist ein Ereigniszeitpunkt. Unbekannte Zeiten stehen am Ende. Erstellungszeiten werden nicht als Ersatz verwendet. Ältere Logimporte werden anhand der originalen JSON-Zeile gelesen, anschließend gelten explizite Gültigkeitszeiten der Beziehung als Rückfall.
+
+Logimporte erkennen `TimeGenerated`, `timestamp`, `Timestamp`, `time`, `event_time` sowie `StartTime`/`EndTime` und `valid_from`/`valid_to`. REST und MCP unterstützen Evidenzzeiträume beim Anlegen von Beziehungen und Belegen.
+
+Entitäten lassen sich im Inspektor über **Bearbeiten** umbenennen und in Typ/Beschreibung ändern. REST: `PATCH /api/boards/{board_id}/entities/{entity_id}` mit beispielsweise `{"name":"Neuer Name"}`.
+
+`GET /api/boards` listet aktuell verbundene Boards mit ihrer UUID und ihrem API-Pfad. In der Oberfläche kopiert **Board-API kopieren** den Endpunkt des aktuellen Boards. Die REST-Aufrufe müssen an denselben Server gehen wie die Browser-Verbindung. Ohne geöffneten Browser liefert ein Schreibaufruf `409`; unbekannte API-Pfade liefern `404`.

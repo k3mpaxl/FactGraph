@@ -139,6 +139,8 @@ export function useBoard(boardId: string) {
           const requestId = message.requestId
           void (async () => {
             try {
+              if (message.boardId !== undefined && message.boardId !== boardId) throw new Error('Falsches Zielboard')
+              await mergeQueue.current
               if (message.operation === 'snapshot') {
                 const snapshot = project(boardId, actionsRef.current)
                 send({ type: 'api-result', requestId, ok: true, graph: {

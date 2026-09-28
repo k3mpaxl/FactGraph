@@ -155,14 +155,14 @@ export default function GraphView({ entities, facts, selection, search, pathIds,
   }, [entities, facts, selection, search, pathIds])
 
   return <div className="graph-shell">
-    <div className="graph-canvas" ref={container} aria-label="Interaktiver Entity-Relation-Graph" />
+    <div className="graph-canvas" ref={container} aria-label="Interactive entity relationship graph" />
     <div className="graph-controls">
-      <button title="Knoten im Graphen erstellen" aria-label="Knoten im Graphen erstellen" onClick={onCreateNode}><Box size={17} /></button>
-      <button title="Kante vom gewählten Knoten erstellen" aria-label="Kante vom gewählten Knoten erstellen" disabled={selection?.kind !== 'entity'} onClick={onCreateRelation}>↗</button>
-      <button title="Vergrößern" onClick={() => graph.current?.zoom({ level: Math.min(graph.current.zoom() * 1.25, 2.5), renderedPosition: { x: graph.current.width() / 2, y: graph.current.height() / 2 } })}><Plus size={17} /></button>
-      <button title="Verkleinern" onClick={() => graph.current?.zoom({ level: Math.max(graph.current.zoom() / 1.25, 0.35), renderedPosition: { x: graph.current.width() / 2, y: graph.current.height() / 2 } })}><Minus size={17} /></button>
-      <button title="Alles anzeigen" onClick={() => graph.current?.fit(undefined, 56)}><Focus size={17} /></button>
+      <button title="Create node" aria-label="Create node" onClick={onCreateNode}><Box size={17} /></button>
+      <button title="Create relationship from selected node" aria-label="Create relationship from selected node" disabled={selection?.kind !== 'entity'} onClick={onCreateRelation}>↗</button>
+      <button title="Zoom in" onClick={() => graph.current?.zoom({ level: Math.min(graph.current.zoom() * 1.25, 2.5), renderedPosition: { x: graph.current.width() / 2, y: graph.current.height() / 2 } })}><Plus size={17} /></button>
+      <button title="Zoom out" onClick={() => graph.current?.zoom({ level: Math.max(graph.current.zoom() / 1.25, 0.35), renderedPosition: { x: graph.current.width() / 2, y: graph.current.height() / 2 } })}><Minus size={17} /></button>
+      <button title="Fit graph" onClick={() => graph.current?.fit(undefined, 56)}><Focus size={17} /></button>
     </div>
-    <div className="graph-hint">Farbe/Form = Typ · Knoten ziehen → Raster · Entf löscht · Esc schließt</div>
+    <div className="graph-hint">Color/shape = type · drag nodes → grid · Delete removes · Esc closes</div>
   </div>
 }

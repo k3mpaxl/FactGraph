@@ -68,7 +68,7 @@ class RelayTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_rest_write_requires_browser_ack(self):
         board, actor = str(uuid4()), str(uuid4())
-        url = f"http://127.0.0.1:{self.port}/api/boards/{board}/entities"
+        url = f"http://127.0.0.1:{self.port}/api/boards/{board.upper()}/entities"
 
         def post():
             request = Request(url, json.dumps({"name": "10.1.2.3", "kind": "IP"}).encode(),
@@ -89,6 +89,7 @@ class RelayTest(unittest.IsolatedAsyncioTestCase):
             command = await receive(websocket)
             self.assertEqual(command["type"], "api-command")
             self.assertEqual(command["operation"], "apply")
+            self.assertEqual(command["boardId"], board)
             self.assertEqual(command["drafts"][0]["payload"]["name"], "10.1.2.3")
             self.assertFalse(request_task.done())
             await websocket.send(json.dumps({"type": "api-result", "requestId": command["requestId"],

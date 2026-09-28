@@ -3,7 +3,7 @@ import { initialPosition } from './layout'
 import { uuid } from './uuid'
 
 export type ActionType =
-  | 'board.rename' | 'entity.add' | 'entity.position' | 'entity.delete' | 'identifier.add' | 'identifier.delete'
+  | 'board.rename' | 'entity.add' | 'entity.update' | 'entity.position' | 'entity.delete' | 'identifier.add' | 'identifier.delete'
   | 'source.add' | 'fact.add' | 'fact.delete' | 'assertion.add' | 'assertion.retract'
 
 export type BoardAction = {
@@ -14,7 +14,7 @@ export type ActionDraft = { id?: string; type: ActionType; payload: Record<strin
 export type BoardProjection = { data: GraphData; name: string }
 
 const actionTypes: ActionType[] = [
-  'board.rename', 'entity.add', 'entity.position', 'entity.delete', 'identifier.add', 'identifier.delete',
+  'board.rename', 'entity.add', 'entity.update', 'entity.position', 'entity.delete', 'identifier.add', 'identifier.delete',
   'source.add', 'fact.add', 'fact.delete', 'assertion.add', 'assertion.retract',
 ]
 
@@ -87,6 +87,14 @@ export function project(boardId: string, operations: BoardAction[]): BoardProjec
               position: validPosition(item.x, item.y) ? { x: item.x as number, y: item.y as number } : fallback })
           }
           break
+        case 'entity.update': {
+          const entity = entities.get(id)
+          if (entity) for (const field of ['name', 'kind', 'description'] as const) {
+            if (typeof item[field] === 'string' && (field === 'description' || item[field].trim()))
+              entity[field] = item[field].trim()
+          }
+          break
+        }
         case 'entity.position': {
           const entity = entities.get(id)
           if (entity && validPosition(item.x, item.y))
@@ -150,6 +158,8 @@ export function project(boardId: string, operations: BoardAction[]): BoardProjec
           if (id && facts.has(factId) && !assertions.has(id) && (item.stance === 'supports' || item.stance === 'refutes'))
             assertions.set(id, { id, fact_id: factId, stance: item.stance, confidence: Number(item.confidence ?? 1),
               source_id: typeof item.source_id === 'string' ? item.source_id : null,
+              valid_from: typeof item.valid_from === 'string' ? item.valid_from : null,
+              valid_to: typeof item.valid_to === 'string' ? item.valid_to : null,
               note: String(item.note ?? ''), created_at: String(item.created_at ?? operation.at),
               retracted_at: typeof item.retracted_at === 'string' ? item.retracted_at : null })
           break

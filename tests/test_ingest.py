@@ -19,6 +19,17 @@ class IngestTest(unittest.TestCase):
         self.assertEqual(summary["evidence"], 2)
         self.assertEqual(sum(item["type"] == "assertion.add" for item in first), 2)
         self.assertIn("AccessLogs", first[0]["payload"]["excerpt"])
+        evidence = [item["payload"] for item in first if item["type"] == "assertion.add"]
+        self.assertEqual([item["valid_from"] for item in evidence], [row["TimeGenerated"] for row in rows])
+        self.assertNotEqual(evidence[0]["created_at"], evidence[0]["valid_from"])
+
+    def test_evidence_period_and_missing_time(self):
+        rows = [{"ip": "a", "target": "b", "StartTime": "2026-01-01T10:00:00Z",
+                 "EndTime": "2026-01-01T11:00:00Z"}, {"ip": "a", "target": "b"}]
+        drafts, _ = rows_to_actions(str(uuid4()), rows, title="Periods")
+        evidence = [d["payload"] for d in drafts if d["type"] == "assertion.add"]
+        self.assertEqual(evidence[0]["valid_to"], rows[0]["EndTime"])
+        self.assertIsNone(evidence[1]["valid_from"])
 
     def test_import_reuses_existing_manual_entity_and_relation(self):
         board, ip_id, file_id, fact_id = (str(uuid4()) for _ in range(4))

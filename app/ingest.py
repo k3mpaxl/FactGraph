@@ -32,7 +32,7 @@ def entity_actions(name: str, kind: str = "Sonstiges", description: str = "",
 def relation_actions(subject_id: str, predicate: str, object_id: str,
                      *, source_id: str | None = None, note: str = "",
                      stance: str = "supports", confidence: float = 1,
-                     valid_from: str | None = None, relation_id: str | None = None) -> tuple[str, list[dict]]:
+                     valid_from: str | None = None, valid_to: str | None = None, relation_id: str | None = None) -> tuple[str, list[dict]]:
     if not subject_id or not object_id or subject_id == object_id:
         raise ValueError("Die Beziehung braucht zwei verschiedene Entitäts-IDs")
     if not predicate.strip():
@@ -42,11 +42,11 @@ def relation_actions(subject_id: str, predicate: str, object_id: str,
     relation_id = relation_id or str(uuid4())
     drafts = [action("fact.add", {"id": relation_id, "subject_id": subject_id,
         "predicate": predicate.strip(), "object_id": object_id,
-        "valid_from": valid_from, "valid_to": None})]
+        "valid_from": valid_from, "valid_to": valid_to})]
     if source_id or note:
         drafts.append(action("assertion.add", {"id": str(uuid4()), "fact_id": relation_id,
             "stance": stance, "confidence": confidence, "source_id": source_id,
-            "note": note}))
+            "note": note, "valid_from": valid_from, "valid_to": valid_to}))
     return relation_id, drafts
 
 
@@ -104,7 +104,6 @@ def rows_to_actions(board_id: str, rows: list[dict], *, title: str,
     object_field = _field(rows, object_field, OBJECT_FIELDS, "Ziel")
     if predicate_field:
         predicate_field = _field(rows, predicate_field, (), "Beziehungs")
-    timestamp_field = next((field for field in TIME_FIELDS if field in rows[0]), None)
     predicate = predicate.strip()
     if not predicate:
         raise ValueError("Der Kantenbezeichner darf nicht leer sein")
@@ -153,10 +152,11 @@ def rows_to_actions(board_id: str, rows: list[dict], *, title: str,
                     action_id=_stable(board_id, "fact-action", fact_id), author="Import"))
         row_text = json.dumps(row, sort_keys=True, ensure_ascii=False, default=str)
         assertion_id = _stable(board_id, "assertion", source_id, fact_id, row_text)
-        timestamp = str(row.get(timestamp_field) or now) if timestamp_field else now
+        timestamp = next((str(row[key]) for key in ("valid_from", "StartTime", *TIME_FIELDS) if row.get(key)), None)
+        end = next((str(row[key]) for key in ("valid_to", "EndTime") if row.get(key)), None)
         drafts.append(action("assertion.add", {"id": assertion_id, "fact_id": fact_id,
             "stance": "supports", "confidence": 1, "source_id": source_id,
-            "note": row_text, "created_at": timestamp},
+            "note": row_text, "created_at": now, "valid_from": timestamp, "valid_to": end},
             action_id=_stable(board_id, "assertion-action", assertion_id), author="Import"))
         assertions += 1
     return drafts, {"rows": len(rows), "skipped": skipped, "entities": len(seen_entities),

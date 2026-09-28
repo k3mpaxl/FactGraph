@@ -52,6 +52,13 @@ export function timelineBounds(facts: Fact[]) {
   return { from: new Date(Math.min(...values)).toISOString(), to: new Date(Math.max(...values)).toISOString() }
 }
 
+export function timelineSteps(facts: Fact[]) {
+  const values = timelineEntries(facts).flatMap(entry => [entry.from, entry.to])
+    .filter((value): value is string => Boolean(value))
+    .map(value => Date.parse(value)).filter(Number.isFinite)
+  return [...new Set(values)].sort((a, b) => a - b).map(value => new Date(value).toISOString())
+}
+
 export function periodLabel(from: string | null, to: string | null) {
   const format = (value: string) => new Date(value).toLocaleString('en-GB', { timeZone: 'UTC', dateStyle: 'medium', timeStyle: 'medium' })
   if (!from && !to) return 'Evidence time unknown'

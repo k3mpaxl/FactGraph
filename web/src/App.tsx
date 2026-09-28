@@ -4,7 +4,7 @@ import {
   Database, FileText, Fingerprint, GitBranch, Link2, Plus, Search,
   ShieldCheck, Sparkles, Trash2, Upload, Users, Wifi, WifiOff, X,
 } from 'lucide-react'
-import { factIntersects, timelineBounds, timelineEntries, periodLabel, evidencePeriod } from './timeline'
+import { factIntersects, timelineSteps, timelineEntries, periodLabel, evidencePeriod } from './timeline'
 import GraphView from './GraphView'
 import { demoDrafts, factKey, legacyDrafts, normalizeIdentifier, type BoardAction } from './board'
 import { useBoard } from './useBoard'
@@ -271,18 +271,20 @@ function EvidenceWindow({ facts, from, to, includeUndated, onIncludeUndatedChang
   includeUndated: boolean; onIncludeUndatedChange: (value: boolean) => void;
   onFromChange: (value: string) => void; onToChange: (value: string) => void; onReset: () => void;
 }) {
-  const bounds = timelineBounds(facts)
-  const min = bounds.from ? Date.parse(bounds.from) : 0
-  const max = bounds.to ? Date.parse(bounds.to) : 1
-  const span = Math.max(max - min, 1)
-  const fromMs = from ? Math.max(min, Math.min(max, Date.parse(from))) : min
-  const toMs = to ? Math.max(min, Math.min(max, Date.parse(to))) : max
-  const position = (value: number) => Math.round(((value - min) / span) * 1000)
-  const isoAt = (value: number) => new Date(value).toISOString()
-  const moveFrom = (value: number) => onFromChange(isoAt(Math.min(value, toMs)))
-  const moveTo = (value: number) => onToChange(isoAt(Math.max(value, fromMs)))
-  const hasRange = Boolean(bounds.from && bounds.to)
-  return <div className="evidence-window"><div><strong>Evidence window</strong><span>{from || to ? 'Edges update as evidence overlaps the selected range.' : 'Drag the handles to reveal activity over time.'}</span></div><div className="window-range" aria-label="Evidence time range"><div className="window-track" /><div className="window-selection" style={{ left: `${position(fromMs) / 10}%`, right: `${100 - position(toMs) / 10}%` }} /><input aria-label="Evidence from" className="range-input range-from" type="range" min="0" max="1000" value={position(fromMs)} disabled={!hasRange} onChange={event => moveFrom(Number(event.target.value) / 1000 * span + min)} /><input aria-label="Evidence to" className="range-input range-to" type="range" min="0" max="1000" value={position(toMs)} disabled={!hasRange} onChange={event => moveTo(Number(event.target.value) / 1000 * span + min)} /><div className="window-labels"><span>From <strong>{hasRange ? periodLabel(isoAt(fromMs), null) : 'No dated evidence'}</strong></span><span>To <strong>{hasRange ? periodLabel(isoAt(toMs), null) : 'No dated evidence'}</strong></span></div></div><label className="undated-toggle"><input type="checkbox" checked={includeUndated} onChange={event => onIncludeUndatedChange(event.target.checked)} /> Include undated</label>{(from || to) && <button className="text-button" onClick={onReset}>Show all</button>}</div>
+  const steps = timelineSteps(facts)
+  const maxStep = Math.max(steps.length - 1, 0)
+  const nearestStep = (value: string, fallback: number) => {
+    if (!value || !steps.length) return fallback
+    const target = Date.parse(value)
+    return steps.reduce((best, step, index) => Math.abs(Date.parse(step) - target) < Math.abs(Date.parse(steps[best]) - target) ? index : best, 0)
+  }
+  const fromStep = Math.min(nearestStep(from, 0), maxStep)
+  const toStep = Math.max(nearestStep(to, maxStep), 0)
+  const position = (step: number) => maxStep ? Math.round((step / maxStep) * 1000) : 0
+  const moveFrom = (step: number) => onFromChange(steps[Math.min(step, toStep)] ?? '')
+  const moveTo = (step: number) => onToChange(steps[Math.max(step, fromStep)] ?? '')
+  const hasRange = steps.length > 1
+  return <div className="evidence-window"><div><strong>Evidence window</strong><span>{from || to ? 'Edges update at each evidence step.' : 'Drag the handles through evidence activity.'}</span></div><div className="window-range" aria-label="Evidence time range"><div className="window-track" /><div className="window-selection" style={{ left: `${position(fromStep) / 10}%`, right: `${100 - position(toStep) / 10}%` }} /> <input aria-label="Evidence from" aria-valuetext={steps[fromStep] ?? 'No dated evidence'} className="range-input range-from" type="range" min="0" max={maxStep} step="1" value={fromStep} disabled={!hasRange} onChange={event => moveFrom(Number(event.target.value))} /><input aria-label="Evidence to" aria-valuetext={steps[toStep] ?? 'No dated evidence'} className="range-input range-to" type="range" min="0" max={maxStep} step="1" value={toStep} disabled={!hasRange} onChange={event => moveTo(Number(event.target.value))} /><div className="window-labels"><span>From <strong>{steps.length ? periodLabel(steps[fromStep], null) : 'No dated evidence'}</strong></span><span>To <strong>{steps.length ? periodLabel(steps[toStep], null) : 'No dated evidence'}</strong></span><em>{steps.length ? `${fromStep + 1}–${toStep + 1} / ${steps.length} steps` : ''}</em></div></div><label className="undated-toggle"><input type="checkbox" checked={includeUndated} onChange={event => onIncludeUndatedChange(event.target.checked)} /> Include undated</label>{(from || to) && <button className="text-button" onClick={onReset}>Show all</button>}</div>
 }
 
 function ActivityPanel({ actions }: { actions: BoardAction[] }) {

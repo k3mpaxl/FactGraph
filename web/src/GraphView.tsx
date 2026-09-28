@@ -1,6 +1,6 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import cytoscape from 'cytoscape'
-import { Box, Focus, Minus, Plus, Sparkles } from 'lucide-react'
+import { Box, Focus, Link2, Minus, Plus, Sparkles, X } from 'lucide-react'
 import type { Entity, Fact } from './types'
 import { GRAPH_GRID, snapPosition } from './layout'
 import { entityVisual } from './entityVisual'
@@ -10,7 +10,7 @@ type Selection = { kind: 'entity' | 'fact'; id: string } | null
 export default function GraphView({ entities, facts, selection, search, pathIds, onSelect, onCreateNode, onCreateRelation, onMoveNode }: {
   entities: Entity[]; facts: Fact[]; selection: Selection; search: string;
   pathIds: string[];
-  onSelect: (value: Selection) => void; onCreateNode: () => void; onCreateRelation: (entityId: string) => void;
+  onSelect: (value: Selection) => void; onCreateNode: () => void; onCreateRelation: (sourceId: string, targetId?: string) => void;
   onMoveNode: (id: string, position: { x: number; y: number }) => void;
 }) {
   const container = useRef<HTMLDivElement>(null)
@@ -18,10 +18,17 @@ export default function GraphView({ entities, facts, selection, search, pathIds,
   const selectRef = useRef(onSelect)
   const moveRef = useRef(onMoveNode)
   const relationRef = useRef(onCreateRelation)
+  const selectionRef = useRef(selection)
+  const connectionRef = useRef<string | null>(null)
+  const refreshAnchorRef = useRef<() => void>(() => undefined)
   const fitted = useRef(false)
+  const [connectionSource, setConnectionSource] = useState<string | null>(null)
+  const [anchorPosition, setAnchorPosition] = useState<{ left: number; top: number } | null>(null)
   selectRef.current = onSelect
   moveRef.current = onMoveNode
   relationRef.current = onCreateRelation
+  selectionRef.current = selection
+  connectionRef.current = connectionSource
 
   useEffect(() => {
     if (!container.current) return
@@ -60,6 +67,12 @@ export default function GraphView({ entities, facts, selection, search, pathIds,
         { selector: 'node.focused', style: {
           'border-width': 4, 'border-color': '#f5cc81',
         } },
+        { selector: 'node.relation-source', style: {
+          'border-width': 5, 'border-color': '#f2bf78',
+        } },
+        { selector: 'node.relation-target', style: {
+          'border-width': 3, 'border-color': '#82c9b6',
+        } },
         { selector: 'edge.focused', style: { 'width': 5, 'opacity': 1 } },
       ],
       layout: { name: 'preset' },
@@ -69,6 +82,14 @@ export default function GraphView({ entities, facts, selection, search, pathIds,
     let lastTap = { id: '', at: 0 }
     cy.on('tap', 'node', event => {
       const id = event.target.id()
+      const source = connectionRef.current
+      if (source) {
+        if (id !== source) {
+          setConnectionSource(null)
+          relationRef.current(source, id)
+        }
+        return
+      }
       const now = Date.now()
       selectRef.current({ kind: 'entity', id })
       if (lastTap.id === id && now - lastTap.at < 320) relationRef.current(id)
@@ -80,22 +101,30 @@ export default function GraphView({ entities, facts, selection, search, pathIds,
       relationRef.current(id)
     })
     cy.on('tap', 'edge', event => selectRef.current({ kind: 'fact', id: event.target.id() }))
-    cy.on('tap', event => { if (event.target === cy) selectRef.current(null) })
+    cy.on('tap', event => { if (event.target === cy) { setConnectionSource(null); selectRef.current(null) } })
     cy.on('dragfree', 'node', event => {
       const node = event.target as cytoscape.NodeSingular
       const position = snapPosition(node.position())
       node.position(position)
       moveRef.current(node.id(), position)
+      refreshAnchorRef.current()
     })
-    const updateGrid = () => {
+    const updateViewport = () => {
       if (!container.current) return
       const step = GRAPH_GRID * cy.zoom()
       const pan = cy.pan()
       container.current.style.backgroundSize = `${step}px ${step}px`
       container.current.style.backgroundPosition = `${pan.x}px ${pan.y}px`
+      const selected = selectionRef.current
+      if (selected?.kind !== 'entity') { setAnchorPosition(null); return }
+      const node = cy.getElementById(selected.id)
+      if (!node.length) { setAnchorPosition(null); return }
+      const position = node.renderedPosition()
+      setAnchorPosition({ left: position.x + node.renderedWidth() / 2 + 13, top: position.y })
     }
-    cy.on('pan zoom', updateGrid)
-    updateGrid()
+    refreshAnchorRef.current = updateViewport
+    cy.on('pan zoom render', updateViewport)
+    updateViewport()
     graph.current = cy
     return () => { graph.current = null; cy.destroy() }
   }, [])
@@ -159,6 +188,7 @@ export default function GraphView({ entities, facts, selection, search, pathIds,
         if (selection.kind === 'entity') element.connectedEdges().removeClass('dimmed')
       }
     }
+    refreshAnchorRef.current()
     for (const id of pathIds) {
       const edge = cy.getElementById(id)
       if (edge.length) {
@@ -168,6 +198,21 @@ export default function GraphView({ entities, facts, selection, search, pathIds,
       }
     }
   }, [entities, facts, selection, search, pathIds])
+
+  useEffect(() => {
+    const cy = graph.current
+    if (!cy) return
+    cy.nodes().removeClass('relation-source relation-target')
+    if (connectionSource) {
+      cy.getElementById(connectionSource).addClass('relation-source')
+      cy.nodes().filter(node => node.id() !== connectionSource).addClass('relation-target')
+    }
+  }, [connectionSource])
+
+  useEffect(() => {
+    if (connectionSource && (selection?.kind !== 'entity' || selection.id !== connectionSource))
+      setConnectionSource(null)
+  }, [connectionSource, selection])
 
   const autoAlign = () => {
     const cy = graph.current
@@ -186,14 +231,22 @@ export default function GraphView({ entities, facts, selection, search, pathIds,
 
   return <div className="graph-shell">
     <div className="graph-canvas" ref={container} aria-label="Interactive entity relationship graph" />
+    {selection?.kind === 'entity' && anchorPosition && <button
+      className={`node-anchor ${connectionSource ? 'active' : ''}`}
+      style={anchorPosition}
+      title={connectionSource ? 'Cancel relationship' : 'Start relationship from this node'}
+      aria-label={connectionSource ? 'Cancel relationship' : 'Start relationship from selected node'}
+      onClick={() => setConnectionSource(current => current ? null : selection.id)}>
+      {connectionSource ? <X size={13} /> : <Link2 size={13} />}
+    </button>}
+    {connectionSource && <div className="connection-prompt">Select the target node <button onClick={() => setConnectionSource(null)}>Cancel</button></div>}
     <div className="graph-controls">
       <button title="Create node" aria-label="Create node" onClick={onCreateNode}><Box size={17} /></button>
-      <button title="Create relationship from selected node" aria-label="Create relationship from selected node" disabled={selection?.kind !== 'entity'} onClick={() => { if (selection?.kind === 'entity') onCreateRelation(selection.id) }}>↗</button>
       <button title="Auto align graph" aria-label="Auto align graph" onClick={autoAlign}><Sparkles size={17} /></button>
       <button title="Zoom in" onClick={() => graph.current?.zoom({ level: Math.min(graph.current.zoom() * 1.25, 2.5), renderedPosition: { x: graph.current.width() / 2, y: graph.current.height() / 2 } })}><Plus size={17} /></button>
       <button title="Zoom out" onClick={() => graph.current?.zoom({ level: Math.max(graph.current.zoom() / 1.25, 0.35), renderedPosition: { x: graph.current.width() / 2, y: graph.current.height() / 2 } })}><Minus size={17} /></button>
       <button title="Fit graph" onClick={() => graph.current?.fit(undefined, 56)}><Focus size={17} /></button>
     </div>
-    <div className="graph-hint">Double-click or right-click a node to connect · drag → grid · auto align ✦ · Ctrl/Cmd+Z undo</div>
+    <div className="graph-hint">Select a node, click its connector, then choose a target · drag → grid · auto align ✦</div>
   </div>
 }

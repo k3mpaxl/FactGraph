@@ -225,11 +225,33 @@ async def update_entity(board_id: str, entity_id: str, body: EntityUpdate):
     index = (await browser_command(board_id, "index"))["index"]
     if entity_id not in {entity["id"] for entity in index["entities"]}:
         raise HTTPException(404, "Entität existiert im Board nicht")
-    values = body.model_dump(exclude_none=True)
-    if any(not values[key].strip() for key in ("name", "kind") if key in values):
+    values = body.model_dump(exclude_unset=True)
+    if not values:
+        raise HTTPException(422, "At least one entity field is required")
+    if any(not isinstance(values[key], str) or not values[key].strip() for key in ("name", "kind") if key in values):
         raise HTTPException(422, "Name und Typ dürfen nicht leer sein")
     accepted = await apply_drafts(board_id, [action("entity.update", {"id": entity_id, **values})])
     return {"board_id": str(UUID(board_id)), "id": entity_id, "accepted_actions": accepted}
+
+
+class SourceUpdate(BaseModel):
+    title: str | None = Field(default=None, min_length=1)
+    uri: str | None = None
+    excerpt: str | None = None
+
+
+@app.patch("/api/boards/{board_id}/sources/{source_id}")
+async def update_source(board_id: str, source_id: str, body: SourceUpdate):
+    index = (await browser_command(board_id, "index"))["index"]
+    if source_id not in {source["id"] for source in index["sources"]}:
+        raise HTTPException(404, "Source does not exist on this board")
+    values = body.model_dump(exclude_unset=True)
+    if not values:
+        raise HTTPException(422, "At least one source field is required")
+    if "title" in values and (not isinstance(values["title"], str) or not values["title"].strip()):
+        raise HTTPException(422, "Source title cannot be empty")
+    accepted = await apply_drafts(board_id, [action("source.update", {"id": source_id, **values})])
+    return {"board_id": str(UUID(board_id)), "id": source_id, "accepted_actions": accepted}
 
 
 @app.get("/api/boards")
@@ -259,6 +281,32 @@ async def create_relation(board_id: str, body: RelationInput):
     return {"id": relation_id, "accepted_actions": accepted}
 
 
+class RelationUpdate(BaseModel):
+    subject_id: str | None = None
+    predicate: str | None = Field(default=None, min_length=1)
+    object_id: str | None = None
+    valid_from: str | None = None
+    valid_to: str | None = None
+
+
+@app.patch("/api/boards/{board_id}/relations/{relation_id}")
+async def update_relation(board_id: str, relation_id: str, body: RelationUpdate):
+    index = (await browser_command(board_id, "index"))["index"]
+    relation = next((fact for fact in index["facts"] if fact["id"] == relation_id), None)
+    if relation is None:
+        raise HTTPException(404, "Relationship does not exist on this board")
+    values = body.model_dump(exclude_unset=True)
+    if "predicate" in values and (not isinstance(values["predicate"], str) or not values["predicate"].strip()):
+        raise HTTPException(422, "Relationship predicate cannot be empty")
+    entity_ids = {entity["id"] for entity in index["entities"]}
+    if any(not isinstance(values.get(field), str) or values.get(field) not in entity_ids for field in ("subject_id", "object_id") if field in values):
+        raise HTTPException(422, "Source or target entity does not exist on this board")
+    if not values:
+        raise HTTPException(422, "At least one relationship field is required")
+    accepted = await apply_drafts(board_id, [action("fact.update", {"id": relation_id, **values})])
+    return {"board_id": str(UUID(board_id)), "id": relation_id, "accepted_actions": accepted}
+
+
 @app.post("/api/boards/{board_id}/sources", status_code=201)
 async def create_source(board_id: str, body: SourceInput):
     from uuid import uuid4
@@ -285,6 +333,35 @@ async def create_evidence(board_id: str, relation_id: str, body: EvidenceInput):
         "confidence": body.confidence, "source_id": body.source_id,
         "note": body.note, "valid_from": body.valid_from, "valid_to": body.valid_to})])
     return {"id": evidence_id, "accepted_actions": accepted}
+
+
+class EvidenceUpdate(BaseModel):
+    valid_from: str | None = None
+    valid_to: str | None = None
+    stance: str | None = None
+    confidence: float | None = Field(default=None, ge=0, le=1)
+    source_id: str | None = None
+    note: str | None = None
+
+
+@app.patch("/api/boards/{board_id}/relations/{relation_id}/evidence/{evidence_id}")
+async def update_evidence(board_id: str, relation_id: str, evidence_id: str, body: EvidenceUpdate):
+    graph = (await browser_command(board_id, "snapshot"))["graph"]
+    relation = next((fact for fact in graph["facts"] if fact["id"] == relation_id), None)
+    if relation is None:
+        raise HTTPException(404, "Relationship does not exist on this board")
+    if not any(assertion["id"] == evidence_id for assertion in relation.get("assertions", [])):
+        raise HTTPException(404, "Evidence does not exist on this relationship")
+    values = body.model_dump(exclude_unset=True)
+    if "stance" in values and values["stance"] not in {"supports", "refutes"}:
+        raise HTTPException(422, "Evidence stance must be supports or refutes")
+    if "source_id" in values and values["source_id"] and values["source_id"] not in {source["id"] for source in graph["sources"]}:
+        raise HTTPException(422, "Source does not exist on this board")
+    if not values:
+        raise HTTPException(422, "At least one evidence field is required")
+    accepted = await apply_drafts(board_id, [action("assertion.update", {"id": evidence_id, **values})])
+    return {"board_id": str(UUID(board_id)), "relation_id": relation_id,
+            "id": evidence_id, "accepted_actions": accepted}
 
 
 @app.post("/api/boards/{board_id}/actions")

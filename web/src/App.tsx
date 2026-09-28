@@ -241,9 +241,9 @@ function actionLabel(action: BoardAction) {
   const names: Record<BoardAction['type'], string> = {
     'board.rename': 'Board renamed', 'entity.add': 'Entity created',
     'entity.update': 'Entity edited', 'entity.position': 'Node moved', 'entity.delete': 'Entity deleted', 'identifier.add': 'Identifier added',
-    'identifier.delete': 'Identifier deleted', 'source.add': 'Source created',
-    'fact.add': 'Relationship created', 'fact.delete': 'Relationship deleted',
-    'assertion.add': 'Evidence added', 'assertion.retract': 'Evidence retracted',
+    'identifier.delete': 'Identifier deleted', 'source.add': 'Source created', 'source.update': 'Source edited',
+    'fact.add': 'Relationship created', 'fact.update': 'Relationship edited', 'fact.delete': 'Relationship deleted',
+    'assertion.add': 'Evidence added', 'assertion.update': 'Evidence edited', 'assertion.retract': 'Evidence retracted',
   }
   const subject = typeof action.payload.name === 'string' ? action.payload.name :
     typeof action.payload.title === 'string' ? action.payload.title :

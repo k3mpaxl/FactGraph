@@ -64,9 +64,13 @@ Der MVP hat derzeit **keine Authentifizierung und keine Tokens**. REST und MCP s
 | --- | --- | --- |
 | Graph lesen | `GET /api/boards/{id}/graph` | `board_graph` |
 | Entität anlegen | `POST /api/boards/{id}/entities` | `add_entity` |
+| Entität ändern | `PATCH /api/boards/{id}/entities/{entity_id}` | — |
 | Quelle anlegen | `POST /api/boards/{id}/sources` | `add_source` |
+| Quelle ändern | `PATCH /api/boards/{id}/sources/{source_id}` | — |
 | Kante anlegen | `POST /api/boards/{id}/relations` | `link_entities` |
+| Kante ändern | `PATCH /api/boards/{id}/relations/{relation_id}` | — |
 | Beleg hinzufügen | `POST /api/boards/{id}/relations/{relation_id}/evidence` | `add_evidence` |
+| Beleg ändern | `PATCH /api/boards/{id}/relations/{relation_id}/evidence/{evidence_id}` | — |
 | KQL-Ergebnisse importieren | `POST /api/boards/{id}/imports/kql` | `add_kql_evidence` (bis 100 Zeilen) |
 
 Beispiel für eine Entität:

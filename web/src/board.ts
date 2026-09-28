@@ -4,7 +4,7 @@ import { uuid } from './uuid'
 
 export type ActionType =
   | 'board.rename' | 'entity.add' | 'entity.update' | 'entity.position' | 'entity.delete' | 'identifier.add' | 'identifier.delete'
-  | 'source.add' | 'fact.add' | 'fact.delete' | 'assertion.add' | 'assertion.retract'
+  | 'source.add' | 'source.update' | 'fact.add' | 'fact.update' | 'fact.delete' | 'assertion.add' | 'assertion.update' | 'assertion.retract'
 
 export type BoardAction = {
   boardId: string; id: string; actor: string; author: string; clock: number;
@@ -15,7 +15,7 @@ export type BoardProjection = { data: GraphData; name: string }
 
 const actionTypes: ActionType[] = [
   'board.rename', 'entity.add', 'entity.update', 'entity.position', 'entity.delete', 'identifier.add', 'identifier.delete',
-  'source.add', 'fact.add', 'fact.delete', 'assertion.add', 'assertion.retract',
+  'source.add', 'source.update', 'fact.add', 'fact.update', 'fact.delete', 'assertion.add', 'assertion.update', 'assertion.retract',
 ]
 
 export function isAction(value: unknown): value is BoardAction {
@@ -117,6 +117,12 @@ export function project(boardId: string, operations: BoardAction[]): BoardProjec
             sources.set(id, { id, title: item.title, uri: String(item.uri ?? ''),
               excerpt: String(item.excerpt ?? ''), created_at: String(item.created_at ?? operation.at) })
           break
+        case 'source.update': {
+          const source = sources.get(id)
+          if (source) for (const field of ['title', 'uri', 'excerpt'] as const)
+            if (typeof item[field] === 'string' && (field !== 'title' || item[field].trim())) source[field] = item[field].trim()
+          break
+        }
         case 'identifier.add':
           if (id && typeof item.entity_id === 'string' && entities.has(item.entity_id) && !identifiers.has(id))
             identifiers.set(id, { id, entity_id: item.entity_id, scheme: String(item.scheme ?? 'other'),
@@ -142,6 +148,23 @@ export function project(boardId: string, operations: BoardAction[]): BoardProjec
           else { canonicalFacts.set(key, id); facts.set(id, fact) }
           break
         }
+        case 'fact.update': {
+          const canonical = aliases.get(id) ?? id
+          const fact = facts.get(canonical)
+          if (!fact) break
+          const subject = typeof item.subject_id === 'string' ? item.subject_id : fact.subject_id
+          const object = typeof item.object_id === 'string' ? item.object_id : fact.object_id
+          if (!entities.has(subject) || !entities.has(object)) break
+          canonicalFacts.delete(factKey(fact))
+          fact.subject_id = subject; fact.object_id = object
+          if (typeof item.predicate === 'string' && item.predicate.trim()) fact.predicate = item.predicate.trim()
+          if (item.valid_from === null) fact.valid_from = null
+          else if (typeof item.valid_from === 'string') fact.valid_from = item.valid_from
+          if (item.valid_to === null) fact.valid_to = null
+          else if (typeof item.valid_to === 'string') fact.valid_to = item.valid_to
+          canonicalFacts.set(factKey(fact), canonical)
+          break
+        }
         case 'fact.delete': {
           const canonical = aliases.get(id) ?? id
           if (canonical) {
@@ -162,6 +185,21 @@ export function project(boardId: string, operations: BoardAction[]): BoardProjec
               valid_to: typeof item.valid_to === 'string' ? item.valid_to : null,
               note: String(item.note ?? ''), created_at: String(item.created_at ?? operation.at),
               retracted_at: typeof item.retracted_at === 'string' ? item.retracted_at : null })
+          break
+        }
+        case 'assertion.update': {
+          const assertion = assertions.get(id)
+          if (assertion) {
+            if (item.stance === 'supports' || item.stance === 'refutes') assertion.stance = item.stance
+            if (typeof item.confidence === 'number') assertion.confidence = Math.max(0, Math.min(1, item.confidence))
+            if (item.source_id === null) assertion.source_id = null
+            else if (typeof item.source_id === 'string') assertion.source_id = item.source_id
+            if (typeof item.note === 'string') assertion.note = item.note
+            if (item.valid_from === null) assertion.valid_from = null
+            else if (typeof item.valid_from === 'string') assertion.valid_from = item.valid_from
+            if (item.valid_to === null) assertion.valid_to = null
+            else if (typeof item.valid_to === 'string') assertion.valid_to = item.valid_to
+          }
           break
         }
         case 'assertion.retract': {

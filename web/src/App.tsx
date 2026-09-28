@@ -191,8 +191,8 @@ function StanceSelect({ value, onChange }: { value: 'supports' | 'refutes'; onCh
   return <div className="stance-field"><span>Evidence stance</span><div className="stance-options"><button type="button" className={value === 'supports' ? 'active supports' : ''} onClick={() => onChange('supports')}>● Supports</button><button type="button" className={value === 'refutes' ? 'active refutes' : ''} onClick={() => onChange('refutes')}>● Refutes</button></div></div>
 }
 
-function LogImportDialog({ boardId, onClose, onDone }: {
-  boardId: string; onClose: () => void; onDone: (summary: string) => void;
+function LogImportDialog({ boardId, sessionToken, onClose, onDone }: {
+  boardId: string; sessionToken: string; onClose: () => void; onDone: (summary: string) => void;
 }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -201,7 +201,7 @@ function LogImportDialog({ boardId, onClose, onDone }: {
     setBusy(true); setError('')
     try {
       const response = await fetch(`/api/boards/${boardId}/imports/file`, {
-        method: 'POST', body: new FormData(event.currentTarget),
+        method: 'POST', headers: { 'X-FactGraph-Token': sessionToken }, body: new FormData(event.currentTarget),
       })
       const result = await response.json() as Record<string, unknown>
       if (!response.ok) throw new Error(String(result.detail ?? 'Import failed'))
@@ -387,6 +387,10 @@ export default function App() {
     try { await navigator.clipboard.writeText(mcpEndpoint); setToast('MCP-Endpunkt kopiert') }
     catch { window.prompt('MCP-Endpunkt kopieren:', mcpEndpoint) }
   }
+  const copySessionToken = async () => {
+    try { await navigator.clipboard.writeText(board.sessionToken); setToast('Session token copied') }
+    catch { window.prompt('Session token:', board.sessionToken) }
+  }
   const download = () => {
     const content = JSON.stringify({ format: 'factgraph-board-v1', boardId, name: board.boardName, actions: board.actions }, null, 2)
     const url = URL.createObjectURL(new Blob([content], { type: 'application/json' }))
@@ -464,7 +468,7 @@ export default function App() {
 
     <main className="main-area">
       <header className="topbar"><div className="breadcrumbs">WORKSPACE <ChevronRight size={14} /> <strong>Overview</strong></div><div className="top-actions"><button className="secondary-button" onClick={() => { setError(''); setDialog('source') }}><FileText size={16} /> Source</button><button className="secondary-button" onClick={() => { setError(''); setDialog('entity') }}><Plus size={17} /> Entity</button><button className="primary-button" onClick={() => { setError(''); setDialog('fact') }} disabled={!data || data.entities.length < 2}><Link2 size={17} /> Relationship</button></div></header>
-      <div className="integration-note"><span><strong>API</strong> · <button className="integration-action" onClick={() => void copyMcpEndpoint()} title="Copy MCP endpoint">MCP</button> · <a href={restDocsEndpoint} target="_blank" rel="noreferrer">REST</a> · <button className="integration-action" onClick={() => { const endpoint = `${window.location.origin}/api/boards/${boardId}`; void navigator.clipboard.writeText(endpoint).then(() => setToast('REST board endpoint copied')).catch(() => window.prompt('REST board endpoint:', endpoint)) }}>Copy</button> · no token</span><small>Keep board open</small></div>
+      <div className="integration-note"><span><strong>API</strong> · <button className="integration-action" onClick={() => void copyMcpEndpoint()} title="Copy MCP endpoint">MCP</button> · <a href={restDocsEndpoint} target="_blank" rel="noreferrer">REST</a> · <button className="integration-action" onClick={() => { const endpoint = `${window.location.origin}/api/boards/${boardId}`; void navigator.clipboard.writeText(endpoint).then(() => setToast('REST board endpoint copied')).catch(() => window.prompt('REST board endpoint:', endpoint)) }}>Copy</button> · <button className="integration-action" onClick={() => void copySessionToken()} title="Copy session token">Token</button></span><small>Same token for REST + MCP · keep board open</small></div>
       <div className="page-heading"><div><div className="eyebrow">INVESTIGATION CANVAS</div><h1>Make connections visible<span>.</span></h1><p>Entities, relationships and evidence in one place.</p></div><div className="heading-meta"><span className="live-dot" /> Stored in browser</div></div>
       <div className="board-toolbar"><div className="board-identity"><span>BOARD</span><strong>{board.boardName}</strong><code>{boardId.slice(0, 8)}…</code><button title="Rename board" onClick={() => { const value = window.prompt('Board name', board.boardName); if (value?.trim()) void act(() => board.emit('board.rename', { name: value.trim() }), 'Board renamed') }}>Rename</button></div><div className="board-tools"><button onClick={() => void copyLink()} title="Copy board link"><Copy size={15} /> Link</button><button onClick={() => setShowLogImport(true)} title="Import activity logs or KQL results"><Upload size={15} /> Logs/KQL</button><button onClick={() => importInput.current?.click()} title="Import JSON"> <Upload size={15} /> Import</button><button onClick={download} title="Save JSON file"><ArrowDownToLine size={15} /> Export</button><button onClick={() => void copyExport()} title="Copy board JSON"><Copy size={15} /> JSON</button><button onClick={() => navigate(uuid())} title="New board"><Plus size={15} /> Board</button></div><div className="presence-group"><span className={`connection-dot ${board.connected ? 'online' : ''}`} />{board.connected ? <Wifi size={15} /> : <WifiOff size={15} />}<span>{board.connected ? `${board.peers.length + 1} online` : 'Offline'}</span>{board.peers.map(peer => <span key={peer.id} className="peer-avatar" title={peer.name} style={{ background: peerColor(peer.id) }}>{peer.name.slice(0, 1).toUpperCase()}</span>)}<button className="profile-button" onClick={() => { const value = window.prompt('Your display name', board.name); if (value?.trim()) board.setName(value) }} title="Change display name"><Users size={14} /> {board.name}</button></div></div>
       {board.ready && !board.connected && <div className="offline-note">Relay offline: changes stay in this browser and sync when the connection returns.</div>}
@@ -480,7 +484,7 @@ export default function App() {
       {selectedFact && <div className="selection-footnote"><Fingerprint size={14} /> Selected fact: {selectedFact.id}</div>}
     </main>
     {dialog && data && <Dialog key={dialog} kind={dialog} data={data} selection={selection} busy={busy} error={error} onClose={() => setDialog(null)} onSubmit={submit} />}
-    {showLogImport && <LogImportDialog boardId={boardId} onClose={() => setShowLogImport(false)} onDone={summary => { setShowLogImport(false); setToast(summary) }} />}
+    {showLogImport && <LogImportDialog boardId={boardId} sessionToken={board.sessionToken} onClose={() => setShowLogImport(false)} onDone={summary => { setShowLogImport(false); setToast(summary) }} />}
     <input ref={importInput} type="file" accept="application/json,.json" hidden onChange={event => { const file = event.target.files?.[0]; event.target.value = ''; void importFile(file) }} />
     {board.storageError && <div className="toast error">{board.storageError}</div>}
     {error && !dialog && <div className="toast error" onClick={() => setError('')}>{error} <X size={15} /></div>}

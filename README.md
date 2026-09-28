@@ -58,7 +58,7 @@ Graph, Zeitachse und synchronisierte Aktionen sind als Tabs organisiert.
 
 **Ein Browser mit dem Board muss geöffnet und verbunden sein.** REST und MCP senden Schreibaufträge an diesen Browser und antworten erst nach dessen IndexedDB-Bestätigung. Ohne Browser antwortet REST mit `409`. So bleibt die Architektur ohne Server-Datenbank erhalten.
 
-Der MVP hat derzeit **keine Authentifizierung und keine Tokens**. REST und MCP sind im lokalen/trusted LAN bewusst ohne `Authorization`-Header erreichbar. Den Port deshalb nicht ungeschützt ins Internet stellen; für einen externen Betrieb muss vor dem Relay eine Authentifizierung beziehungsweise ein Reverse Proxy ergänzt werden.
+Beim Öffnen eines Boards erzeugt der Browser ein zufälliges Sitzungs-Token. REST erwartet es im Header `X-FactGraph-Token`; MCP verwendet dasselbe Token als `session_token`. Nur ein damit verbundenes Browser-Board darf Aktionen ausführen. Das Token ist eine lokale Sitzungskopplung, kein Benutzerkonto und kein Ersatz für einen vorgeschalteten Auth-Proxy.
 
 | Aufgabe | REST | MCP |
 | --- | --- | --- |
@@ -99,7 +99,8 @@ from fastmcp import Client
 
 async with Client("http://127.0.0.1:8080/mcp/") as client:
     result = await client.call_tool("add_entity", {
-        "board_id": "BOARD_UUID", "name": "Azure-Credential", "kind": "Credential"
+        "board_id": "BOARD_UUID", "session_token": "TOKEN_FROM_BOARD_UI",
+        "name": "Azure-Credential", "kind": "Credential"
     })
 print(result.data)
 ```
@@ -121,7 +122,16 @@ Im Repository liegt bereits [.vscode/mcp.json](.vscode/mcp.json). VS Code öffne
 }
 ```
 
-Vor einem Tool-Aufruf muss die passende Board-URL in einem Browser geöffnet sein, weil FactGraph die Aktionen ohne Datenbank in dessen IndexedDB speichert. Für VS Code auf einem anderen Gerät `127.0.0.1` durch die LAN-IP des Servers ersetzen, zum Beispiel `http://10.42.12.221:8080/mcp/`.
+Vor einem Tool-Aufruf muss die passende Board-URL in einem Browser geöffnet sein. Das Token kann in der kompakten API-Leiste über **Token** kopiert werden. Für REST:
+
+```bash
+curl -X POST 'http://127.0.0.1:8080/api/boards/BOARD_UUID/entities' \
+  -H 'X-FactGraph-Token: TOKEN_FROM_BOARD_UI' \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"Azure-Credential","kind":"Credential"}'
+```
+
+Für VS Code auf einem anderen Gerät `127.0.0.1` durch die LAN-IP des Servers ersetzen, zum Beispiel `http://10.42.12.221:8080/mcp/`.
 
 ## Aktivitätslogs und KQL als Evidence
 
@@ -191,4 +201,4 @@ Logimporte erkennen `TimeGenerated`, `timestamp`, `Timestamp`, `time`, `event_ti
 
 Entitäten lassen sich im Inspektor über **Bearbeiten** umbenennen und in Typ/Beschreibung ändern. REST: `PATCH /api/boards/{board_id}/entities/{entity_id}` mit beispielsweise `{"name":"Neuer Name"}`.
 
-`GET /api/boards` listet aktuell verbundene Boards mit ihrer UUID und ihrem API-Pfad. In der Oberfläche kopiert **Board-API kopieren** den Endpunkt des aktuellen Boards. Die REST-Aufrufe müssen an denselben Server gehen wie die Browser-Verbindung. Ohne geöffneten Browser liefert ein Schreibaufruf `409`; unbekannte API-Pfade liefern `404`.
+Die Oberfläche verwaltet Boards lokal über ihre UUID. In der Oberfläche kopiert **Copy** den Endpunkt des aktuellen Boards. Die REST-Aufrufe müssen an denselben Server gehen wie die Browser-Verbindung. Ohne geöffneten Browser liefert ein Schreibaufruf `409`; unbekannte API-Pfade liefern `404`. Es gibt bewusst keinen globalen Board-Listing-Endpunkt und kein MCP-Tool zum Auflisten von Boards.

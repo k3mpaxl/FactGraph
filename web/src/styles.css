@@ -24,7 +24,7 @@
 
 /* The graph gets the full workspace width; a selected inspector floats above it. */
 .workspace-grid{position:relative;grid-template-columns:minmax(0,1fr)}
-.workspace-grid>.detail-panel{position:absolute;z-index:5;top:12px;right:12px;width:314px;min-height:0;max-height:536px;overflow:auto;box-shadow:0 20px 55px #07121bcc}
+.workspace-grid>.detail-panel{position:absolute;z-index:5;top:12px;right:12px;width:min(410px,calc(100% - 24px));min-height:0;max-height:min(760px,calc(100vh - 160px));overflow:auto;box-shadow:0 20px 55px #07121bcc}
 .workspace-grid>.detail-empty{display:none}
 .graph-stage{height:560px}
 @media(max-width:1050px){.workspace-grid{grid-template-columns:1fr}.workspace-grid>.detail-panel{position:static;width:auto;max-height:none;overflow:hidden;box-shadow:none}}

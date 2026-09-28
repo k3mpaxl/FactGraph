@@ -10,8 +10,22 @@ function initialName(actor: string) {
   catch { return `Gast ${actor.slice(0, 4)}` }
 }
 
+function initialSessionToken(boardId: string) {
+  const key = `factgraph:sessionToken:${boardId}`
+  try {
+    const existing = sessionStorage.getItem(key)
+    if (existing) return existing
+    const token = `${uuid()}${uuid()}`.replaceAll('-', '')
+    sessionStorage.setItem(key, token)
+    return token
+  } catch {
+    return `${uuid()}${uuid()}`.replaceAll('-', '')
+  }
+}
+
 export function useBoard(boardId: string) {
   const actor = useRef(uuid()).current
+  const sessionToken = useRef(initialSessionToken(boardId)).current
   const [name, setNameState] = useState(() => initialName(actor))
   const nameRef = useRef(name)
   const [actions, setActions] = useState<BoardAction[]>([])
@@ -111,7 +125,7 @@ export function useBoard(boardId: string) {
     const connect = () => {
       if (cancelled) return
       const scheme = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-      websocket = new WebSocket(`${scheme}//${window.location.host}/ws/boards/${boardId}?actor=${actor}&name=${encodeURIComponent(nameRef.current)}`)
+      websocket = new WebSocket(`${scheme}//${window.location.host}/ws/boards/${boardId}?actor=${actor}&name=${encodeURIComponent(nameRef.current)}&token=${encodeURIComponent(sessionToken)}`)
       socketRef.current = websocket
       websocket.onopen = () => {
         if (cancelled) return
@@ -198,8 +212,8 @@ export function useBoard(boardId: string) {
       websocket?.close()
       socketRef.current = null
     }
-  }, [actor, boardId, emitMany, merge, send, sendActions])
+  }, [actor, boardId, emitMany, merge, send, sendActions, sessionToken])
 
   return { actor, name, setName, actions, boards, peers, ready, connected, storageError,
-    boardName: projection.name, data: projection.data, emit, emitMany, importActions }
+    boardName: projection.name, data: projection.data, emit, emitMany, importActions, sessionToken }
 }

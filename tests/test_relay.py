@@ -70,27 +70,32 @@ class RelayTest(unittest.IsolatedAsyncioTestCase):
         board, actor = str(uuid4()), str(uuid4())
         url = f"http://127.0.0.1:{self.port}/api/boards/{board.upper()}/entities"
 
-        def post():
+        def post(token=None):
+            headers = {"Content-Type": "application/json"}
+            if token:
+                headers["X-FactGraph-Token"] = token
             request = Request(url, json.dumps({"name": "10.1.2.3", "kind": "IP"}).encode(),
-                              {"Content-Type": "application/json"}, method="POST")
+                              headers, method="POST")
             with urlopen(request, timeout=3) as response:
                 return json.load(response)
 
         with self.assertRaises(HTTPError) as caught:
             await asyncio.to_thread(post)
-        self.assertEqual(caught.exception.code, 409)
+        self.assertEqual(caught.exception.code, 401)
         caught.exception.close()
 
+        token = "test-session-token"
         async with websockets.connect(
-            f"ws://127.0.0.1:{self.port}/ws/boards/{board}?actor={actor}&name=Writer"
+            f"ws://127.0.0.1:{self.port}/ws/boards/{board}?actor={actor}&name=Writer&token={token}"
         ) as websocket:
             await receive(websocket)
-            request_task = asyncio.create_task(asyncio.to_thread(post))
+            request_task = asyncio.create_task(asyncio.to_thread(post, token))
             command = await receive(websocket)
             self.assertEqual(command["type"], "api-command")
             self.assertEqual(command["operation"], "apply")
             self.assertEqual(command["boardId"], board)
             self.assertEqual(command["drafts"][0]["payload"]["name"], "10.1.2.3")
+            self.assertEqual(command["drafts"][0]["author"], "REST")
             self.assertFalse(request_task.done())
             await websocket.send(json.dumps({"type": "api-result", "requestId": command["requestId"],
                                              "ok": True, "accepted": 1}))

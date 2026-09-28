@@ -8,12 +8,14 @@ from __future__ import annotations
 
 import asyncio
 import csv
+import contextvars
+import secrets
 from dataclasses import dataclass
 from pathlib import Path
 from uuid import UUID
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastmcp import FastMCP
 from pydantic import BaseModel, Field
@@ -42,12 +44,40 @@ app = FastAPI(title="FactGraph API", version="0.3.0", lifespan=mcp_app.lifespan)
 class Peer:
     websocket: WebSocket
     name: str
+    session_token: str | None = None
 
 
 # Presence only. No board data or action history is retained on the server.
 rooms: dict[str, dict[str, Peer]] = {}
 rooms_lock = asyncio.Lock()
 pending: dict[str, tuple[WebSocket, asyncio.Future[dict]]] = {}
+request_token: contextvars.ContextVar[str | None] = contextvars.ContextVar("factgraph_request_token", default=None)
+request_channel: contextvars.ContextVar[str] = contextvars.ContextVar("factgraph_request_channel", default="REST")
+
+
+@app.middleware("http")
+async def require_board_token(request: Request, call_next):
+    """Bind every REST board request to a token from an open browser session."""
+    path = request.url.path
+    if path.startswith("/api/boards/"):
+        board_id = path.removeprefix("/api/boards/").split("/", 1)[0]
+        token = request.headers.get("X-FactGraph-Token") or request.query_params.get("token")
+        if not token:
+            return JSONResponse({"detail": "X-FactGraph-Token is required"}, status_code=401)
+        if not valid_uuid(board_id):
+            return await call_next(request)
+        async with rooms_lock:
+            authorized = any(peer.session_token == token for peer in rooms.get(str(UUID(board_id)), {}).values())
+        if not authorized:
+            return JSONResponse({"detail": "Token is not connected to this open board"}, status_code=403)
+        token_context = request_token.set(token)
+        channel_context = request_channel.set("REST")
+        try:
+            return await call_next(request)
+        finally:
+            request_token.reset(token_context)
+            request_channel.reset(channel_context)
+    return await call_next(request)
 
 
 def valid_uuid(value: str) -> bool:
@@ -76,13 +106,20 @@ async def browser_command(board_id: str, operation: str, **values) -> dict:
     if not valid_uuid(board_id):
         raise HTTPException(422, "Ungültige Board-UUID")
     board_id = str(UUID(board_id))
+    session_token = values.pop("session_token", None) or request_token.get()
     request_id = str(uuid4())
     loop = asyncio.get_running_loop()
     async with rooms_lock:
         room = rooms.get(board_id, {})
         if not room:
             raise HTTPException(409, "Board offline: zuerst die Board-URL in einem Browser öffnen")
-        actor, peer = next(iter(room.items()))
+        if session_token:
+            matching = [(actor, peer) for actor, peer in room.items() if peer.session_token == session_token]
+            if not matching:
+                raise HTTPException(403, "Token is not connected to this open board")
+            actor, peer = matching[0]
+        else:
+            raise HTTPException(401, "Session token is required")
         future: asyncio.Future[dict] = loop.create_future()
         pending[request_id] = (peer.websocket, future)
     try:
@@ -103,6 +140,9 @@ async def browser_command(board_id: str, operation: str, **values) -> dict:
 async def apply_drafts(board_id: str, drafts: list[dict]) -> int:
     if len(drafts) > 200_000:
         raise HTTPException(413, "Zu viele Aktionen in einem Auftrag")
+    channel = request_channel.get()
+    drafts = [{**draft, "author": channel if draft.get("author") in (None, "API") else draft["author"]}
+              for draft in drafts]
     accepted = 0
     for offset in range(0, len(drafts), 200):
         chunk_number = offset // 200 + 1
@@ -265,14 +305,6 @@ async def update_source(board_id: str, source_id: str, body: SourceUpdate):
     return {"board_id": str(UUID(board_id)), "id": source_id, "accepted_actions": accepted}
 
 
-@app.get("/api/boards")
-async def online_boards():
-    async with rooms_lock:
-        return {"boards": [{"board_id": key, "online_browsers": len(peers),
-                            "board_url": f"/boards/{key}", "api_url": f"/api/boards/{key}"}
-                           for key, peers in rooms.items()]}
-
-
 @app.post("/api/boards/{board_id}/relations", status_code=201)
 async def create_relation(board_id: str, body: RelationInput):
     try:
@@ -416,74 +448,92 @@ async def import_file(board_id: str, file: UploadFile = File(...),
         subject_kind=subject_kind, object_kind=object_kind))
 
 
-@mcp.tool
-async def board_graph(board_id: str) -> dict:
-    """Read the current graph from an open browser board. The UUID identifies the board."""
-    return await get_graph(board_id)
+async def run_mcp_session(session_token: str, operation):
+    token_context = request_token.set(session_token)
+    channel_context = request_channel.set("MCP")
+    try:
+        return await operation()
+    finally:
+        request_token.reset(token_context)
+        request_channel.reset(channel_context)
 
 
 @mcp.tool
-async def add_entity(board_id: str, name: str, kind: str = "Sonstiges",
+async def board_graph(board_id: str, session_token: str) -> dict:
+    """Read the current graph from an open browser board using its session token."""
+    return await run_mcp_session(session_token, lambda: get_graph(board_id))
+
+
+@mcp.tool
+async def add_entity(board_id: str, session_token: str, name: str, kind: str = "Sonstiges",
                      description: str = "") -> dict:
     """Create one entity on an open board. Use REST /actions for large batches."""
-    return await create_entity(board_id, EntityInput(name=name, kind=kind, description=description))
+    return await run_mcp_session(session_token, lambda: create_entity(board_id, EntityInput(name=name, kind=kind, description=description)))
 
 
 @mcp.tool(name="update_entity")
-async def mcp_update_entity(board_id: str, entity_id: str, name: str | None = None,
-                            kind: str | None = None, description: str | None = None) -> dict:
+async def mcp_update_entity(board_id: str, entity_id: str, session_token: str,
+                            name: str | None = None, kind: str | None = None,
+                            description: str | None = None) -> dict:
     """Patch an existing entity. Pass only fields that should change."""
     values = {key: value for key, value in {"name": name, "kind": kind,
              "description": description}.items() if value is not None}
-    return await update_entity(board_id, entity_id, EntityUpdate(**values))
+    return await run_mcp_session(session_token, lambda: update_entity(board_id, entity_id, EntityUpdate(**values)))
 
 
 @mcp.tool
-async def add_source(board_id: str, title: str, uri: str = "", excerpt: str = "") -> dict:
+async def add_source(board_id: str, session_token: str, title: str, uri: str = "",
+                     excerpt: str = "") -> dict:
     """Create an evidence source, such as a repository path, log export or query."""
-    return await create_source(board_id, SourceInput(title=title, uri=uri, excerpt=excerpt))
+    return await run_mcp_session(session_token, lambda: create_source(board_id, SourceInput(title=title, uri=uri, excerpt=excerpt)))
 
 
 @mcp.tool(name="update_source")
-async def mcp_update_source(board_id: str, source_id: str, title: str | None = None,
-                            uri: str | None = None, excerpt: str | None = None) -> dict:
+async def mcp_update_source(board_id: str, source_id: str, session_token: str,
+                            title: str | None = None, uri: str | None = None,
+                            excerpt: str | None = None) -> dict:
     """Patch an existing evidence source. Pass only fields that should change."""
     values = {key: value for key, value in {"title": title, "uri": uri,
              "excerpt": excerpt}.items() if value is not None}
-    return await update_source(board_id, source_id, SourceUpdate(**values))
+    return await run_mcp_session(session_token, lambda: update_source(board_id, source_id, SourceUpdate(**values)))
 
 
 @mcp.tool
-async def link_entities(board_id: str, subject_id: str, predicate: str,
+async def link_entities(board_id: str, session_token: str, subject_id: str, predicate: str,
                         object_id: str, note: str = "", source_id: str | None = None,
-                        valid_from: str | None = None, valid_to: str | None = None) -> dict:
+                        valid_from: str | None = None, valid_to: str | None = None,
+                        ) -> dict:
     """Create a directed relationship and optional supporting evidence on an open board."""
-    return await create_relation(board_id, RelationInput(subject_id=subject_id,
+    return await run_mcp_session(session_token, lambda: create_relation(board_id, RelationInput(subject_id=subject_id,
         predicate=predicate, object_id=object_id, note=note, source_id=source_id, valid_from=valid_from, valid_to=valid_to))
+    )
 
 
 @mcp.tool(name="update_relationship")
-async def mcp_update_relationship(board_id: str, relation_id: str, subject_id: str | None = None,
-                                  predicate: str | None = None, object_id: str | None = None,
-                                  valid_from: str | None = None, valid_to: str | None = None) -> dict:
+async def mcp_update_relationship(board_id: str, relation_id: str, session_token: str,
+                                  subject_id: str | None = None, predicate: str | None = None,
+                                  object_id: str | None = None,
+                                  valid_from: str | None = None, valid_to: str | None = None,
+                                  ) -> dict:
     """Patch a directed relationship. Pass only fields that should change."""
     values = {key: value for key, value in {"subject_id": subject_id, "predicate": predicate,
              "object_id": object_id, "valid_from": valid_from, "valid_to": valid_to}.items()
              if value is not None}
-    return await update_relation(board_id, relation_id, RelationUpdate(**values))
+    return await run_mcp_session(session_token, lambda: update_relation(board_id, relation_id, RelationUpdate(**values)))
 
 
 @mcp.tool
-async def add_evidence(board_id: str, relation_id: str, note: str,
+async def add_evidence(board_id: str, session_token: str, relation_id: str, note: str,
                        source_id: str | None = None, stance: str = "supports",
                        confidence: float = 1, valid_from: str | None = None, valid_to: str | None = None) -> dict:
     """Attach a supporting or refuting statement to an existing relation."""
-    return await create_evidence(board_id, relation_id, EvidenceInput(note=note,
+    return await run_mcp_session(session_token, lambda: create_evidence(board_id, relation_id, EvidenceInput(note=note,
         source_id=source_id, stance=stance, confidence=confidence, valid_from=valid_from, valid_to=valid_to))
+    )
 
 
 @mcp.tool(name="update_evidence")
-async def mcp_update_evidence(board_id: str, relation_id: str, evidence_id: str,
+async def mcp_update_evidence(board_id: str, relation_id: str, evidence_id: str, session_token: str,
                               valid_from: str | None = None, valid_to: str | None = None,
                               stance: str | None = None, confidence: float | None = None,
                               source_id: str | None = None, note: str | None = None) -> dict:
@@ -491,7 +541,7 @@ async def mcp_update_evidence(board_id: str, relation_id: str, evidence_id: str,
     values = {key: value for key, value in {"valid_from": valid_from, "valid_to": valid_to,
              "stance": stance, "confidence": confidence, "source_id": source_id,
              "note": note}.items() if value is not None}
-    return await update_evidence(board_id, relation_id, evidence_id, EvidenceUpdate(**values))
+    return await run_mcp_session(session_token, lambda: update_evidence(board_id, relation_id, evidence_id, EvidenceUpdate(**values)))
 
 
 @mcp.tool
@@ -501,7 +551,7 @@ async def factgraph_guidelines() -> dict:
 
 
 @mcp.tool
-async def add_kql_evidence(board_id: str, query: str, rows: list[dict],
+async def add_kql_evidence(board_id: str, session_token: str, query: str, rows: list[dict],
                            title: str = "KQL-Abfrage", subject_field: str = "IPAddress",
                            object_field: str = "FilePath", predicate: str = "accessed") -> dict:
     """Add already exported KQL result rows as evidence. This tool does not execute KQL.
@@ -511,15 +561,16 @@ async def add_kql_evidence(board_id: str, query: str, rows: list[dict],
     """
     if len(rows) > 100:
         raise ValueError("MCP-Import ist auf 100 Zeilen begrenzt; bitte REST verwenden")
-    return await import_rows(board_id, RowsInput(rows=rows, query=query, title=title,
+    return await run_mcp_session(session_token, lambda: import_rows(board_id, RowsInput(rows=rows, query=query, title=title,
         subject_field=subject_field, object_field=object_field,
-        predicate=predicate))
+        predicate=predicate)))
 
 
 @app.websocket("/ws/boards/{board_id}")
 async def board_socket(websocket: WebSocket, board_id: str):
     actor = websocket.query_params.get("actor", "")
     name = websocket.query_params.get("name", "Gast").strip()[:40] or "Gast"
+    session_token = websocket.query_params.get("token", "").strip() or None
     if not valid_uuid(board_id) or not valid_uuid(actor):
         await websocket.close(code=1008)
         return
@@ -531,7 +582,7 @@ async def board_socket(websocket: WebSocket, board_id: str):
         previous = room.get(actor)
         peers = [{"id": peer_id, "name": peer.name} for peer_id, peer in room.items()
                  if peer_id != actor]
-        room[actor] = Peer(websocket=websocket, name=name)
+        room[actor] = Peer(websocket=websocket, name=name, session_token=session_token)
     if previous:
         try:
             await previous.websocket.close(code=1000)

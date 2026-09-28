@@ -194,6 +194,17 @@ Das Image ist danach als `DOCKERHUB_USERNAME/factgraph:latest` und mit Versions-
 FACTGRAPH_BIND_IP=0.0.0.0 docker compose -f deploy/compose.yaml up -d
 ```
 
+Die Docker-Hub-Tags enthalten `linux/amd64` und `linux/arm64`, damit dasselbe
+Image auf üblichen Linux-Servern und Apple-Silicon-Rechnern startet. Ein
+manueller Multi-Arch-Publish mit unveränderter Version ist ebenfalls möglich:
+
+```bash
+./deploy/publish-multiarch.sh
+```
+
+Für einen anderen Namespace oder Tag können `FACTGRAPH_IMAGE` und
+`FACTGRAPH_VERSION` gesetzt werden.
+
 ## Tests
 
 ```bash

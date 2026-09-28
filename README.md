@@ -64,14 +64,15 @@ Der MVP hat derzeit **keine Authentifizierung und keine Tokens**. REST und MCP s
 | --- | --- | --- |
 | Graph lesen | `GET /api/boards/{id}/graph` | `board_graph` |
 | Entität anlegen | `POST /api/boards/{id}/entities` | `add_entity` |
-| Entität ändern | `PATCH /api/boards/{id}/entities/{entity_id}` | — |
+| Entität ändern | `PATCH /api/boards/{id}/entities/{entity_id}` | `update_entity` |
 | Quelle anlegen | `POST /api/boards/{id}/sources` | `add_source` |
-| Quelle ändern | `PATCH /api/boards/{id}/sources/{source_id}` | — |
+| Quelle ändern | `PATCH /api/boards/{id}/sources/{source_id}` | `update_source` |
 | Kante anlegen | `POST /api/boards/{id}/relations` | `link_entities` |
-| Kante ändern | `PATCH /api/boards/{id}/relations/{relation_id}` | — |
+| Kante ändern | `PATCH /api/boards/{id}/relations/{relation_id}` | `update_relationship` |
 | Beleg hinzufügen | `POST /api/boards/{id}/relations/{relation_id}/evidence` | `add_evidence` |
-| Beleg ändern | `PATCH /api/boards/{id}/relations/{relation_id}/evidence/{evidence_id}` | — |
+| Beleg ändern | `PATCH /api/boards/{id}/relations/{relation_id}/evidence/{evidence_id}` | `update_evidence` |
 | KQL-Ergebnisse importieren | `POST /api/boards/{id}/imports/kql` | `add_kql_evidence` (bis 100 Zeilen) |
+| Modellierungsregeln lesen | — | `factgraph_guidelines` |
 
 Beispiel für eine Entität:
 
@@ -103,9 +104,11 @@ async with Client("http://127.0.0.1:8080/mcp/") as client:
 print(result.data)
 ```
 
+Der MCP-Server liefert zusätzlich verbindliche Arbeitsregeln: Nodes sollen konkrete Entities sein, gerichtete Beziehungen sollen nicht erfunden werden, wichtige Claims brauchen Evidence, primäre Quellen (Logs, KQL-Ergebnisse, Repository-Dateien und First-Party-Telemetrie) haben Vorrang und sekundäre Quellen dienen nur als Kontext. Unsicherheit, Widerspruch, Confidence und Evidence-Zeiträume werden erhalten. Diese Regeln stehen in den Server-Instructions und können mit `factgraph_guidelines` abgerufen werden.
+
 ### VS Code / GitHub Copilot
 
-Im Repository liegt bereits [.vscode/mcp.json](.vscode/mcp.json). VS Code öffnen, den Ordner `/Users/gregor/Projekte/FactGraph` laden und in der Command Palette **MCP: List Servers** aufrufen. Den Server `factgraph` starten; danach stehen `board_graph`, `add_entity`, `link_entities`, `add_evidence` und `add_kql_evidence` im Agent-Tools-Picker zur Verfügung. Alternativ **MCP: Open Workspace Folder Configuration** öffnen und diesen Eintrag einfügen:
+Im Repository liegt bereits [.vscode/mcp.json](.vscode/mcp.json). VS Code öffnen, den Ordner `/Users/gregor/Projekte/FactGraph` laden und in der Command Palette **MCP: List Servers** aufrufen. Den Server `factgraph` starten; danach stehen Lese-, Create-, Update- und Evidence-Tools sowie `factgraph_guidelines` im Agent-Tools-Picker zur Verfügung. Alternativ **MCP: Open Workspace Folder Configuration** öffnen und diesen Eintrag einfügen:
 
 ```json
 {

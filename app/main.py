@@ -22,7 +22,18 @@ from app.ingest import action, entity_actions, parse_rows, relation_actions, row
 
 
 WEB_DIR = Path(__file__).resolve().parents[1] / "web" / "dist"
-mcp = FastMCP("FactGraph Browser Boards")
+MCP_INSTRUCTIONS = """You are working with FactGraph, an evidence-first investigation graph.
+
+Core rules:
+- Model investigation objects as entities (nodes). Use one entity per person, account, host, device, service principal, file, IP, secret, or other concrete object.
+- Relationships are directed claims between entities. Keep predicates specific and do not infer a relationship that is not supported by evidence.
+- Every important claim should have evidence. Prefer primary evidence such as access logs, query results, repository files, or first-party telemetry. Treat secondary sources as context, never as proof of an event.
+- Preserve the source URI, query, excerpt, evidence stance, confidence, and evidence period. Use refutes when evidence contradicts a claim; do not silently overwrite uncertainty.
+- Evidence periods describe when the observed activity was valid, not when the graph record was created.
+- Use board_graph before editing when IDs or existing relationships are unknown. For large imports use REST /api/boards/{board_id}/imports/* or /actions; MCP is intended for focused edits.
+- The browser board must be open because FactGraph stores durable data in browser IndexedDB and the server only relays actions.
+"""
+mcp = FastMCP("FactGraph Browser Boards", version="0.3.0", instructions=MCP_INSTRUCTIONS)
 mcp_app = mcp.http_app(path="/")
 app = FastAPI(title="FactGraph API", version="0.3.0", lifespan=mcp_app.lifespan)
 
@@ -418,10 +429,28 @@ async def add_entity(board_id: str, name: str, kind: str = "Sonstiges",
     return await create_entity(board_id, EntityInput(name=name, kind=kind, description=description))
 
 
+@mcp.tool(name="update_entity")
+async def mcp_update_entity(board_id: str, entity_id: str, name: str | None = None,
+                            kind: str | None = None, description: str | None = None) -> dict:
+    """Patch an existing entity. Pass only fields that should change."""
+    values = {key: value for key, value in {"name": name, "kind": kind,
+             "description": description}.items() if value is not None}
+    return await update_entity(board_id, entity_id, EntityUpdate(**values))
+
+
 @mcp.tool
 async def add_source(board_id: str, title: str, uri: str = "", excerpt: str = "") -> dict:
     """Create an evidence source, such as a repository path, log export or query."""
     return await create_source(board_id, SourceInput(title=title, uri=uri, excerpt=excerpt))
+
+
+@mcp.tool(name="update_source")
+async def mcp_update_source(board_id: str, source_id: str, title: str | None = None,
+                            uri: str | None = None, excerpt: str | None = None) -> dict:
+    """Patch an existing evidence source. Pass only fields that should change."""
+    values = {key: value for key, value in {"title": title, "uri": uri,
+             "excerpt": excerpt}.items() if value is not None}
+    return await update_source(board_id, source_id, SourceUpdate(**values))
 
 
 @mcp.tool
@@ -433,6 +462,17 @@ async def link_entities(board_id: str, subject_id: str, predicate: str,
         predicate=predicate, object_id=object_id, note=note, source_id=source_id, valid_from=valid_from, valid_to=valid_to))
 
 
+@mcp.tool(name="update_relationship")
+async def mcp_update_relationship(board_id: str, relation_id: str, subject_id: str | None = None,
+                                  predicate: str | None = None, object_id: str | None = None,
+                                  valid_from: str | None = None, valid_to: str | None = None) -> dict:
+    """Patch a directed relationship. Pass only fields that should change."""
+    values = {key: value for key, value in {"subject_id": subject_id, "predicate": predicate,
+             "object_id": object_id, "valid_from": valid_from, "valid_to": valid_to}.items()
+             if value is not None}
+    return await update_relation(board_id, relation_id, RelationUpdate(**values))
+
+
 @mcp.tool
 async def add_evidence(board_id: str, relation_id: str, note: str,
                        source_id: str | None = None, stance: str = "supports",
@@ -440,6 +480,24 @@ async def add_evidence(board_id: str, relation_id: str, note: str,
     """Attach a supporting or refuting statement to an existing relation."""
     return await create_evidence(board_id, relation_id, EvidenceInput(note=note,
         source_id=source_id, stance=stance, confidence=confidence, valid_from=valid_from, valid_to=valid_to))
+
+
+@mcp.tool(name="update_evidence")
+async def mcp_update_evidence(board_id: str, relation_id: str, evidence_id: str,
+                              valid_from: str | None = None, valid_to: str | None = None,
+                              stance: str | None = None, confidence: float | None = None,
+                              source_id: str | None = None, note: str | None = None) -> dict:
+    """Patch evidence attached to a relationship. Pass only fields that should change."""
+    values = {key: value for key, value in {"valid_from": valid_from, "valid_to": valid_to,
+             "stance": stance, "confidence": confidence, "source_id": source_id,
+             "note": note}.items() if value is not None}
+    return await update_evidence(board_id, relation_id, evidence_id, EvidenceUpdate(**values))
+
+
+@mcp.tool
+async def factgraph_guidelines() -> dict:
+    """Return the evidence-first modeling rules for this FactGraph server."""
+    return {"rules": MCP_INSTRUCTIONS.strip().splitlines()}
 
 
 @mcp.tool

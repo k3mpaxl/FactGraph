@@ -1,0 +1,14 @@
+.git
+.github
+.vscode
+.venv
+__pycache__
+*.py[cod]
+.pytest_cache
+data
+deep-research-report.md
+web/node_modules
+web/dist
+tests
+*.tsbuildinfo
+.DS_Store

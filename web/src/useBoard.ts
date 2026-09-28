@@ -101,6 +101,16 @@ export function useBoard(boardId: string) {
   const emit = useCallback((type: ActionDraft['type'], payload: Record<string, unknown>) =>
     emitMany([{ type, payload }]), [emitMany])
 
+  const undo = useCallback(async () => {
+    const alreadyUndone = new Set(actionsRef.current.filter(item => item.type === 'action.undo')
+      .map(item => item.payload.action_id).filter((id): id is string => typeof id === 'string'))
+    const target = [...actionsRef.current].reverse().find(item =>
+      item.actor === actor && item.type !== 'action.undo' && !alreadyUndone.has(item.id))
+    if (!target) return false
+    await emit('action.undo', { action_id: target.id })
+    return true
+  }, [actor, emit])
+
   const importActions = useCallback(async (items: unknown[]) => {
     const received = items.filter(isAction).map(item => ({ ...item, boardId }))
     const count = await merge(received)
@@ -215,5 +225,5 @@ export function useBoard(boardId: string) {
   }, [actor, boardId, emitMany, merge, send, sendActions, sessionToken])
 
   return { actor, name, setName, actions, boards, peers, ready, connected, storageError,
-    boardName: projection.name, data: projection.data, emit, emitMany, importActions, sessionToken }
+    boardName: projection.name, data: projection.data, emit, emitMany, undo, importActions, sessionToken }
 }

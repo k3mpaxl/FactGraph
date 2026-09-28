@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react'
 import cytoscape from 'cytoscape'
-import { Box, Focus, Minus, Plus } from 'lucide-react'
+import { Box, Focus, Minus, Plus, Sparkles } from 'lucide-react'
 import type { Entity, Fact } from './types'
 import { GRAPH_GRID, snapPosition } from './layout'
 import { entityVisual } from './entityVisual'
@@ -10,16 +10,18 @@ type Selection = { kind: 'entity' | 'fact'; id: string } | null
 export default function GraphView({ entities, facts, selection, search, pathIds, onSelect, onCreateNode, onCreateRelation, onMoveNode }: {
   entities: Entity[]; facts: Fact[]; selection: Selection; search: string;
   pathIds: string[];
-  onSelect: (value: Selection) => void; onCreateNode: () => void; onCreateRelation: () => void;
+  onSelect: (value: Selection) => void; onCreateNode: () => void; onCreateRelation: (entityId: string) => void;
   onMoveNode: (id: string, position: { x: number; y: number }) => void;
 }) {
   const container = useRef<HTMLDivElement>(null)
   const graph = useRef<cytoscape.Core | null>(null)
   const selectRef = useRef(onSelect)
   const moveRef = useRef(onMoveNode)
+  const relationRef = useRef(onCreateRelation)
   const fitted = useRef(false)
   selectRef.current = onSelect
   moveRef.current = onMoveNode
+  relationRef.current = onCreateRelation
 
   useEffect(() => {
     if (!container.current) return
@@ -56,7 +58,7 @@ export default function GraphView({ entities, facts, selection, search, pathIds,
         { selector: 'node.path', style: { 'border-width': 4, 'border-color': '#f2d086' } },
         { selector: '.dimmed', style: { 'opacity': 0.16 } },
         { selector: 'node.focused', style: {
-          'border-width': 4, 'border-color': '#f5cc81', 'background-color': '#3d6484',
+          'border-width': 4, 'border-color': '#f5cc81',
         } },
         { selector: 'edge.focused', style: { 'width': 5, 'opacity': 1 } },
       ],
@@ -64,7 +66,19 @@ export default function GraphView({ entities, facts, selection, search, pathIds,
       minZoom: 0.35,
       maxZoom: 2.5,
     })
-    cy.on('tap', 'node', event => selectRef.current({ kind: 'entity', id: event.target.id() }))
+    let lastTap = { id: '', at: 0 }
+    cy.on('tap', 'node', event => {
+      const id = event.target.id()
+      const now = Date.now()
+      selectRef.current({ kind: 'entity', id })
+      if (lastTap.id === id && now - lastTap.at < 320) relationRef.current(id)
+      lastTap = { id, at: now }
+    })
+    cy.on('cxttap', 'node', event => {
+      const id = event.target.id()
+      selectRef.current({ kind: 'entity', id })
+      relationRef.current(id)
+    })
     cy.on('tap', 'edge', event => selectRef.current({ kind: 'fact', id: event.target.id() }))
     cy.on('tap', event => { if (event.target === cy) selectRef.current(null) })
     cy.on('dragfree', 'node', event => {
@@ -97,12 +111,13 @@ export default function GraphView({ entities, facts, selection, search, pathIds,
       for (const entity of entities) {
         const position = entity.position ?? { x: 0, y: 0 }
         const visual = entityVisual(entity.kind)
+        const fill = entity.color || visual.fill
         const node = cy.getElementById(entity.id)
         if (node.empty()) cy.add({ group: 'nodes', data: { id: entity.id, label: entity.name, kind: entity.kind,
-          fill: visual.fill, border: visual.border, shape: visual.shape }, position })
+          fill, border: entity.color || visual.border, shape: visual.shape }, position })
         else {
           node.data({ label: entity.name, kind: entity.kind,
-            fill: visual.fill, border: visual.border, shape: visual.shape })
+            fill, border: entity.color || visual.border, shape: visual.shape })
           if (!node.grabbed() && (node.position('x') !== position.x || node.position('y') !== position.y))
             node.position(position)
         }
@@ -154,15 +169,31 @@ export default function GraphView({ entities, facts, selection, search, pathIds,
     }
   }, [entities, facts, selection, search, pathIds])
 
+  const autoAlign = () => {
+    const cy = graph.current
+    if (!cy || !cy.nodes().length) return
+    cy.one('layoutstop', () => {
+      cy.nodes().forEach(node => {
+        const position = snapPosition(node.position())
+        node.position(position)
+        moveRef.current(node.id(), position)
+      })
+      cy.fit(cy.elements(), 56)
+    })
+    cy.layout({ name: 'cose', animate: true, animationDuration: 450,
+      fit: true, padding: 64, nodeRepulsion: () => 900_000, idealEdgeLength: () => 180 }).run()
+  }
+
   return <div className="graph-shell">
     <div className="graph-canvas" ref={container} aria-label="Interactive entity relationship graph" />
     <div className="graph-controls">
       <button title="Create node" aria-label="Create node" onClick={onCreateNode}><Box size={17} /></button>
-      <button title="Create relationship from selected node" aria-label="Create relationship from selected node" disabled={selection?.kind !== 'entity'} onClick={onCreateRelation}>↗</button>
+      <button title="Create relationship from selected node" aria-label="Create relationship from selected node" disabled={selection?.kind !== 'entity'} onClick={() => { if (selection?.kind === 'entity') onCreateRelation(selection.id) }}>↗</button>
+      <button title="Auto align graph" aria-label="Auto align graph" onClick={autoAlign}><Sparkles size={17} /></button>
       <button title="Zoom in" onClick={() => graph.current?.zoom({ level: Math.min(graph.current.zoom() * 1.25, 2.5), renderedPosition: { x: graph.current.width() / 2, y: graph.current.height() / 2 } })}><Plus size={17} /></button>
       <button title="Zoom out" onClick={() => graph.current?.zoom({ level: Math.max(graph.current.zoom() / 1.25, 0.35), renderedPosition: { x: graph.current.width() / 2, y: graph.current.height() / 2 } })}><Minus size={17} /></button>
       <button title="Fit graph" onClick={() => graph.current?.fit(undefined, 56)}><Focus size={17} /></button>
     </div>
-    <div className="graph-hint">Color/shape = type · drag nodes → grid · Delete removes · Esc closes</div>
+    <div className="graph-hint">Double-click or right-click a node to connect · drag → grid · auto align ✦ · Ctrl/Cmd+Z undo</div>
   </div>
 }

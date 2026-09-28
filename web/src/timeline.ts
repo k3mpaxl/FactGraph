@@ -31,6 +31,17 @@ export function timelineEntries(facts: Fact[]) {
   })
 }
 
+export function timelineEvents(facts: Fact[]) {
+  const groups = new Map<string, ReturnType<typeof timelineEntries>[number] & { assertions: Assertion[] }>()
+  for (const entry of timelineEntries(facts)) {
+    const key = JSON.stringify([entry.fact.id, entry.from ?? '', entry.to ?? ''])
+    const group = groups.get(key)
+    if (group) group.assertions.push(entry.assertion)
+    else groups.set(key, { ...entry, assertions: [entry.assertion] })
+  }
+  return [...groups.values()]
+}
+
 export function factIntersects(fact: Fact, from: string | null, to: string | null, includeUndated = true) {
   if (!from && !to) return true
   const lower = from ? Date.parse(from) : Number.NEGATIVE_INFINITY

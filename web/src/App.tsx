@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Activity, ArrowDownToLine, ArrowRight, Box, ChevronRight, CircleHelp, Copy,
-  Database, FileText, Fingerprint, GitBranch, Link2, Plus, Search,
-  ShieldCheck, Sparkles, Trash2, Upload, Users, Wifi, WifiOff, X,
+  Database, FileText, Fingerprint, GitBranch, Link2, Merge, Pencil, Plus, Search,
+  ShieldCheck, Sparkles, Trash2, Undo2, Upload, Users, Wifi, WifiOff, X,
 } from 'lucide-react'
-import { factIntersects, timelineSteps, timelineEntries, periodLabel, evidencePeriod } from './timeline'
+import { factIntersects, timelineSteps, timelineEvents, periodLabel, evidencePeriod } from './timeline'
 import GraphView from './GraphView'
 import { demoDrafts, factKey, legacyDrafts, normalizeIdentifier, type BoardAction } from './board'
 import { useBoard } from './useBoard'
@@ -13,7 +13,7 @@ import { entityVisual } from './entityVisual'
 import type { Assertion, GraphData, Identifier, TruthState } from './types'
 
 type Selection = { kind: 'entity' | 'fact'; id: string } | null
-type DialogKind = 'entity' | 'entity-edit' | 'fact' | 'source' | 'identifier' | 'assertion' | null
+type DialogKind = 'entity' | 'entity-edit' | 'entity-merge' | 'fact' | 'source' | 'identifier' | 'assertion' | 'assertion-edit' | null
 
 const labels: Record<TruthState, string> = {
   supported: 'Supported', disputed: 'Disputed', refuted: 'Refuted', unknown: 'Unknown',
@@ -37,9 +37,9 @@ function sourceOf(data: GraphData, id: string | null) {
   return data.sources.find(item => item.id === id)
 }
 
-function IconForKind({ kind }: { kind: string }) {
+function IconForKind({ kind, color }: { kind: string; color?: string }) {
   const visual = entityVisual(kind)
-  return <span className="entity-avatar" style={{ background: visual.fill, border: `1px solid ${visual.border}` }}>{kind.slice(0, 1).toUpperCase() || <Box size={16} />}</span>
+  return <span className="entity-avatar" style={{ background: color || visual.fill, border: `1px solid ${color || visual.border}` }}>{kind.slice(0, 1).toUpperCase() || <Box size={16} />}</span>
 }
 
 function StatePill({ state }: { state: TruthState }) {
@@ -51,10 +51,11 @@ function SourceLine({ data, sourceId }: { data: GraphData; sourceId: string | nu
   return <span>{source ? source.title : 'Manual entry'}</span>
 }
 
-function DetailPanel({ data, selection, onAdd, onDelete, onRetract, onClose }: {
+function DetailPanel({ data, selection, onAdd, onDelete, onRetract, onEditEvidence, onCopy, onClose }: {
   data: GraphData; selection: Selection; onAdd: (kind: DialogKind) => void;
   onDelete: (kind: 'entity' | 'fact' | 'identifier', id: string) => void;
-  onRetract: (id: string) => void; onClose: () => void;
+  onRetract: (id: string) => void; onEditEvidence: (id: string) => void;
+  onCopy: (value: string, label: string) => void; onClose: () => void;
 }) {
   if (!selection) return <aside className="detail-panel detail-empty">
     <div className="detail-head"><span>INSPECTOR</span><CircleHelp size={17} /></div>
@@ -70,12 +71,12 @@ function DetailPanel({ data, selection, onAdd, onDelete, onRetract, onClose }: {
     const related = data.facts.filter(item => item.subject_id === entity.id || item.object_id === entity.id)
     return <aside className="detail-panel">
       <div className="detail-head"><span>ENTITY</span><button className="icon-button" onClick={onClose} title="Close"><X size={17} /></button></div>
-      <div className="detail-title-row"><IconForKind kind={entity.kind} /><div><div className="detail-kind">{entity.kind}</div><h2>{entity.name}</h2><button className="text-button" onClick={() => onAdd('entity-edit')}>Bearbeiten</button></div></div>
+      <div className="detail-title-row"><IconForKind kind={entity.kind} color={entity.color} /><div><div className="detail-kind">{entity.kind}</div><h2>{entity.name}</h2><div className="entity-quick-actions"><button className="text-button" onClick={() => onAdd('entity-edit')}><Pencil size={14} /> Edit</button><button className="text-button" onClick={() => onAdd('entity-merge')}><Merge size={14} /> Merge</button></div></div></div>
       {entity.description && <p className="detail-description">{entity.description}</p>}
-      <div className="id-line">ID {entity.id.slice(0, 8)}…</div>
+      <button className="id-line copy-id" onClick={() => onCopy(entity.id, 'Entity ID')} title="Copy entity ID">ID {entity.id} <Copy size={13} /></button>
       <section className="detail-section">
         <div className="section-heading"><h3>Identifiers <small>{entity.identifiers.length}</small></h3><button className="text-button" onClick={() => onAdd('identifier')}><Plus size={15} /> Add</button></div>
-        {entity.identifiers.length ? entity.identifiers.map(identifier => <IdentifierRow key={identifier.id} identifier={identifier} data={data} onDelete={() => onDelete('identifier', identifier.id)} />) :
+        {entity.identifiers.length ? entity.identifiers.map(identifier => <IdentifierRow key={identifier.id} identifier={identifier} data={data} onCopy={onCopy} onDelete={() => onDelete('identifier', identifier.id)} />) :
           <p className="muted small">No identifiers yet.</p>}
       </section>
       <section className="detail-section">
@@ -94,28 +95,30 @@ function DetailPanel({ data, selection, onAdd, onDelete, onRetract, onClose }: {
     <div className="detail-head"><span>RELATIONSHIP / FACT</span><button className="icon-button" onClick={onClose} title="Close"><X size={17} /></button></div>
     <div className="fact-heading"><span>{nameOf(data, fact.subject_id)}</span><ArrowRight size={19} /><span>{nameOf(data, fact.object_id)}</span></div>
     <div className="predicate-label">{fact.predicate}</div>
+    <button className="id-line copy-id" onClick={() => onCopy(fact.id, 'Relationship ID')} title="Copy relationship ID">ID {fact.id} <Copy size={13} /></button>
     <div className="fact-state"><StatePill state={fact.truth_state} /><span>{fact.assertions.filter(a => !a.retracted_at).length} active evidence items</span></div>
     <div className="fact-meta"><span>Relation valid from</span><strong>{date(fact.valid_from)}</strong></div>
     {fact.valid_to && <div className="fact-meta"><span>Relation valid to</span><strong>{date(fact.valid_to)}</strong></div>}
     <section className="detail-section">
       <div className="section-heading"><h3>Evidence <small>{fact.assertions.length}</small></h3><button className="text-button" onClick={() => onAdd('assertion')}><Plus size={15} /> Add evidence</button></div>
-      {fact.assertions.map(assertion => <AssertionRow key={assertion.id} assertion={assertion} data={data} onRetract={() => onRetract(assertion.id)} />)}
+      {fact.assertions.map(assertion => <AssertionRow key={assertion.id} assertion={assertion} data={data} onCopy={onCopy} onEdit={() => onEditEvidence(assertion.id)} onRetract={() => onRetract(assertion.id)} />)}
     </section>
     <div className="truth-explanation"><ShieldCheck size={18} /><span>Supporting and refuting evidence can coexist. Retracted evidence remains traceable.</span></div>
     <div className="detail-bottom"><button className="danger-link" onClick={() => onDelete('fact', fact.id)}><Trash2 size={15} /> Delete relationship</button></div>
   </aside>
 }
 
-function IdentifierRow({ identifier, data, onDelete }: { identifier: Identifier; data: GraphData; onDelete: () => void }) {
+function IdentifierRow({ identifier, data, onCopy, onDelete }: { identifier: Identifier; data: GraphData; onCopy: (value: string, label: string) => void; onDelete: () => void }) {
   return <div className="identifier-row">
     <div className="identifier-top"><span className="scheme-badge">{identifier.scheme}</span><button title="Delete identifier" className="row-delete" onClick={onDelete}><X size={14} /></button></div>
-    <div className="identifier-value">{identifier.raw_value}</div>
+    <button className="identifier-value copy-value" onClick={() => onCopy(identifier.raw_value, 'Identifier')} title="Copy identifier">{identifier.raw_value} <Copy size={12} /></button>
+    <button className="identifier-id" onClick={() => onCopy(identifier.id, 'Identifier ID')} title="Copy identifier record ID">ID {identifier.id.slice(0, 8)}…</button>
     <div className="identifier-meta">{identifier.namespace && <span>{identifier.namespace} · </span>}<SourceLine data={data} sourceId={identifier.source_id} /> · {Math.round(identifier.confidence * 100)} %</div>
     {(identifier.valid_from || identifier.valid_to) && <div className="identifier-meta">{date(identifier.valid_from)} – {identifier.valid_to ? date(identifier.valid_to) : 'heute'}</div>}
   </div>
 }
 
-function AssertionRow({ assertion, data, onRetract }: { assertion: Assertion; data: GraphData; onRetract: () => void }) {
+function AssertionRow({ assertion, data, onCopy, onEdit, onRetract }: { assertion: Assertion; data: GraphData; onCopy: (value: string, label: string) => void; onEdit: () => void; onRetract: () => void }) {
   const source = sourceOf(data, assertion.source_id)
   const period = evidencePeriod(assertion, data.facts.find(f => f.id === assertion.fact_id)!)
   return <div className={`assertion-row ${assertion.retracted_at ? 'retracted' : ''}`}>
@@ -123,17 +126,20 @@ function AssertionRow({ assertion, data, onRetract }: { assertion: Assertion; da
     <div className="assertion-source"><FileText size={14} /><SourceLine data={data} sourceId={assertion.source_id} /></div>
     {source && (source.excerpt || source.uri) && <details className="source-details"><summary>View source</summary>{source.excerpt && <blockquote>{source.excerpt}</blockquote>}{source.uri && <div>{source.uri}</div>}</details>}
     {assertion.note && <p>{assertion.note}</p>}
-    <div className="assertion-footer"><span>{periodLabel(period.from, period.to)}{assertion.retracted_at && ' · Retracted'}</span>{!assertion.retracted_at && <button onClick={onRetract}>Retract</button>}</div>
+    <div className="assertion-id"><button onClick={() => onCopy(assertion.id, 'Evidence ID')} title="Copy evidence ID">ID {assertion.id.slice(0, 8)}… <Copy size={11} /></button></div>
+    <div className="assertion-footer"><span>{periodLabel(period.from, period.to)}{assertion.retracted_at && ' · Retracted'}</span><span className="assertion-actions"><button onClick={onEdit}>Edit</button>{!assertion.retracted_at && <button onClick={onRetract}>Retract</button>}</span></div>
   </div>
 }
 
-function Dialog({ kind, data, selection, busy, error, onClose, onSubmit }: {
+function Dialog({ kind, data, selection, editingAssertionId, busy, error, onClose, onSubmit }: {
   kind: Exclude<DialogKind, null>; data: GraphData; selection: Selection; busy: boolean;
+  editingAssertionId: string | null;
   error: string; onClose: () => void; onSubmit: (kind: Exclude<DialogKind, null>, values: Record<string, unknown>) => Promise<void>;
 }) {
-  const titles = { entity: 'New entity', 'entity-edit': 'Edit entity', fact: 'New relationship', source: 'New source', identifier: 'Add identifier', assertion: 'Add evidence' }
+  const titles = { entity: 'New entity', 'entity-edit': 'Edit entity', 'entity-merge': 'Merge entity', fact: 'New relationship', source: 'New source', identifier: 'Add identifier', assertion: 'Add evidence', 'assertion-edit': 'Edit evidence' }
   const editing = kind === 'entity-edit' ? data.entities.find(e => e.id === selection?.id) : undefined
-  const [stance, setStance] = useState<'supports' | 'refutes'>('supports')
+  const editingAssertion = kind === 'assertion-edit' ? data.facts.flatMap(fact => fact.assertions).find(assertion => assertion.id === editingAssertionId) : undefined
+  const [stance, setStance] = useState<'supports' | 'refutes'>(editingAssertion?.stance ?? 'supports')
   const [newTarget, setNewTarget] = useState(selection?.kind === 'entity')
   const [customEntityKind, setCustomEntityKind] = useState(!!editing && !kinds.includes(editing.kind))
   const [customTargetKind, setCustomTargetKind] = useState(false)
@@ -147,7 +153,8 @@ function Dialog({ kind, data, selection, busy, error, onClose, onSubmit }: {
     let values: Record<string, unknown>
     const entityKind = get('kind') === customKindValue ? get('custom_kind') : get('kind')
     const targetKind = get('new_object_kind') === customKindValue ? get('custom_new_object_kind') : get('new_object_kind')
-    if (kind === 'entity' || kind === 'entity-edit') values = { name: get('name'), kind: entityKind, description: get('description') }
+    if (kind === 'entity' || kind === 'entity-edit') values = { name: get('name'), kind: entityKind, description: get('description'), color: get('color') }
+    else if (kind === 'entity-merge') values = { target_id: get('target_id') }
     else if (kind === 'source') values = { title: get('title'), uri: get('uri'), excerpt: get('excerpt') }
     else if (kind === 'identifier') values = {
       scheme: get('scheme'), namespace: get('namespace'), raw_value: get('raw_value'),
@@ -168,18 +175,24 @@ function Dialog({ kind, data, selection, busy, error, onClose, onSubmit }: {
     setLocalError('')
     await onSubmit(kind, values)
   }
-  const sourceSelect = <label>Source <span className="optional">optional</span><select name="source_id" defaultValue=""><option value="">Manual entry</option>{data.sources.map(source => <option key={source.id} value={source.id}>{source.title}</option>)}</select></label>
-  const confidenceField = <label>Confidence <span className="optional">0–100 %</span><input name="confidence" type="number" min="0" max="100" defaultValue="100" /></label>
-  const dateFields = <div className="field-grid"><label>Evidence from <span className="optional">optional</span><input name="valid_from" type="datetime-local" /></label><label>Evidence to <span className="optional">optional</span><input name="valid_to" type="datetime-local" /></label></div>
+  const localDate = (value: string | null | undefined) => {
+    if (!value) return ''
+    const parsed = new Date(value)
+    return new Date(parsed.getTime() - parsed.getTimezoneOffset() * 60_000).toISOString().slice(0, 16)
+  }
+  const sourceSelect = <label>Source <span className="optional">optional</span><select name="source_id" defaultValue={editingAssertion?.source_id ?? ''}><option value="">Manual entry</option>{data.sources.map(source => <option key={source.id} value={source.id}>{source.title}</option>)}</select></label>
+  const confidenceField = <label>Confidence <span className="optional">0–100 %</span><input name="confidence" type="number" min="0" max="100" defaultValue={editingAssertion ? Math.round(editingAssertion.confidence * 100) : 100} /></label>
+  const dateFields = <div className="field-grid"><label>Evidence from <span className="optional">optional</span><input name="valid_from" type="datetime-local" defaultValue={localDate(editingAssertion?.valid_from)} /></label><label>Evidence to <span className="optional">optional</span><input name="valid_to" type="datetime-local" defaultValue={localDate(editingAssertion?.valid_to)} /></label></div>
   return <div className="modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) onClose() }}>
     <div className="modal" role="dialog" aria-modal="true" aria-label={titles[kind]}>
       <div className="modal-header"><div><span className="eyebrow">FACTGRAPH · ERFASSEN</span><h2>{titles[kind]}</h2></div><button className="icon-button" onClick={onClose}><X size={20} /></button></div>
       <form onSubmit={submit}>
-        {(kind === 'entity' || kind === 'entity-edit') && <><label>Name<input name="name" defaultValue={editing?.name} autoFocus required placeholder="e.g. Web server 01" /></label><label>Type<select name="kind" defaultValue={editing ? (kinds.includes(editing.kind) ? editing.kind : customKindValue) : kinds[0]} onChange={event => setCustomEntityKind(event.target.value === customKindValue)}>{kinds.map(value => <option key={value}>{value}</option>)}<option value={customKindValue}>Custom type…</option></select>{customEntityKind && <input name="custom_kind" defaultValue={editing?.kind} required autoFocus placeholder="e.g. SaaS application" />}</label><label>Description <span className="optional">optional</span><textarea name="description" defaultValue={editing?.description} rows={3} placeholder="What is known about this entity?" /></label></>}
+        {(kind === 'entity' || kind === 'entity-edit') && <><label>Name<input name="name" defaultValue={editing?.name} autoFocus required placeholder="e.g. Web server 01" /></label><div className="field-grid"><label>Type<select name="kind" defaultValue={editing ? (kinds.includes(editing.kind) ? editing.kind : customKindValue) : kinds[0]} onChange={event => setCustomEntityKind(event.target.value === customKindValue)}>{kinds.map(value => <option key={value}>{value}</option>)}<option value={customKindValue}>Custom type…</option></select>{customEntityKind && <input name="custom_kind" defaultValue={editing?.kind} required autoFocus placeholder="e.g. SaaS application" />}</label><label>Node color<input name="color" className="color-input" type="color" defaultValue={editing?.color || entityVisual(editing?.kind || kinds[0]).fill} /></label></div><label>Description <span className="optional">optional</span><textarea name="description" defaultValue={editing?.description} rows={3} placeholder="What is known about this entity?" /></label></>}
+        {kind === 'entity-merge' && selection?.kind === 'entity' && <><div className="modal-context">Merge <strong>{nameOf(data, selection.id)}</strong> into another entity. Its identifiers, relationships and evidence are retained.</div><label>Keep entity<select name="target_id" required autoFocus><option value="" disabled>Choose target entity</option>{data.entities.filter(item => item.id !== selection.id).map(item => <option key={item.id} value={item.id}>{item.name} · {item.kind}</option>)}</select></label><div className="form-warning">The selected source entity will disappear. Use Undo if you change your mind.</div></>}
         {kind === 'source' && <><label>Title<input name="title" autoFocus required placeholder="e.g. EDR export from Sep 27" /></label><label>URL or reference <span className="optional">optional</span><input name="uri" placeholder="https://… or file path" /></label><label>Excerpt <span className="optional">optional</span><textarea name="excerpt" rows={4} placeholder="Relevant passage from the source" /></label></>}
         {kind === 'identifier' && <><div className="modal-context">Entity: <strong>{selection?.kind === 'entity' ? nameOf(data, selection.id) : ''}</strong></div><div className="field-grid"><label>Scheme<select name="scheme">{schemes.map(value => <option key={value}>{value}</option>)}</select></label><label>Namespace <span className="optional">optional</span><input name="namespace" placeholder="e.g. prod" /></label></div><label>Value<input name="raw_value" autoFocus required placeholder="External identifier" /></label>{dateFields}{sourceSelect}{confidenceField}</>}
         {kind === 'fact' && <><div className="field-grid"><label>From<select name="subject_id" defaultValue={selection?.kind === 'entity' ? selection.id : ''} required><option value="" disabled>Choose entity</option>{data.entities.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label>To<div className="target-choice"><button type="button" className={newTarget ? 'active' : ''} onClick={() => setNewTarget(true)}>New node</button><button type="button" className={!newTarget ? 'active' : ''} onClick={() => setNewTarget(false)}>Existing node</button></div></label></div>{newTarget ? <div className="field-grid"><label>New node name<input name="new_object_name" required placeholder="e.g. Azure secret" /></label><label>Type<select name="new_object_kind" defaultValue={kinds[0]} onChange={event => setCustomTargetKind(event.target.value === customKindValue)}>{kinds.map(value => <option key={value}>{value}</option>)}<option value={customKindValue}>Custom type…</option></select>{customTargetKind && <input name="custom_new_object_kind" required autoFocus placeholder="e.g. SaaS application" />}</label></div> : <label>Target node<select name="object_id" defaultValue="" required><option value="" disabled>Choose entity</option>{data.entities.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>}<label>Relationship / predicate<input name="predicate" autoFocus required placeholder="e.g. reads, grants access to, accessed" /></label>{dateFields}<div className="form-divider">First evidence statement</div><StanceSelect value={stance} onChange={setStance} />{sourceSelect}{confidenceField}<label>Note <span className="optional">optional</span><textarea name="note" rows={2} placeholder="What supports this statement?" /></label></>}
-        {kind === 'assertion' && <>{dateFields}<div className="modal-context">Relationship: <strong>{selection?.kind === 'fact' ? data.facts.find(item => item.id === selection.id)?.predicate : ''}</strong></div><StanceSelect value={stance} onChange={setStance} />{sourceSelect}{confidenceField}<label>Note <span className="optional">optional</span><textarea name="note" rows={3} placeholder="What does the source show?" /></label></>}
+        {(kind === 'assertion' || kind === 'assertion-edit') && <>{dateFields}<div className="modal-context">Relationship: <strong>{selection?.kind === 'fact' ? data.facts.find(item => item.id === selection.id)?.predicate : ''}</strong></div><StanceSelect value={stance} onChange={setStance} />{sourceSelect}{confidenceField}<label>Note <span className="optional">optional</span><textarea name="note" defaultValue={editingAssertion?.note} rows={3} placeholder="What does the source show?" /></label></>}
         {(error || localError) && <div className="form-error">{localError || error}</div>}
         <div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>Cancel</button><button className="primary-button" disabled={busy}>{busy ? 'Saving…' : 'Save'} <ArrowRight size={16} /></button></div>
       </form>
@@ -240,10 +253,11 @@ function currentBoardId() {
 function actionLabel(action: BoardAction) {
   const names: Record<BoardAction['type'], string> = {
     'board.rename': 'Board renamed', 'entity.add': 'Entity created',
-    'entity.update': 'Entity edited', 'entity.position': 'Node moved', 'entity.delete': 'Entity deleted', 'identifier.add': 'Identifier added',
-    'identifier.delete': 'Identifier deleted', 'source.add': 'Source created', 'source.update': 'Source edited',
+    'entity.update': 'Entity edited', 'entity.position': 'Node moved', 'entity.delete': 'Entity deleted', 'entity.merge': 'Entities merged', 'identifier.add': 'Identifier added',
+    'identifier.delete': 'Identifier deleted', 'source.add': 'Source created', 'source.update': 'Source edited', 'source.delete': 'Source deleted',
     'fact.add': 'Relationship created', 'fact.update': 'Relationship edited', 'fact.delete': 'Relationship deleted',
     'assertion.add': 'Evidence added', 'assertion.update': 'Evidence edited', 'assertion.retract': 'Evidence retracted',
+    'assertion.delete': 'Evidence deleted', 'action.undo': 'Change undone',
   }
   const subject = typeof action.payload.name === 'string' ? action.payload.name :
     typeof action.payload.title === 'string' ? action.payload.title :
@@ -262,8 +276,8 @@ type WorkspaceTab = 'graph' | 'timeline' | 'activity'
 function TimelinePanel({ data, facts, selection, onSelect }: {
   data: GraphData; facts: GraphData['facts']; selection: Selection; onSelect: (selection: Selection) => void;
 }) {
-  const entries = timelineEntries(facts)
-  return <section className="timeline-panel"><div className="card-header"><div><div className="card-title"><Activity size={18} /> Timeline</div><span>Evidence periods · chronological · UTC</span></div><span className="mini-count">{entries.length} evidence items</span></div><div className="timeline-list">{entries.length ? entries.map(({ fact, assertion, from, to }) => <button key={assertion.id} className={`timeline-item ${selection?.id === fact.id ? 'active' : ''}`} onClick={() => onSelect({ kind: 'fact', id: fact.id })}><span className={`timeline-dot ${fact.truth_state}`} /><span className="timeline-date">{periodLabel(from, to)}</span><strong>{nameOf(data, fact.subject_id)} <span>→</span> {nameOf(data, fact.object_id)}</strong><small>{fact.predicate} · {assertion.stance === 'supports' ? 'Supports' : 'Refutes'} · <SourceLine data={data} sourceId={assertion.source_id} /></small></button>) : <div className="timeline-empty">No active evidence yet.</div>}</div></section>
+  const entries = timelineEvents(facts)
+  return <section className="timeline-panel"><div className="card-header"><div><div className="card-title"><Activity size={18} /> Timeline</div><span>Evidence periods · chronological · UTC</span></div><span className="mini-count">{entries.length} evidence events</span></div><div className="timeline-list">{entries.length ? entries.map(({ fact, assertions, from, to }) => <button key={`${fact.id}:${from}:${to}`} className={`timeline-item ${selection?.id === fact.id ? 'active' : ''}`} onClick={() => onSelect({ kind: 'fact', id: fact.id })}><span className={`timeline-dot ${fact.truth_state}`} /><span className="timeline-date">{periodLabel(from, to)}</span><strong>{nameOf(data, fact.subject_id)} <span>→</span> {nameOf(data, fact.object_id)}</strong><small>{fact.predicate} · {assertions.length} evidence {assertions.length === 1 ? 'item' : 'items'} · {[...new Set(assertions.map(item => item.stance === 'supports' ? 'Supports' : 'Refutes'))].join(' + ')}</small></button>) : <div className="timeline-empty">No active evidence yet.</div>}</div></section>
 }
 
 function EvidenceWindow({ facts, from, to, includeUndated, onIncludeUndatedChange, onFromChange, onToChange, onReset }: {
@@ -297,6 +311,7 @@ export default function App() {
   const data = board.ready ? board.data : null
   const [selection, setSelection] = useState<Selection>(null)
   const [dialog, setDialog] = useState<DialogKind>(null)
+  const [editingAssertionId, setEditingAssertionId] = useState<string | null>(null)
   const [search, setSearch] = useState('')
   const [stateFilter, setStateFilter] = useState<TruthState | 'all'>('all')
   const [error, setError] = useState('')
@@ -324,6 +339,10 @@ export default function App() {
     const created_at = new Date().toISOString()
     if (kind === 'entity') await act(() => board.emit('entity.add', { id: uuid(), ...values, created_at }), 'Entity saved')
     else if (kind === 'entity-edit' && selection?.kind === 'entity') await act(() => board.emit('entity.update', { id: selection.id, ...values }), 'Entity updated')
+    else if (kind === 'entity-merge' && selection?.kind === 'entity') await act(async () => {
+      await board.emit('entity.merge', { source_id: selection.id, target_id: values.target_id })
+      setSelection({ kind: 'entity', id: String(values.target_id) })
+    }, 'Entities merged')
     else if (kind === 'source') await act(() => board.emit('source.add', { id: uuid(), ...values, created_at }), 'Source saved')
     else if (kind === 'identifier' && selection?.kind === 'entity') {
       const raw = String(values.raw_value ?? '')
@@ -349,6 +368,8 @@ export default function App() {
     } else if (kind === 'assertion' && selection?.kind === 'fact')
       await act(() => board.emit('assertion.add', { id: uuid(), fact_id: selection.id,
         ...values, created_at }), 'Evidence saved')
+    else if (kind === 'assertion-edit' && editingAssertionId)
+      await act(() => board.emit('assertion.update', { id: editingAssertionId, ...values }), 'Evidence updated')
   }
 
   const deleteItem = (kind: 'entity' | 'fact' | 'identifier', id: string) => {
@@ -361,21 +382,25 @@ export default function App() {
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null
-      if (target && (['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName) || target.isContentEditable)) return
       if (event.key === 'Escape') {
         if (dialog) setDialog(null)
         else if (showLogImport) setShowLogImport(false)
         else setSelection(null)
         return
       }
+      if (target && (['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName) || target.isContentEditable)) return
       if ((event.key === 'Delete' || event.key === 'Backspace') && selection) {
         event.preventDefault()
         deleteItem(selection.kind, selection.id)
       }
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'z') {
+        event.preventDefault()
+        void board.undo().then(changed => setToast(changed ? 'Last change undone' : 'Nothing to undo'))
+      }
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [dialog, selection, showLogImport])
+  }, [board.undo, dialog, selection, showLogImport])
 
   const navigate = (id: string) => {
     try { localStorage.setItem('factgraph:lastBoard', id) } catch { /* private mode */ }
@@ -394,6 +419,10 @@ export default function App() {
   const copySessionToken = async () => {
     try { await navigator.clipboard.writeText(board.sessionToken); setToast('Session token copied') }
     catch { window.prompt('Session token:', board.sessionToken) }
+  }
+  const copyValue = async (value: string, label: string) => {
+    try { await navigator.clipboard.writeText(value); setToast(`${label} copied`) }
+    catch { window.prompt(`Copy ${label}:`, value) }
   }
   const download = () => {
     const content = JSON.stringify({ format: 'factgraph-board-v1', boardId, name: board.boardName, actions: board.actions }, null, 2)
@@ -463,7 +492,7 @@ export default function App() {
       <div className="sidebar-section-label list-heading">ENTITIES <span>{data?.entities.length ?? 0}</span></div>
       <div className="search-box"><Search size={16} /><input aria-label="Search entities" placeholder="Search entities…" value={search} onChange={event => setSearch(event.target.value)} />{search && <button onClick={() => setSearch('')}><X size={14} /></button>}</div>
       <div className="entity-list">
-        {searchResults.map(entity => <button key={entity.id} className={`entity-list-item ${selection?.id === entity.id ? 'active' : ''}`} onClick={() => setSelection({ kind: 'entity', id: entity.id })}><IconForKind kind={entity.kind} /><span><strong>{entity.name}</strong><small>{entity.kind} · {entity.identifiers.length} Kennungen</small></span><ChevronRight size={15} /></button>)}
+        {searchResults.map(entity => <button key={entity.id} className={`entity-list-item ${selection?.id === entity.id ? 'active' : ''}`} onClick={() => setSelection({ kind: 'entity', id: entity.id })}><IconForKind kind={entity.kind} color={entity.color} /><span><strong>{entity.name}</strong><small>{entity.kind} · {entity.identifiers.length} identifiers</small></span><ChevronRight size={15} /></button>)}
         {data && data.entities.length > 150 && <div className="sidebar-empty">Maximum 150 results · narrow your search</div>}
         {data && !searchResults.length && <div className="sidebar-empty">{search ? 'No matches.' : 'No entities yet.'}</div>}
       </div>
@@ -471,23 +500,23 @@ export default function App() {
     </aside>
 
     <main className="main-area">
-      <header className="topbar"><div className="breadcrumbs">WORKSPACE <ChevronRight size={14} /> <strong>Overview</strong></div><div className="top-actions"><button className="secondary-button" onClick={() => { setError(''); setDialog('source') }}><FileText size={16} /> Source</button><button className="secondary-button" onClick={() => { setError(''); setDialog('entity') }}><Plus size={17} /> Entity</button><button className="primary-button" onClick={() => { setError(''); setDialog('fact') }} disabled={!data || data.entities.length < 2}><Link2 size={17} /> Relationship</button></div></header>
+      <header className="topbar"><div className="breadcrumbs">WORKSPACE <ChevronRight size={14} /> <strong>Overview</strong></div><div className="top-actions"><button className="secondary-button" onClick={() => void board.undo().then(changed => setToast(changed ? 'Last change undone' : 'Nothing to undo'))} title="Undo last change (Ctrl/Cmd+Z)"><Undo2 size={16} /> Undo</button><button className="secondary-button" onClick={() => { setError(''); setDialog('source') }}><FileText size={16} /> Source</button><button className="secondary-button" onClick={() => { setError(''); setDialog('entity') }}><Plus size={17} /> Entity</button><button className="primary-button" onClick={() => { setError(''); setDialog('fact') }} disabled={!data || data.entities.length < 2}><Link2 size={17} /> Relationship</button></div></header>
       <div className="integration-note"><span><strong>API</strong> · <button className="integration-action" onClick={() => void copyMcpEndpoint()} title="Copy MCP endpoint">MCP</button> · <a href={restDocsEndpoint} target="_blank" rel="noreferrer">REST</a> · <button className="integration-action" onClick={() => { const endpoint = `${window.location.origin}/api/boards/${boardId}`; void navigator.clipboard.writeText(endpoint).then(() => setToast('REST board endpoint copied')).catch(() => window.prompt('REST board endpoint:', endpoint)) }}>Copy</button> · <button className="integration-action" onClick={() => void copySessionToken()} title="Copy session token">Token</button></span><small>Same token for REST + MCP · keep board open</small></div>
       <div className="page-heading"><div><div className="eyebrow">INVESTIGATION CANVAS</div><h1>Make connections visible<span>.</span></h1><p>Entities, relationships and evidence in one place.</p></div><div className="heading-meta"><span className="live-dot" /> Stored in browser</div></div>
-      <div className="board-toolbar"><div className="board-identity"><span>BOARD</span><strong>{board.boardName}</strong><code>{boardId.slice(0, 8)}…</code><button title="Rename board" onClick={() => { const value = window.prompt('Board name', board.boardName); if (value?.trim()) void act(() => board.emit('board.rename', { name: value.trim() }), 'Board renamed') }}>Rename</button></div><div className="board-tools"><button onClick={() => void copyLink()} title="Copy board link"><Copy size={15} /> Link</button><button onClick={() => setShowLogImport(true)} title="Import activity logs or KQL results"><Upload size={15} /> Logs/KQL</button><button onClick={() => importInput.current?.click()} title="Import JSON"> <Upload size={15} /> Import</button><button onClick={download} title="Save JSON file"><ArrowDownToLine size={15} /> Export</button><button onClick={() => void copyExport()} title="Copy board JSON"><Copy size={15} /> JSON</button><button onClick={() => navigate(uuid())} title="New board"><Plus size={15} /> Board</button></div><div className="presence-group"><span className={`connection-dot ${board.connected ? 'online' : ''}`} />{board.connected ? <Wifi size={15} /> : <WifiOff size={15} />}<span>{board.connected ? `${board.peers.length + 1} online` : 'Offline'}</span>{board.peers.map(peer => <span key={peer.id} className="peer-avatar" title={peer.name} style={{ background: peerColor(peer.id) }}>{peer.name.slice(0, 1).toUpperCase()}</span>)}<button className="profile-button" onClick={() => { const value = window.prompt('Your display name', board.name); if (value?.trim()) board.setName(value) }} title="Change display name"><Users size={14} /> {board.name}</button></div></div>
+      <div className="board-toolbar"><div className="board-identity"><span>BOARD</span><strong>{board.boardName}</strong><button className="copy-board-id" title="Copy full board ID" onClick={() => void copyValue(boardId, 'Board ID')}><code>{boardId.slice(0, 8)}…</code><Copy size={12} /></button><button title="Rename board" onClick={() => { const value = window.prompt('Board name', board.boardName); if (value?.trim()) void act(() => board.emit('board.rename', { name: value.trim() }), 'Board renamed') }}>Rename</button></div><div className="board-tools"><button onClick={() => void copyLink()} title="Copy board link"><Copy size={15} /> Link</button><button onClick={() => setShowLogImport(true)} title="Import activity logs or KQL results"><Upload size={15} /> Logs/KQL</button><button onClick={() => importInput.current?.click()} title="Import JSON"> <Upload size={15} /> Import</button><button onClick={download} title="Save JSON file"><ArrowDownToLine size={15} /> Export</button><button onClick={() => void copyExport()} title="Copy board JSON"><Copy size={15} /> JSON</button><button onClick={() => navigate(uuid())} title="New board"><Plus size={15} /> Board</button></div><div className="presence-group"><span className={`connection-dot ${board.connected ? 'online' : ''}`} />{board.connected ? <Wifi size={15} /> : <WifiOff size={15} />}<span>{board.connected ? `${board.peers.length + 1} online` : 'Offline'}</span>{board.peers.map(peer => <span key={peer.id} className="peer-avatar" title={peer.name} style={{ background: peerColor(peer.id) }}>{peer.name.slice(0, 1).toUpperCase()}</span>)}<button className="profile-button" onClick={() => { const value = window.prompt('Your display name', board.name); if (value?.trim()) board.setName(value) }} title="Change display name"><Users size={14} /> {board.name}</button></div></div>
       {board.ready && !board.connected && <div className="offline-note">Relay offline: changes stay in this browser and sync when the connection returns.</div>}
       <EvidenceWindow facts={data?.facts ?? []} from={evidenceFrom} to={evidenceTo} includeUndated={includeUndated} onIncludeUndatedChange={setIncludeUndated} onFromChange={setEvidenceFrom} onToChange={setEvidenceTo} onReset={() => { setEvidenceFrom(''); setEvidenceTo('') }} />
       <div className="workspace-grid">
-        <div className="visual-column"><section className="workspace-tabs" aria-label="Board views"><div className="tab-list" role="tablist" aria-label="Board views"><button role="tab" aria-selected={activeTab === 'graph'} className={activeTab === 'graph' ? 'active' : ''} onClick={() => setActiveTab('graph')}><GitBranch size={15} /> Graph <b>{data?.entities.length ?? 0}</b></button><button role="tab" aria-selected={activeTab === 'timeline'} className={activeTab === 'timeline' ? 'active' : ''} onClick={() => setActiveTab('timeline')}><Activity size={15} /> Timeline <b>{timelineEntries(filteredFacts).length}</b></button><button role="tab" aria-selected={activeTab === 'activity'} className={activeTab === 'activity' ? 'active' : ''} onClick={() => setActiveTab('activity')}><Activity size={15} /> Activity <b>{board.actions.length}</b></button></div><div className="tab-panel" role="tabpanel">{activeTab === 'graph' && <section className="graph-card"><div className="card-header"><div><div className="card-title"><GitBranch size={18} /> Relationship graph</div><span>Interactive view of all entities and facts</span></div><div className="graph-count">{visibleEntities.length} / {data?.entities.length ?? 0} NODES · {visibleFacts.length} / {filteredFacts.length} EDGES</div></div><div className="filter-row"><button className={stateFilter === 'all' ? 'filter-chip active' : 'filter-chip'} onClick={() => setStateFilter('all')}>All <b>{data?.facts.length ?? 0}</b></button>{allStates.map(state => <button key={state} className={`filter-chip ${state} ${stateFilter === state ? 'active' : ''}`} onClick={() => setStateFilter(stateFilter === state ? 'all' : state)}><span className="state-dot" />{labels[state]} <b>{counts[state]}</b></button>)}</div>
-          <div className="graph-stage">{data && <GraphView entities={visibleEntities} facts={visibleFacts} selection={selection} search={search} pathIds={[]} onSelect={setSelection} onCreateNode={() => setDialog('entity')} onCreateRelation={() => setDialog('fact')} onMoveNode={(id, position) => void board.emit('entity.position', { id, ...position })} />}{data && data.entities.length === 0 && <div className="empty-overlay"><div className="empty-graphic"><GitBranch size={31} /></div><h2>Your graph starts here.</h2><p>Create entities and connect them with evidence-backed statements, or load a small example dataset.</p><div><button className="primary-button" onClick={() => setDialog('entity')}><Plus size={16} /> First entity</button><button className="secondary-button" onClick={() => void act(() => board.emitMany(demoDrafts()), 'Example data loaded')}><Sparkles size={16} /> Load example</button></div></div>}</div>
+        <div className="visual-column"><section className="workspace-tabs" aria-label="Board views"><div className="tab-list" role="tablist" aria-label="Board views"><button role="tab" aria-selected={activeTab === 'graph'} className={activeTab === 'graph' ? 'active' : ''} onClick={() => setActiveTab('graph')}><GitBranch size={15} /> Graph <b>{data?.entities.length ?? 0}</b></button><button role="tab" aria-selected={activeTab === 'timeline'} className={activeTab === 'timeline' ? 'active' : ''} onClick={() => setActiveTab('timeline')}><Activity size={15} /> Timeline <b>{timelineEvents(filteredFacts).length}</b></button><button role="tab" aria-selected={activeTab === 'activity'} className={activeTab === 'activity' ? 'active' : ''} onClick={() => setActiveTab('activity')}><Activity size={15} /> Activity <b>{board.actions.length}</b></button></div><div className="tab-panel" role="tabpanel">{activeTab === 'graph' && <section className="graph-card"><div className="card-header"><div><div className="card-title"><GitBranch size={18} /> Relationship graph</div><span>Interactive view of all entities and facts</span></div><div className="graph-count">{visibleEntities.length} / {data?.entities.length ?? 0} NODES · {visibleFacts.length} / {filteredFacts.length} EDGES</div></div><div className="filter-row"><button className={stateFilter === 'all' ? 'filter-chip active' : 'filter-chip'} onClick={() => setStateFilter('all')}>All <b>{data?.facts.length ?? 0}</b></button>{allStates.map(state => <button key={state} className={`filter-chip ${state} ${stateFilter === state ? 'active' : ''}`} onClick={() => setStateFilter(stateFilter === state ? 'all' : state)}><span className="state-dot" />{labels[state]} <b>{counts[state]}</b></button>)}</div>
+          <div className="graph-stage">{data && <GraphView entities={visibleEntities} facts={visibleFacts} selection={selection} search={search} pathIds={[]} onSelect={setSelection} onCreateNode={() => setDialog('entity')} onCreateRelation={entityId => { setSelection({ kind: 'entity', id: entityId }); setDialog('fact') }} onMoveNode={(id, position) => void board.emit('entity.position', { id, ...position })} />}{data && data.entities.length === 0 && <div className="empty-overlay"><div className="empty-graphic"><GitBranch size={31} /></div><h2>Your graph starts here.</h2><p>Create entities and connect them with evidence-backed statements, or load a small example dataset.</p><div><button className="primary-button" onClick={() => setDialog('entity')}><Plus size={16} /> First entity</button><button className="secondary-button" onClick={() => void act(() => board.emitMany(demoDrafts()), 'Example data loaded')}><Sparkles size={16} /> Load example</button></div></div>}</div>
           <div className="legend"><span><i className="legend-line supported" /> Supported</span><span><i className="legend-line disputed" /> Disputed</span><span><i className="legend-line refuted" /> Refuted</span><span><i className="legend-line unknown" /> Unknown</span></div>
         </section>}
         {activeTab === 'timeline' && data && <TimelinePanel data={data} facts={filteredFacts} selection={selection} onSelect={setSelection} />}{activeTab === 'activity' && <ActivityPanel actions={board.actions} />}</div></section></div>
-        {data && <DetailPanel data={data} selection={selection} onAdd={kind => { setError(''); setDialog(kind) }} onDelete={deleteItem} onRetract={id => void act(() => board.emit('assertion.retract', { id, retracted_at: new Date().toISOString() }), 'Evidence retracted')} onClose={() => setSelection(null)} />}
+        {data && <DetailPanel data={data} selection={selection} onAdd={kind => { setError(''); setDialog(kind) }} onDelete={deleteItem} onCopy={(value, label) => void copyValue(value, label)} onEditEvidence={id => { setEditingAssertionId(id); setError(''); setDialog('assertion-edit') }} onRetract={id => void act(() => board.emit('assertion.retract', { id, retracted_at: new Date().toISOString() }), 'Evidence retracted')} onClose={() => setSelection(null)} />}
       </div>
       {selectedFact && <div className="selection-footnote"><Fingerprint size={14} /> Selected fact: {selectedFact.id}</div>}
     </main>
-    {dialog && data && <Dialog key={dialog} kind={dialog} data={data} selection={selection} busy={busy} error={error} onClose={() => setDialog(null)} onSubmit={submit} />}
+    {dialog && data && <Dialog key={`${dialog}:${editingAssertionId ?? ''}`} kind={dialog} data={data} selection={selection} editingAssertionId={editingAssertionId} busy={busy} error={error} onClose={() => { setDialog(null); setEditingAssertionId(null) }} onSubmit={submit} />}
     {showLogImport && <LogImportDialog boardId={boardId} sessionToken={board.sessionToken} onClose={() => setShowLogImport(false)} onDone={summary => { setShowLogImport(false); setToast(summary) }} />}
     <input ref={importInput} type="file" accept="application/json,.json" hidden onChange={event => { const file = event.target.files?.[0]; event.target.value = ''; void importFile(file) }} />
     {board.storageError && <div className="toast error">{board.storageError}</div>}

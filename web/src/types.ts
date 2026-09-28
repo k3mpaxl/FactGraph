@@ -6,6 +6,7 @@ export type Identifier = {
 export type Entity = {
   id: string; name: string; kind: string; description: string;
   created_at: string; identifiers: Identifier[];
+  color?: string;
   position?: { x: number; y: number };
 }
 export type Source = {

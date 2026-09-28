@@ -65,12 +65,17 @@ Beim Öffnen eines Boards erzeugt der Browser ein zufälliges Sitzungs-Token. RE
 | Graph lesen | `GET /api/boards/{id}/graph` | `board_graph` |
 | Entität anlegen | `POST /api/boards/{id}/entities` | `add_entity` |
 | Entität ändern | `PATCH /api/boards/{id}/entities/{entity_id}` | `update_entity` |
+| Entitäten zusammenführen | `POST /api/boards/{id}/entities/{entity_id}/merge` | `merge_entities` |
+| Entität löschen | `DELETE /api/boards/{id}/entities/{entity_id}` | `delete_entity` |
 | Quelle anlegen | `POST /api/boards/{id}/sources` | `add_source` |
 | Quelle ändern | `PATCH /api/boards/{id}/sources/{source_id}` | `update_source` |
+| Quelle löschen | `DELETE /api/boards/{id}/sources/{source_id}` | `delete_source` |
 | Kante anlegen | `POST /api/boards/{id}/relations` | `link_entities` |
 | Kante ändern | `PATCH /api/boards/{id}/relations/{relation_id}` | `update_relationship` |
+| Kante löschen | `DELETE /api/boards/{id}/relations/{relation_id}` | `delete_relationship` |
 | Beleg hinzufügen | `POST /api/boards/{id}/relations/{relation_id}/evidence` | `add_evidence` |
 | Beleg ändern | `PATCH /api/boards/{id}/relations/{relation_id}/evidence/{evidence_id}` | `update_evidence` |
+| Beleg löschen | `DELETE /api/boards/{id}/relations/{relation_id}/evidence/{evidence_id}` | `delete_evidence` |
 | KQL-Ergebnisse importieren | `POST /api/boards/{id}/imports/kql` | `add_kql_evidence` (bis 100 Zeilen) |
 | Modellierungsregeln lesen | — | `factgraph_guidelines` |
 
@@ -198,10 +203,10 @@ cd web && npm run build
 
 ## Evidenzzeit und Bearbeitung
 
-Die Zeitachse zeigt aktive Belege chronologisch mit Uhrzeit in UTC. `valid_from` und `valid_to` beschreiben den Evidenzzeitraum; ein einzelner Beginn ist ein Ereigniszeitpunkt. Unbekannte Zeiten stehen am Ende. Erstellungszeiten werden nicht als Ersatz verwendet. Ältere Logimporte werden anhand der originalen JSON-Zeile gelesen, anschließend gelten explizite Gültigkeitszeiten der Beziehung als Rückfall.
+Die Zeitachse zeigt aktive Belege chronologisch mit Uhrzeit in UTC. Belege derselben Beziehung mit demselben Zeitraum werden als ein Ereignis zusammengefasst. `valid_from` und `valid_to` beschreiben den Evidenzzeitraum; ein einzelner Beginn ist ein Ereigniszeitpunkt. Unbekannte Zeiten stehen am Ende. Erstellungszeiten werden nicht als Ersatz verwendet. Ältere Logimporte werden anhand der originalen JSON-Zeile gelesen, anschließend gelten explizite Gültigkeitszeiten der Beziehung als Rückfall.
 
 Logimporte erkennen `TimeGenerated`, `timestamp`, `Timestamp`, `time`, `event_time` sowie `StartTime`/`EndTime` und `valid_from`/`valid_to`. REST und MCP unterstützen Evidenzzeiträume beim Anlegen von Beziehungen und Belegen.
 
-Entitäten lassen sich im Inspektor über **Bearbeiten** umbenennen und in Typ/Beschreibung ändern. REST: `PATCH /api/boards/{board_id}/entities/{entity_id}` mit beispielsweise `{"name":"Neuer Name"}`.
+Entitäten lassen sich im Inspektor über **Edit** umbenennen sowie in Typ, Farbe und Beschreibung ändern oder über **Merge** zusammenführen. Evidence kann direkt im Beleg bearbeitet werden. Vollständige Board-, Entity-, Relationship-, Identifier- und Evidence-IDs lassen sich für Agent-Chats kopieren. **Undo** beziehungsweise `Ctrl/Cmd+Z` nimmt die letzte eigene Aktion über eine synchronisierte Undo-Aktion zurück.
 
 Die Oberfläche verwaltet Boards lokal über ihre UUID. In der Oberfläche kopiert **Copy** den Endpunkt des aktuellen Boards. Die REST-Aufrufe müssen an denselben Server gehen wie die Browser-Verbindung. Ohne geöffneten Browser liefert ein Schreibaufruf `409`; unbekannte API-Pfade liefern `404`. Es gibt bewusst keinen globalen Board-Listing-Endpunkt und kein MCP-Tool zum Auflisten von Boards.

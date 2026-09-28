@@ -3,8 +3,9 @@ import { initialPosition } from './layout'
 import { uuid } from './uuid'
 
 export type ActionType =
-  | 'board.rename' | 'entity.add' | 'entity.update' | 'entity.position' | 'entity.delete' | 'identifier.add' | 'identifier.delete'
-  | 'source.add' | 'source.update' | 'fact.add' | 'fact.update' | 'fact.delete' | 'assertion.add' | 'assertion.update' | 'assertion.retract'
+  | 'board.rename' | 'entity.add' | 'entity.update' | 'entity.position' | 'entity.delete' | 'entity.merge' | 'identifier.add' | 'identifier.delete'
+  | 'source.add' | 'source.update' | 'source.delete' | 'fact.add' | 'fact.update' | 'fact.delete'
+  | 'assertion.add' | 'assertion.update' | 'assertion.retract' | 'assertion.delete' | 'action.undo'
 
 export type BoardAction = {
   boardId: string; id: string; actor: string; author: string; clock: number;
@@ -14,8 +15,9 @@ export type ActionDraft = { id?: string; type: ActionType; payload: Record<strin
 export type BoardProjection = { data: GraphData; name: string }
 
 const actionTypes: ActionType[] = [
-  'board.rename', 'entity.add', 'entity.update', 'entity.position', 'entity.delete', 'identifier.add', 'identifier.delete',
-  'source.add', 'source.update', 'fact.add', 'fact.update', 'fact.delete', 'assertion.add', 'assertion.update', 'assertion.retract',
+  'board.rename', 'entity.add', 'entity.update', 'entity.position', 'entity.delete', 'entity.merge', 'identifier.add', 'identifier.delete',
+  'source.add', 'source.update', 'source.delete', 'fact.add', 'fact.update', 'fact.delete',
+  'assertion.add', 'assertion.update', 'assertion.retract', 'assertion.delete', 'action.undo',
 ]
 
 export function isAction(value: unknown): value is BoardAction {
@@ -71,7 +73,12 @@ export function project(boardId: string, operations: BoardAction[]): BoardProjec
   let name = `Board ${boardId.slice(0, 8)}`
   let placementIndex = 0
 
-  for (const operation of sortActions(operations)) {
+  const ordered = sortActions(operations)
+  const undone = new Set(ordered.filter(operation => operation.type === 'action.undo')
+    .map(operation => operation.payload.action_id).filter((id): id is string => typeof id === 'string'))
+
+  for (const operation of ordered) {
+    if (operation.type === 'action.undo' || undone.has(operation.id)) continue
     try {
       const item = operation.payload
       const id = typeof item.id === 'string' ? item.id : ''
@@ -84,12 +91,13 @@ export function project(boardId: string, operations: BoardAction[]): BoardProjec
             const fallback = initialPosition(placementIndex++)
             entities.set(id, { id, name: item.name, kind: item.kind,
               description: String(item.description ?? ''), created_at: String(item.created_at ?? operation.at), identifiers: [],
+              color: typeof item.color === 'string' ? item.color : undefined,
               position: validPosition(item.x, item.y) ? { x: item.x as number, y: item.y as number } : fallback })
           }
           break
         case 'entity.update': {
           const entity = entities.get(id)
-          if (entity) for (const field of ['name', 'kind', 'description'] as const) {
+          if (entity) for (const field of ['name', 'kind', 'description', 'color'] as const) {
             if (typeof item[field] === 'string' && (field === 'description' || item[field].trim()))
               entity[field] = item[field].trim()
           }
@@ -112,6 +120,32 @@ export function project(boardId: string, operations: BoardAction[]): BoardProjec
             }
           }
           break
+        case 'entity.merge': {
+          const sourceId = typeof item.source_id === 'string' ? item.source_id : ''
+          const targetId = typeof item.target_id === 'string' ? item.target_id : ''
+          if (!sourceId || !targetId || sourceId === targetId || !entities.has(sourceId) || !entities.has(targetId)) break
+          for (const identifier of identifiers.values()) if (identifier.entity_id === sourceId) identifier.entity_id = targetId
+          for (const [factId, fact] of [...facts]) {
+            if (fact.subject_id !== sourceId && fact.object_id !== sourceId) continue
+            canonicalFacts.delete(factKey(fact))
+            if (fact.subject_id === sourceId) fact.subject_id = targetId
+            if (fact.object_id === sourceId) fact.object_id = targetId
+            if (fact.subject_id === fact.object_id) {
+              facts.delete(factId)
+              for (const [assertionId, assertion] of assertions) if (assertion.fact_id === factId) assertions.delete(assertionId)
+              continue
+            }
+            const key = factKey(fact)
+            const existingId = canonicalFacts.get(key)
+            if (existingId && existingId !== factId) {
+              for (const assertion of assertions.values()) if (assertion.fact_id === factId) assertion.fact_id = existingId
+              facts.delete(factId)
+              aliases.set(factId, existingId)
+            } else canonicalFacts.set(key, factId)
+          }
+          entities.delete(sourceId)
+          break
+        }
         case 'source.add':
           if (id && typeof item.title === 'string' && !sources.has(id))
             sources.set(id, { id, title: item.title, uri: String(item.uri ?? ''),
@@ -123,6 +157,13 @@ export function project(boardId: string, operations: BoardAction[]): BoardProjec
             if (typeof item[field] === 'string' && (field !== 'title' || item[field].trim())) source[field] = item[field].trim()
           break
         }
+        case 'source.delete':
+          if (id) {
+            sources.delete(id)
+            for (const identifier of identifiers.values()) if (identifier.source_id === id) identifier.source_id = null
+            for (const assertion of assertions.values()) if (assertion.source_id === id) assertion.source_id = null
+          }
+          break
         case 'identifier.add':
           if (id && typeof item.entity_id === 'string' && entities.has(item.entity_id) && !identifiers.has(id))
             identifiers.set(id, { id, entity_id: item.entity_id, scheme: String(item.scheme ?? 'other'),
@@ -207,6 +248,9 @@ export function project(boardId: string, operations: BoardAction[]): BoardProjec
           if (assertion && !assertion.retracted_at) assertion.retracted_at = String(item.retracted_at ?? operation.at)
           break
         }
+        case 'assertion.delete':
+          if (id) assertions.delete(id)
+          break
       }
     } catch {
       // A malformed imported or remote action cannot prevent the rest of the board rendering.

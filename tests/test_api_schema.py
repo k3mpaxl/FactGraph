@@ -22,6 +22,18 @@ class RestPatchSchemaTest(unittest.TestCase):
             "/api/boards/{board_id}/relations/{relation_id}/evidence/{evidence_id}",
         })
 
+    def test_delete_routes_cover_board_records(self):
+        delete_routes = {
+            route.path for route in app.routes
+            if "DELETE" in getattr(route, "methods", set())
+        }
+        self.assertEqual(delete_routes, {
+            "/api/boards/{board_id}/entities/{entity_id}",
+            "/api/boards/{board_id}/sources/{source_id}",
+            "/api/boards/{board_id}/relations/{relation_id}",
+            "/api/boards/{board_id}/relations/{relation_id}/evidence/{evidence_id}",
+        })
+
 
 if __name__ == "__main__":
     unittest.main()

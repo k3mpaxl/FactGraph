@@ -137,6 +137,66 @@ class RelayTest(unittest.IsolatedAsyncioTestCase):
                 result = await entity_task
                 self.assertEqual(result.data["accepted_actions"], 1)
 
+                deleted_id = str(uuid4())
+                delete_task = asyncio.create_task(client.call_tool("delete_entity", {
+                    "board_id": board, "entity_id": deleted_id,
+                }))
+                command = await receive(websocket)
+                self.assertEqual(command["operation"], "index")
+                await websocket.send(json.dumps({
+                    "type": "api-result", "requestId": command["requestId"], "ok": True,
+                    "index": {"entities": [{"id": deleted_id, "name": "Delete me", "kind": "Test"}],
+                              "facts": [], "sources": []},
+                }))
+                command = await receive(websocket)
+                self.assertEqual(command["operation"], "apply")
+                self.assertEqual(command["drafts"][0]["type"], "entity.delete")
+                self.assertEqual(command["drafts"][0]["author"], "MCP")
+                await websocket.send(json.dumps({
+                    "type": "api-result", "requestId": command["requestId"], "ok": True,
+                    "accepted": 1,
+                }))
+                self.assertEqual((await delete_task).data["accepted_actions"], 1)
+
+    async def test_rest_patch_evidence_reaches_the_right_board(self):
+        board, actor, token = str(uuid4()), str(uuid4()), "c" * 64
+        relation_id, evidence_id = str(uuid4()), str(uuid4())
+        url = (f"http://127.0.0.1:{self.port}/api/boards/{board}/relations/"
+               f"{relation_id}/evidence/{evidence_id}")
+
+        def patch():
+            request = Request(url, json.dumps({"note": "edited", "confidence": 0.75}).encode(),
+                              {"Content-Type": "application/json", "X-FactGraph-Token": token},
+                              method="PATCH")
+            with urlopen(request, timeout=3) as response:
+                return json.load(response)
+
+        async with websockets.connect(
+            f"ws://127.0.0.1:{self.port}/ws/boards/{board}?actor={actor}&name=REST&token={token}"
+        ) as websocket:
+            await receive(websocket)
+            request_task = asyncio.create_task(asyncio.to_thread(patch))
+            command = await receive(websocket)
+            self.assertEqual(command["operation"], "snapshot")
+            await websocket.send(json.dumps({
+                "type": "api-result", "requestId": command["requestId"], "ok": True,
+                "graph": {"board_id": board, "name": "Patch", "entities": [],
+                          "sources": [], "action_count": 2, "facts": [{
+                              "id": relation_id, "assertions": [{"id": evidence_id}],
+                          }]},
+            }))
+            command = await receive(websocket)
+            self.assertEqual(command["operation"], "apply")
+            draft = command["drafts"][0]
+            self.assertEqual(draft["type"], "assertion.update")
+            self.assertEqual(draft["payload"], {"id": evidence_id, "note": "edited", "confidence": 0.75})
+            self.assertEqual(draft["author"], "REST")
+            await websocket.send(json.dumps({
+                "type": "api-result", "requestId": command["requestId"], "ok": True,
+                "accepted": 1,
+            }))
+            self.assertEqual((await request_task)["accepted_actions"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

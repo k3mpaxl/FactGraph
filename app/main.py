@@ -165,6 +165,7 @@ class EntityInput(BaseModel):
     name: str = Field(min_length=1)
     kind: str = "Sonstiges"
     description: str = ""
+    color: str | None = Field(default=None, pattern=r"^#[0-9a-fA-F]{6}$")
     id: str | None = None
 
 
@@ -269,6 +270,8 @@ async def create_entity(board_id: str, body: EntityInput):
         entity_id, drafts = entity_actions(body.name, body.kind, body.description, body.id)
     except ValueError as error:
         raise HTTPException(422, str(error)) from error
+    if body.color:
+        drafts[0]["payload"]["color"] = body.color
     accepted = await apply_drafts(board_id, drafts)
     return {"board_id": str(UUID(board_id)), "id": entity_id, "accepted_actions": accepted}
 
@@ -277,6 +280,7 @@ class EntityUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1)
     kind: str | None = Field(default=None, min_length=1)
     description: str | None = None
+    color: str | None = Field(default=None, pattern=r"^#[0-9a-fA-F]{6}$")
 
 
 @app.patch("/api/boards/{board_id}/entities/{entity_id}")
@@ -291,6 +295,33 @@ async def update_entity(board_id: str, entity_id: str, body: EntityUpdate):
         raise HTTPException(422, "Name und Typ dürfen nicht leer sein")
     accepted = await apply_drafts(board_id, [action("entity.update", {"id": entity_id, **values})])
     return {"board_id": str(UUID(board_id)), "id": entity_id, "accepted_actions": accepted}
+
+
+class EntityMergeInput(BaseModel):
+    target_id: str
+
+
+@app.post("/api/boards/{board_id}/entities/{entity_id}/merge")
+async def merge_entity(board_id: str, entity_id: str, body: EntityMergeInput):
+    index = (await browser_command(board_id, "index"))["index"]
+    entity_ids = {entity["id"] for entity in index["entities"]}
+    if entity_id not in entity_ids or body.target_id not in entity_ids:
+        raise HTTPException(404, "Source or target entity does not exist on this board")
+    if entity_id == body.target_id:
+        raise HTTPException(422, "An entity cannot be merged into itself")
+    accepted = await apply_drafts(board_id, [action("entity.merge", {
+        "source_id": entity_id, "target_id": body.target_id})])
+    return {"board_id": str(UUID(board_id)), "source_id": entity_id,
+            "target_id": body.target_id, "accepted_actions": accepted}
+
+
+@app.delete("/api/boards/{board_id}/entities/{entity_id}")
+async def delete_entity(board_id: str, entity_id: str):
+    index = (await browser_command(board_id, "index"))["index"]
+    if entity_id not in {entity["id"] for entity in index["entities"]}:
+        raise HTTPException(404, "Entity does not exist on this board")
+    accepted = await apply_drafts(board_id, [action("entity.delete", {"id": entity_id})])
+    return {"id": entity_id, "accepted_actions": accepted}
 
 
 class SourceUpdate(BaseModel):
@@ -311,6 +342,15 @@ async def update_source(board_id: str, source_id: str, body: SourceUpdate):
         raise HTTPException(422, "Source title cannot be empty")
     accepted = await apply_drafts(board_id, [action("source.update", {"id": source_id, **values})])
     return {"board_id": str(UUID(board_id)), "id": source_id, "accepted_actions": accepted}
+
+
+@app.delete("/api/boards/{board_id}/sources/{source_id}")
+async def delete_source(board_id: str, source_id: str):
+    index = (await browser_command(board_id, "index"))["index"]
+    if source_id not in {source["id"] for source in index["sources"]}:
+        raise HTTPException(404, "Source does not exist on this board")
+    accepted = await apply_drafts(board_id, [action("source.delete", {"id": source_id})])
+    return {"id": source_id, "accepted_actions": accepted}
 
 
 @app.post("/api/boards/{board_id}/relations", status_code=201)
@@ -356,6 +396,15 @@ async def update_relation(board_id: str, relation_id: str, body: RelationUpdate)
         raise HTTPException(422, "At least one relationship field is required")
     accepted = await apply_drafts(board_id, [action("fact.update", {"id": relation_id, **values})])
     return {"board_id": str(UUID(board_id)), "id": relation_id, "accepted_actions": accepted}
+
+
+@app.delete("/api/boards/{board_id}/relations/{relation_id}")
+async def delete_relation(board_id: str, relation_id: str):
+    index = (await browser_command(board_id, "index"))["index"]
+    if relation_id not in {fact["id"] for fact in index["facts"]}:
+        raise HTTPException(404, "Relationship does not exist on this board")
+    accepted = await apply_drafts(board_id, [action("fact.delete", {"id": relation_id})])
+    return {"id": relation_id, "accepted_actions": accepted}
 
 
 @app.post("/api/boards/{board_id}/sources", status_code=201)
@@ -413,6 +462,16 @@ async def update_evidence(board_id: str, relation_id: str, evidence_id: str, bod
     accepted = await apply_drafts(board_id, [action("assertion.update", {"id": evidence_id, **values})])
     return {"board_id": str(UUID(board_id)), "relation_id": relation_id,
             "id": evidence_id, "accepted_actions": accepted}
+
+
+@app.delete("/api/boards/{board_id}/relations/{relation_id}/evidence/{evidence_id}")
+async def delete_evidence(board_id: str, relation_id: str, evidence_id: str):
+    graph = (await browser_command(board_id, "snapshot"))["graph"]
+    relation = next((fact for fact in graph["facts"] if fact["id"] == relation_id), None)
+    if relation is None or not any(item["id"] == evidence_id for item in relation.get("assertions", [])):
+        raise HTTPException(404, "Evidence does not exist on this relationship")
+    accepted = await apply_drafts(board_id, [action("assertion.delete", {"id": evidence_id})])
+    return {"relation_id": relation_id, "id": evidence_id, "accepted_actions": accepted}
 
 
 @app.post("/api/boards/{board_id}/actions")
@@ -477,19 +536,36 @@ async def board_graph(board_id: str, session_token: str | None = None) -> dict:
 
 @mcp.tool
 async def add_entity(board_id: str, name: str, kind: str = "Sonstiges",
-                     description: str = "", session_token: str | None = None) -> dict:
+                     description: str = "", color: str | None = None,
+                     session_token: str | None = None) -> dict:
     """Create one entity on an open board. Use REST /actions for large batches."""
-    return await run_mcp_session(session_token, lambda: create_entity(board_id, EntityInput(name=name, kind=kind, description=description)))
+    return await run_mcp_session(session_token, lambda: create_entity(board_id, EntityInput(name=name, kind=kind, description=description, color=color)))
 
 
 @mcp.tool(name="update_entity")
 async def mcp_update_entity(board_id: str, entity_id: str,
                             name: str | None = None, kind: str | None = None,
-                            description: str | None = None, session_token: str | None = None) -> dict:
+                            description: str | None = None, color: str | None = None,
+                            session_token: str | None = None) -> dict:
     """Patch an existing entity. Pass only fields that should change."""
     values = {key: value for key, value in {"name": name, "kind": kind,
-             "description": description}.items() if value is not None}
+             "description": description, "color": color}.items() if value is not None}
     return await run_mcp_session(session_token, lambda: update_entity(board_id, entity_id, EntityUpdate(**values)))
+
+
+@mcp.tool(name="merge_entities")
+async def mcp_merge_entities(board_id: str, source_id: str, target_id: str,
+                             session_token: str | None = None) -> dict:
+    """Merge the source entity into the target while retaining identifiers, relationships and evidence."""
+    return await run_mcp_session(session_token, lambda: merge_entity(
+        board_id, source_id, EntityMergeInput(target_id=target_id)))
+
+
+@mcp.tool(name="delete_entity")
+async def mcp_delete_entity(board_id: str, entity_id: str,
+                            session_token: str | None = None) -> dict:
+    """Delete an entity and its attached relationships from an open board."""
+    return await run_mcp_session(session_token, lambda: delete_entity(board_id, entity_id))
 
 
 @mcp.tool
@@ -507,6 +583,13 @@ async def mcp_update_source(board_id: str, source_id: str, title: str | None = N
     values = {key: value for key, value in {"title": title, "uri": uri,
              "excerpt": excerpt}.items() if value is not None}
     return await run_mcp_session(session_token, lambda: update_source(board_id, source_id, SourceUpdate(**values)))
+
+
+@mcp.tool(name="delete_source")
+async def mcp_delete_source(board_id: str, source_id: str,
+                            session_token: str | None = None) -> dict:
+    """Delete a source; linked evidence remains and becomes a manual entry."""
+    return await run_mcp_session(session_token, lambda: delete_source(board_id, source_id))
 
 
 @mcp.tool
@@ -533,6 +616,13 @@ async def mcp_update_relationship(board_id: str, relation_id: str,
     return await run_mcp_session(session_token, lambda: update_relation(board_id, relation_id, RelationUpdate(**values)))
 
 
+@mcp.tool(name="delete_relationship")
+async def mcp_delete_relationship(board_id: str, relation_id: str,
+                                  session_token: str | None = None) -> dict:
+    """Delete a relationship and all evidence attached to it."""
+    return await run_mcp_session(session_token, lambda: delete_relation(board_id, relation_id))
+
+
 @mcp.tool
 async def add_evidence(board_id: str, relation_id: str, note: str,
                        source_id: str | None = None, stance: str = "supports",
@@ -555,6 +645,13 @@ async def mcp_update_evidence(board_id: str, relation_id: str, evidence_id: str,
              "stance": stance, "confidence": confidence, "source_id": source_id,
              "note": note}.items() if value is not None}
     return await run_mcp_session(session_token, lambda: update_evidence(board_id, relation_id, evidence_id, EvidenceUpdate(**values)))
+
+
+@mcp.tool(name="delete_evidence")
+async def mcp_delete_evidence(board_id: str, relation_id: str, evidence_id: str,
+                              session_token: str | None = None) -> dict:
+    """Delete one evidence item. Prefer update_evidence or retraction when audit history matters."""
+    return await run_mcp_session(session_token, lambda: delete_evidence(board_id, relation_id, evidence_id))
 
 
 @mcp.tool

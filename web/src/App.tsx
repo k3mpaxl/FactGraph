@@ -271,8 +271,17 @@ function EvidenceWindow({ facts, from, to, onFromChange, onToChange, onReset }: 
   onFromChange: (value: string) => void; onToChange: (value: string) => void; onReset: () => void;
 }) {
   const bounds = timelineBounds(facts)
-  const format = (value: string | null) => value ? value.slice(0, 16) : ''
-  return <div className="evidence-window"><div><strong>Evidence window</strong><span>{from || to ? 'Edges update when evidence overlaps this range.' : 'Show all edges with evidence periods.'}</span></div><label>From<input type="datetime-local" min={format(bounds.from)} max={format(to || bounds.to)} value={from} onChange={event => onFromChange(event.target.value)} /></label><span className="window-arrow">→</span><label>To<input type="datetime-local" min={format(from || bounds.from)} max={format(bounds.to)} value={to} onChange={event => onToChange(event.target.value)} /></label>{(from || to) && <button className="text-button" onClick={onReset}>Show all</button>}</div>
+  const min = bounds.from ? Date.parse(bounds.from) : 0
+  const max = bounds.to ? Date.parse(bounds.to) : 1
+  const span = Math.max(max - min, 1)
+  const fromMs = from ? Math.max(min, Math.min(max, Date.parse(from))) : min
+  const toMs = to ? Math.max(min, Math.min(max, Date.parse(to))) : max
+  const position = (value: number) => Math.round(((value - min) / span) * 1000)
+  const isoAt = (value: number) => new Date(value).toISOString()
+  const moveFrom = (value: number) => onFromChange(isoAt(Math.min(value, toMs)))
+  const moveTo = (value: number) => onToChange(isoAt(Math.max(value, fromMs)))
+  const hasRange = Boolean(bounds.from && bounds.to)
+  return <div className="evidence-window"><div><strong>Evidence window</strong><span>{from || to ? 'Edges update as evidence overlaps the selected range.' : 'Drag the handles to reveal activity over time.'}</span></div><div className="window-range" aria-label="Evidence time range"><div className="window-track" /><div className="window-selection" style={{ left: `${position(fromMs) / 10}%`, right: `${100 - position(toMs) / 10}%` }} /><input aria-label="Evidence from" className="range-input range-from" type="range" min="0" max="1000" value={position(fromMs)} disabled={!hasRange} onChange={event => moveFrom(Number(event.target.value) / 1000 * span + min)} /><input aria-label="Evidence to" className="range-input range-to" type="range" min="0" max="1000" value={position(toMs)} disabled={!hasRange} onChange={event => moveTo(Number(event.target.value) / 1000 * span + min)} /><div className="window-labels"><span>From <strong>{hasRange ? periodLabel(isoAt(fromMs), null) : 'No dated evidence'}</strong></span><span>To <strong>{hasRange ? periodLabel(isoAt(toMs), null) : 'No dated evidence'}</strong></span></div></div>{(from || to) && <button className="text-button" onClick={onReset}>Show all</button>}</div>
 }
 
 function ActivityPanel({ actions }: { actions: BoardAction[] }) {

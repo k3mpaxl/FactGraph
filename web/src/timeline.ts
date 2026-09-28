@@ -52,8 +52,8 @@ export function timelineBounds(facts: Fact[]) {
 }
 
 export function periodLabel(from: string | null, to: string | null) {
-  const format = (value: string) => new Date(value).toLocaleString('de-DE', { timeZone: 'UTC', dateStyle: 'medium', timeStyle: 'medium' })
-  if (!from && !to) return 'Evidenzzeit unbekannt'
-  if (!from) return `Bis ${format(to!)} UTC`
+  const format = (value: string) => new Date(value).toLocaleString('en-GB', { timeZone: 'UTC', dateStyle: 'medium', timeStyle: 'medium' })
+  if (!from && !to) return 'Evidence time unknown'
+  if (!from) return `Until ${format(to!)} UTC`
   return `${format(from)}${to && to !== from ? ` – ${format(to)}` : ''} UTC`
 }

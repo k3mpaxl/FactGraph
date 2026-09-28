@@ -11,6 +11,8 @@ from urllib.request import Request, urlopen
 from uuid import uuid4
 
 import websockets
+from fastmcp import Client
+from fastmcp.client.transports import StreamableHttpTransport
 
 
 async def receive(websocket):
@@ -100,6 +102,40 @@ class RelayTest(unittest.IsolatedAsyncioTestCase):
             await websocket.send(json.dumps({"type": "api-result", "requestId": command["requestId"],
                                              "ok": True, "accepted": 1}))
             self.assertEqual((await request_task)["accepted_actions"], 1)
+
+    async def test_mcp_header_token_reads_and_writes_board(self):
+        board, actor, token = str(uuid4()), str(uuid4()), "b" * 64
+        ws_url = f"ws://127.0.0.1:{self.port}/ws/boards/{board}?actor={actor}&name=MCP&token={token}"
+        async with websockets.connect(ws_url) as websocket:
+            await receive(websocket)
+            transport = StreamableHttpTransport(
+                f"http://127.0.0.1:{self.port}/mcp/",
+                headers={"X-FactGraph-Token": token},
+            )
+            async with Client(transport) as client:
+                graph_task = asyncio.create_task(client.call_tool("board_graph", {"board_id": board}))
+                command = await receive(websocket)
+                self.assertEqual(command["operation"], "snapshot")
+                await websocket.send(json.dumps({
+                    "type": "api-result", "requestId": command["requestId"], "ok": True,
+                    "graph": {"board_id": board, "name": "MCP", "entities": [],
+                              "facts": [], "sources": [], "action_count": 0},
+                }))
+                graph = await graph_task
+                self.assertEqual(graph.data["board_id"], board)
+
+                entity_task = asyncio.create_task(client.call_tool("add_entity", {
+                    "board_id": board, "name": "MCP entity", "kind": "Test",
+                }))
+                command = await receive(websocket)
+                self.assertEqual(command["operation"], "apply")
+                self.assertEqual(command["drafts"][0]["author"], "MCP")
+                await websocket.send(json.dumps({
+                    "type": "api-result", "requestId": command["requestId"], "ok": True,
+                    "accepted": 1,
+                }))
+                result = await entity_task
+                self.assertEqual(result.data["accepted_actions"], 1)
 
 
 if __name__ == "__main__":

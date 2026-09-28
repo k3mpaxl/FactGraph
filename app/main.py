@@ -33,7 +33,7 @@ Core rules:
 - Preserve the source URI, query, excerpt, evidence stance, confidence, and evidence period. Use refutes when evidence contradicts a claim; do not silently overwrite uncertainty.
 - Evidence periods describe when the observed activity was valid, not when the graph record was created.
 - Use board_graph before editing when IDs or existing relationships are unknown. For large imports use REST /api/boards/{board_id}/imports/* or /actions; MCP is intended for focused edits.
-- The browser board must be open because FactGraph stores durable data in browser IndexedDB and the server only relays actions. Use the board's session token for REST (`X-FactGraph-Token`) and MCP (`session_token`); it binds the API action to that browser session.
+- The browser board must be open because FactGraph stores durable data in browser IndexedDB and the server only relays actions. Use the board's session token for REST and MCP (`X-FactGraph-Token` header; `session_token` is also accepted by tools); it binds the API action to that browser session.
 """
 mcp = FastMCP("FactGraph Browser Boards", version="0.3.0", instructions=MCP_INSTRUCTIONS)
 mcp_app = mcp.http_app(path="/")
@@ -72,6 +72,14 @@ async def require_board_token(request: Request, call_next):
             return JSONResponse({"detail": "Token is not connected to this open board"}, status_code=403)
         token_context = request_token.set(token)
         channel_context = request_channel.set("REST")
+        try:
+            return await call_next(request)
+        finally:
+            request_token.reset(token_context)
+            request_channel.reset(channel_context)
+    if path.startswith("/mcp") and (token := request.headers.get("X-FactGraph-Token")):
+        token_context = request_token.set(token)
+        channel_context = request_channel.set("MCP")
         try:
             return await call_next(request)
         finally:
@@ -448,8 +456,11 @@ async def import_file(board_id: str, file: UploadFile = File(...),
         subject_kind=subject_kind, object_kind=object_kind))
 
 
-async def run_mcp_session(session_token: str, operation):
-    token_context = request_token.set(session_token)
+async def run_mcp_session(session_token: str | None, operation):
+    effective_token = session_token or request_token.get()
+    if not effective_token:
+        raise HTTPException(401, "MCP requires X-FactGraph-Token or session_token")
+    token_context = request_token.set(effective_token)
     channel_context = request_channel.set("MCP")
     try:
         return await operation()
@@ -459,22 +470,22 @@ async def run_mcp_session(session_token: str, operation):
 
 
 @mcp.tool
-async def board_graph(board_id: str, session_token: str) -> dict:
+async def board_graph(board_id: str, session_token: str | None = None) -> dict:
     """Read the current graph from an open browser board using its session token."""
     return await run_mcp_session(session_token, lambda: get_graph(board_id))
 
 
 @mcp.tool
-async def add_entity(board_id: str, session_token: str, name: str, kind: str = "Sonstiges",
-                     description: str = "") -> dict:
+async def add_entity(board_id: str, name: str, kind: str = "Sonstiges",
+                     description: str = "", session_token: str | None = None) -> dict:
     """Create one entity on an open board. Use REST /actions for large batches."""
     return await run_mcp_session(session_token, lambda: create_entity(board_id, EntityInput(name=name, kind=kind, description=description)))
 
 
 @mcp.tool(name="update_entity")
-async def mcp_update_entity(board_id: str, entity_id: str, session_token: str,
+async def mcp_update_entity(board_id: str, entity_id: str,
                             name: str | None = None, kind: str | None = None,
-                            description: str | None = None) -> dict:
+                            description: str | None = None, session_token: str | None = None) -> dict:
     """Patch an existing entity. Pass only fields that should change."""
     values = {key: value for key, value in {"name": name, "kind": kind,
              "description": description}.items() if value is not None}
@@ -482,16 +493,16 @@ async def mcp_update_entity(board_id: str, entity_id: str, session_token: str,
 
 
 @mcp.tool
-async def add_source(board_id: str, session_token: str, title: str, uri: str = "",
-                     excerpt: str = "") -> dict:
+async def add_source(board_id: str, title: str, uri: str = "", excerpt: str = "",
+                     session_token: str | None = None) -> dict:
     """Create an evidence source, such as a repository path, log export or query."""
     return await run_mcp_session(session_token, lambda: create_source(board_id, SourceInput(title=title, uri=uri, excerpt=excerpt)))
 
 
 @mcp.tool(name="update_source")
-async def mcp_update_source(board_id: str, source_id: str, session_token: str,
-                            title: str | None = None, uri: str | None = None,
-                            excerpt: str | None = None) -> dict:
+async def mcp_update_source(board_id: str, source_id: str, title: str | None = None,
+                            uri: str | None = None, excerpt: str | None = None,
+                            session_token: str | None = None) -> dict:
     """Patch an existing evidence source. Pass only fields that should change."""
     values = {key: value for key, value in {"title": title, "uri": uri,
              "excerpt": excerpt}.items() if value is not None}
@@ -499,10 +510,10 @@ async def mcp_update_source(board_id: str, source_id: str, session_token: str,
 
 
 @mcp.tool
-async def link_entities(board_id: str, session_token: str, subject_id: str, predicate: str,
+async def link_entities(board_id: str, subject_id: str, predicate: str,
                         object_id: str, note: str = "", source_id: str | None = None,
                         valid_from: str | None = None, valid_to: str | None = None,
-                        ) -> dict:
+                        session_token: str | None = None) -> dict:
     """Create a directed relationship and optional supporting evidence on an open board."""
     return await run_mcp_session(session_token, lambda: create_relation(board_id, RelationInput(subject_id=subject_id,
         predicate=predicate, object_id=object_id, note=note, source_id=source_id, valid_from=valid_from, valid_to=valid_to))
@@ -510,11 +521,11 @@ async def link_entities(board_id: str, session_token: str, subject_id: str, pred
 
 
 @mcp.tool(name="update_relationship")
-async def mcp_update_relationship(board_id: str, relation_id: str, session_token: str,
+async def mcp_update_relationship(board_id: str, relation_id: str,
                                   subject_id: str | None = None, predicate: str | None = None,
                                   object_id: str | None = None,
                                   valid_from: str | None = None, valid_to: str | None = None,
-                                  ) -> dict:
+                                  session_token: str | None = None) -> dict:
     """Patch a directed relationship. Pass only fields that should change."""
     values = {key: value for key, value in {"subject_id": subject_id, "predicate": predicate,
              "object_id": object_id, "valid_from": valid_from, "valid_to": valid_to}.items()
@@ -523,9 +534,10 @@ async def mcp_update_relationship(board_id: str, relation_id: str, session_token
 
 
 @mcp.tool
-async def add_evidence(board_id: str, session_token: str, relation_id: str, note: str,
+async def add_evidence(board_id: str, relation_id: str, note: str,
                        source_id: str | None = None, stance: str = "supports",
-                       confidence: float = 1, valid_from: str | None = None, valid_to: str | None = None) -> dict:
+                       confidence: float = 1, valid_from: str | None = None, valid_to: str | None = None,
+                       session_token: str | None = None) -> dict:
     """Attach a supporting or refuting statement to an existing relation."""
     return await run_mcp_session(session_token, lambda: create_evidence(board_id, relation_id, EvidenceInput(note=note,
         source_id=source_id, stance=stance, confidence=confidence, valid_from=valid_from, valid_to=valid_to))
@@ -533,10 +545,11 @@ async def add_evidence(board_id: str, session_token: str, relation_id: str, note
 
 
 @mcp.tool(name="update_evidence")
-async def mcp_update_evidence(board_id: str, relation_id: str, evidence_id: str, session_token: str,
+async def mcp_update_evidence(board_id: str, relation_id: str, evidence_id: str,
                               valid_from: str | None = None, valid_to: str | None = None,
                               stance: str | None = None, confidence: float | None = None,
-                              source_id: str | None = None, note: str | None = None) -> dict:
+                              source_id: str | None = None, note: str | None = None,
+                              session_token: str | None = None) -> dict:
     """Patch evidence attached to a relationship. Pass only fields that should change."""
     values = {key: value for key, value in {"valid_from": valid_from, "valid_to": valid_to,
              "stance": stance, "confidence": confidence, "source_id": source_id,
@@ -551,9 +564,10 @@ async def factgraph_guidelines() -> dict:
 
 
 @mcp.tool
-async def add_kql_evidence(board_id: str, session_token: str, query: str, rows: list[dict],
+async def add_kql_evidence(board_id: str, query: str, rows: list[dict],
                            title: str = "KQL-Abfrage", subject_field: str = "IPAddress",
-                           object_field: str = "FilePath", predicate: str = "accessed") -> dict:
+                           object_field: str = "FilePath", predicate: str = "accessed",
+                           session_token: str | None = None) -> dict:
     """Add already exported KQL result rows as evidence. This tool does not execute KQL.
 
     Each row links its IP to its file; the query is retained as the evidence source.

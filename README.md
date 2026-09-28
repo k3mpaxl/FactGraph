@@ -58,7 +58,7 @@ Graph, Zeitachse und synchronisierte Aktionen sind als Tabs organisiert.
 
 **Ein Browser mit dem Board muss geöffnet und verbunden sein.** REST und MCP senden Schreibaufträge an diesen Browser und antworten erst nach dessen IndexedDB-Bestätigung. Ohne Browser antwortet REST mit `409`. So bleibt die Architektur ohne Server-Datenbank erhalten.
 
-Beim Öffnen eines Boards erzeugt der Browser ein zufälliges Sitzungs-Token. REST erwartet es im Header `X-FactGraph-Token`; MCP verwendet dasselbe Token als `session_token`. Nur ein damit verbundenes Browser-Board darf Aktionen ausführen. Das Token ist eine lokale Sitzungskopplung, kein Benutzerkonto und kein Ersatz für einen vorgeschalteten Auth-Proxy.
+Beim Öffnen eines Boards erzeugt der Browser ein zufälliges Sitzungs-Token. REST und MCP erwarten es im Header `X-FactGraph-Token`; MCP akzeptiert zusätzlich den Tool-Parameter `session_token`. Nur ein damit verbundenes Browser-Board darf Aktionen ausführen. Das Token ist eine lokale Sitzungskopplung, kein Benutzerkonto und kein Ersatz für einen vorgeschalteten Auth-Proxy.
 
 | Aufgabe | REST | MCP |
 | --- | --- | --- |
@@ -116,13 +116,16 @@ Im Repository liegt bereits [.vscode/mcp.json](.vscode/mcp.json). VS Code öffne
   "servers": {
     "factgraph": {
       "type": "http",
-      "url": "http://127.0.0.1:8080/mcp/"
+      "url": "http://127.0.0.1:8080/mcp/",
+      "headers": {
+        "X-FactGraph-Token": "${env:FACTGRAPH_TOKEN}"
+      }
     }
   }
 }
 ```
 
-Vor einem Tool-Aufruf muss die passende Board-URL in einem Browser geöffnet sein. Das Token kann in der kompakten API-Leiste über **Token** kopiert werden. Für REST:
+Vor einem Tool-Aufruf muss die passende Board-URL in einem Browser geöffnet sein. Das Token kann in der kompakten API-Leiste über **Token** kopiert werden. Für VS Code `FACTGRAPH_TOKEN` auf den kopierten Wert setzen und den MCP-Server neu verbinden. Für REST:
 
 ```bash
 curl -X POST 'http://127.0.0.1:8080/api/boards/BOARD_UUID/entities' \

@@ -31,7 +31,7 @@ export function timelineEntries(facts: Fact[]) {
   })
 }
 
-export function factIntersects(fact: Fact, from: string | null, to: string | null) {
+export function factIntersects(fact: Fact, from: string | null, to: string | null, includeUndated = true) {
   if (!from && !to) return true
   const lower = from ? Date.parse(from) : Number.NEGATIVE_INFINITY
   const upper = to ? Date.parse(to) : Number.POSITIVE_INFINITY
@@ -40,7 +40,8 @@ export function factIntersects(fact: Fact, from: string | null, to: string | nul
     const period = evidencePeriod(assertion, fact)
     const start = period.from ? Date.parse(period.from) : period.to ? Date.parse(period.to) : Number.NaN
     const end = period.to ? Date.parse(period.to) : period.from ? Date.parse(period.from) : Number.NaN
-    return Number.isFinite(start) && Number.isFinite(end) && start <= upper && end >= lower
+    if (!Number.isFinite(start) || !Number.isFinite(end)) return includeUndated
+    return start <= upper && end >= lower
   })
 }
 

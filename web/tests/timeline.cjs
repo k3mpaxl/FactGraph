@@ -12,7 +12,10 @@ assert.deepEqual(entries.map(e=>e.assertion.id), ['legacy','late','unknown'])
 assert.equal(entries[2].from,null)
 assert.equal(entries[1].to,'2026-01-03T00:00:00Z')
 assert.equal(factIntersects(entries[1].fact, '2026-01-02T12:00:00Z', '2026-01-02T13:00:00Z'), true)
-assert.equal(factIntersects(entries[1].fact, '2026-01-04T00:00:00Z', null), false)
+assert.equal(factIntersects(entries[1].fact, '2026-01-04T00:00:00Z', null, false), false)
+const unknownFact = {...base, assertions:[evidence('only-unknown')]}
+assert.equal(factIntersects(unknownFact, '2026-01-02T12:00:00Z', '2026-01-02T13:00:00Z', true), true)
+assert.equal(factIntersects(unknownFact, '2026-01-02T12:00:00Z', '2026-01-02T13:00:00Z', false), false)
 const ops = [
  {type:'entity.add',payload:{id:'a',name:'Old',kind:'IP'}},
  {type:'entity.update',payload:{id:'a',name:'New',kind:'Device',description:'Edited'}},

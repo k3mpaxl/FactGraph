@@ -33,7 +33,7 @@ Core rules:
 - Preserve the source URI, query, excerpt, evidence stance, confidence, and evidence period. Use refutes when evidence contradicts a claim; do not silently overwrite uncertainty.
 - Evidence periods describe when the observed activity was valid, not when the graph record was created.
 - Use board_graph before editing when IDs or existing relationships are unknown. For large imports use REST /api/boards/{board_id}/imports/* or /actions; MCP is intended for focused edits.
-- The browser board must be open because FactGraph stores durable data in browser IndexedDB and the server only relays actions.
+- The browser board must be open because FactGraph stores durable data in browser IndexedDB and the server only relays actions. Use the board's session token for REST (`X-FactGraph-Token`) and MCP (`session_token`); it binds the API action to that browser session.
 """
 mcp = FastMCP("FactGraph Browser Boards", version="0.3.0", instructions=MCP_INSTRUCTIONS)
 mcp_app = mcp.http_app(path="/")

@@ -183,6 +183,8 @@ function Canvas(props: Props) {
   const [focusMode, setFocusMode] = useState(() => pref('focus', true))
   const [perspectiveName, setPerspectiveName] = useState('')
   const pendingFit = useRef(false)
+  // Locally expanded groups get focused once their members are on the canvas; remote changes never move the viewport.
+  const pendingFocus = useRef<string | null>(null)
   const far = useStore(store => store.transform[2] < 0.45)
   const fitted = useRef(false)
   const clickTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
@@ -193,7 +195,7 @@ function Canvas(props: Props) {
   handlers.current = {
     rename: (id, name) => { void run([{ type: 'entity.update', payload: { id, name } }]).catch(() => {}) },
     cancelSelect,
-    toggleGroup: (groupId, collapsed) => { void run([{ type: 'group.update', payload: { id: groupId, collapsed } }]).catch(() => {}) },
+    toggleGroup: (groupId, collapsed) => { void run([{ type: 'group.update', payload: { id: groupId, collapsed } }]).then(() => { if (!collapsed) pendingFocus.current = groupId }).catch(() => {}) },
   }
 
   const typeByName = useMemo(() => new Map(entityTypes.map(t => [t.name, t])), [entityTypes])
@@ -267,6 +269,7 @@ function Canvas(props: Props) {
       })
     })
   }, [view, selectedNodeId, needle, typeByName, focusIds])
+  useEffect(() => { if (pendingFocus.current && groups.some(g => g.id === pendingFocus.current && !g.collapsed)) { const id = pendingFocus.current; pendingFocus.current = null; requestAnimationFrame(() => focusOn(id)) } }, [view])
   useEffect(() => { if (pendingFit.current) { pendingFit.current = false; requestAnimationFrame(() => void flow.fitView({ padding: 0.2, maxZoom: 1.1, duration: 400 })) } }, [view])
   useEffect(() => { if (!fitted.current && nodes.length) { fitted.current = true; requestAnimationFrame(() => void flow.fitView({ padding: 0.2, maxZoom: 1.1 })) } }, [nodes.length, flow])
 

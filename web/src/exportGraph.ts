@@ -177,7 +177,7 @@ export function buildGraphSvg(options: ExportOptions) {
       out.push(`<g filter="url(#shadow)"><rect x="${n(b.x)}" y="${n(b.y)}" width="${n(b.w)}" height="${n(b.h)}" rx="12" fill="${p.node}" stroke="${mix(color, p.border, 0.45)}"/></g>`)
       out.push(`<rect x="${n(b.x + 10)}" y="${n(b.y + 10)}" width="30" height="30" rx="8" fill="${mix(color, p.node, 0.18)}"/>`)
       out.push(options.icon ? `<svg x="${n(b.x + 17)}" y="${n(b.y + 17)}" width="16" height="16" viewBox="0 0 24 24">${options.icon('__group__', undefined, color)}</svg>` : '')
-      const summary = `${node.count} ${node.kinds.length === 1 ? node.kinds[0][0] : `entities · ${node.kinds.length} types`}${node.internal ? ` · ${node.internal} internal` : ''}`
+      const summary = `${node.count} members · ${node.kinds.length === 1 ? node.kinds[0][0] : `${node.kinds.length} types`}${node.internal ? ` · ${node.internal} internal` : ''}`
       out.push(`<text x="${n(b.x + 50)}" y="${n(b.y + 23)}" font-size="13" font-weight="600" fill="${p.text}">${text(fit(node.group.name, b.w - 62, 13, 600, measure))}</text>`)
       out.push(`<text x="${n(b.x + 50)}" y="${n(b.y + 38)}" font-size="11" fill="${p.text3}">${text(fit(summary, b.w - 62, 11, 400, measure))}</text>`)
       const total = STATES.reduce((sum, s) => sum + node.states[s], 0)

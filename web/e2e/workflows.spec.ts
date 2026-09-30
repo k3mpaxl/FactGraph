@@ -24,7 +24,7 @@ async function setup(page:Page,request:APIRequestContext) {
 
 test('analyst + agent: primary evidence, review, REST/MCP null patches, sync, delete and reload',async({page,browser,request})=>{
   const {id,token,call,graph}=await setup(page,request)
-  const second=await browser.newContext();const peer=await second.newPage();await peer.goto(`/boards/${id}`)
+  const second=await browser.newContext({storageState:'e2e/storage.json'});const peer=await second.newPage();await peer.goto(`/boards/${id}`)
   await expect(page.getByText('2 online',{exact:true})).toBeVisible()
   const a=(await call('POST','/entities',{name:'Source device',kind:'Device',x:60,y:100})).id
   const b=(await mcp(token,'create_entity',{board_id:id,body:{name:'Repository file',kind:'File',x:550,y:100}})).id
@@ -250,7 +250,7 @@ test('navigation: command palette jumps to an entity, explorer and inspector nav
 
 test('sync: offline edits and a concurrent merge converge in both browsers without losing the offline relationship',async({page,browser,request})=>{
   const {id,call,graph}=await setup(page,request)
-  const second=await browser.newContext();const peer=await second.newPage()
+  const second=await browser.newContext({storageState:'e2e/storage.json'});const peer=await second.newPage()
   // Proxy the peer's relay socket so the test can cut the connection like a network loss.
   let offline=false;const sockets:any[]=[]
   await peer.routeWebSocket(/\/ws\/boards\//,ws=>{if(offline){ws.close();return}sockets.push(ws);ws.connectToServer()})
@@ -423,4 +423,80 @@ test('canvas navigation: wheel zooms, right-drag pans without a browser menu, le
   await page.mouse.move(box.x+20,box.y+80);await page.mouse.down()
   await page.mouse.move(box.x+box.width-20,box.y+box.height-20,{steps:8});await page.mouse.up()
   await expect(page.locator('.selection-tools')).toContainText('2 selected')
+})
+
+test('first visit asks for a name; help explains browser storage; agent snippets carry the token header',async({browser,request})=>{
+  const context=await browser.newContext({storageState:{cookies:[],origins:[]}});const page=await context.newPage()
+  const id=randomUUID();await page.goto(`/boards/${id}`)
+  const welcome=page.getByRole('dialog',{name:'Welcome'})
+  await expect(welcome).toBeVisible()
+  await welcome.getByLabel('Your name').fill('Gregor')
+  await welcome.getByRole('button',{name:'Continue'}).click()
+  await expect(welcome).not.toBeVisible()
+  expect(await page.evaluate(()=>localStorage.getItem('factgraph:displayName'))).toBe('Gregor')
+  await page.reload();await expect(page.getByText('1 online',{exact:true})).toBeVisible()
+  await expect(page.getByRole('dialog',{name:'Welcome'})).toHaveCount(0)
+  expect(await page.evaluate(()=>document.documentElement.dataset.theme)).toBe('light')
+  await page.getByRole('button',{name:'Help and data storage'}).click()
+  const help=page.getByRole('dialog',{name:'Help'})
+  await expect(help.getByText('Everything stays in this browser.')).toBeVisible()
+  await expect(help.getByText(/^v\d+\.\d+\.\d+$/)).toBeVisible()
+  await expect(help.getByText(/server v\d+\.\d+\.\d+/)).toBeVisible()
+  await help.getByRole('tab',{name:'Keyboard & mouse'}).click()
+  await expect(help.getByText('Right-drag · trackpad two-finger scroll · Space + drag')).toBeVisible()
+  await help.getByRole('button',{name:'Close dialog'}).click()
+  await page.getByRole('button',{name:'API and MCP'}).click()
+  await page.getByRole('button',{name:'Connect an agent…'}).click()
+  const connect=page.getByRole('dialog',{name:'Connect an agent'})
+  const token=await page.evaluate(id=>sessionStorage.getItem(`factgraph:sessionToken:${id}`)!,id)
+  await expect(connect.locator('pre').first()).toContainText('"X-FactGraph-Token": "${input:factgraph-token}"')
+  await connect.getByText('Put the token into the file instead of asking').click()
+  await expect(connect.locator('pre').first()).toContainText(token)
+  await connect.getByRole('tab',{name:'Claude Code'}).click()
+  await expect(connect.locator('pre').first()).toContainText(`--header "X-FactGraph-Token: ${token}"`)
+  await expect(connect.getByText(`Board ID: ${id}`)).toBeVisible()
+  await context.close()
+})
+
+test('confirmed relationships are locked against reconnecting; long labels show in full on hover',async({page,request})=>{
+  const {call,graph}=await setup(page,request)
+  const a=(await call('POST','/entities',{name:'Device',kind:'Device',x:0,y:0})).id
+  const b=(await call('POST','/entities',{name:'Vault',kind:'Key Vault',x:500,y:0})).id
+  const long='retrieved the production database connection string from'
+  const rel=(await call('POST','/relations',{subject_id:a,object_id:b,predicate:long})).id
+  const src=(await call('POST','/sources',{title:'Audit',source_kind:'primary',uri:'law://audit',excerpt:'[{"id":1}]'})).id
+  const ev=(await call('POST',`/relations/${rel}/evidence`,{source_id:src,observation:'Row 1 shows it',locator:'id=1'})).id
+  await page.getByRole('button',{name:'fit view'}).click()
+  const label=page.locator('.edge-label').first()
+  await expect(label).toHaveAttribute('title',long)
+  const narrow=(await label.boundingBox())!.width
+  await label.hover()
+  await expect.poll(async()=>(await label.boundingBox())!.width).toBeGreaterThan(narrow)
+  const g=await graph()
+  await call('POST',`/relations/${rel}/evidence/${ev}/review`,{review_status:'confirmed',expected_revision:g.facts[0].assertions[0].revision,expected_source_revision:g.sources[0].revision,review_note:'checked row 1'})
+  await expect.poll(async()=>(await graph()).facts[0].truth_state).toBe('supported')
+  await expect.poll(async()=>page.locator('.react-flow__edgeupdater').count()).toBe(0)
+  await label.click()
+  await expect(page.getByRole('complementary',{name:'Inspector'}).getByText('Ends locked')).toBeVisible()
+})
+
+test('trackpad: two-finger scroll pans, pinch zooms, mouse wheel still zooms',async({page,request})=>{
+  const {call}=await setup(page,request)
+  await call('POST','/entities',{name:'A',kind:'Device',x:0,y:0})
+  await expect(page.locator('.entity-node')).toHaveCount(1)
+  const viewport=()=>page.locator('.react-flow__viewport').evaluate(el=>{const m=new DOMMatrix(getComputedStyle(el).transform);return {x:m.e,y:m.f,zoom:m.a}})
+  const wheel=(init:WheelEventInit)=>page.locator('.react-flow__pane').evaluate((el,init)=>{const r=el.getBoundingClientRect();el.dispatchEvent(new WheelEvent('wheel',{bubbles:true,cancelable:true,clientX:r.x+r.width/2,clientY:r.y+r.height/2,...init}))},init)
+  const start=await viewport()
+  for(let i=0;i<10;i++) await wheel({deltaX:3.5,deltaY:12.25,deltaMode:0})
+  const panned=await viewport()
+  expect(panned.zoom).toBeCloseTo(start.zoom,5)
+  expect(start.y-panned.y).toBeGreaterThan(100)
+  expect(start.x-panned.x).toBeGreaterThan(20)
+  await page.waitForTimeout(400)
+  for(let i=0;i<5;i++) await wheel({deltaY:-4.5,deltaMode:0,ctrlKey:true})
+  const pinched=await viewport()
+  expect(pinched.zoom).toBeGreaterThan(panned.zoom*1.3)
+  await page.waitForTimeout(400)
+  await page.mouse.move(700,500);await page.mouse.wheel(0,300)
+  await expect.poll(async()=>(await viewport()).zoom).toBeLessThan(pinched.zoom)
 })

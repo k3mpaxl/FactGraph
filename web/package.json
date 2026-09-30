@@ -1,16 +1,17 @@
 {
   "name": "factgraph-web",
   "private": true,
-  "version": "0.4.5",
+  "version": "0.4.6",
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "tsc -b && vite build",
-    "test": "tsc src/board.ts src/timeline.ts src/validation.ts src/viewModel.ts src/exportGraph.ts --outDir node_modules/.cache/factgraph-tests --module commonjs --target es2022 --skipLibCheck && node tests/timeline.cjs ./node_modules/.cache/factgraph-tests && node tests/review.cjs ./node_modules/.cache/factgraph-tests && node tests/structures.cjs ./node_modules/.cache/factgraph-tests && node tests/export.cjs ./node_modules/.cache/factgraph-tests",
+    "test": "tsc src/board.ts src/timeline.ts src/validation.ts src/viewModel.ts src/exportGraph.ts src/wheel.ts src/organicLayout.ts --outDir node_modules/.cache/factgraph-tests --module commonjs --target es2022 --skipLibCheck --esModuleInterop && node tests/timeline.cjs ./node_modules/.cache/factgraph-tests && node tests/review.cjs ./node_modules/.cache/factgraph-tests && node tests/structures.cjs ./node_modules/.cache/factgraph-tests && node tests/export.cjs ./node_modules/.cache/factgraph-tests && node tests/wheel.cjs ./node_modules/.cache/factgraph-tests && node tests/layout.cjs ./node_modules/.cache/factgraph-tests",
     "test:e2e": "npm run build && playwright test"
   },
   "dependencies": {
     "@xyflow/react": "^12.12.0",
+    "d3-force": "^3.0.0",
     "elkjs": "^0.12.0",
     "idb": "^8.0.3",
     "lucide-react": "^0.468.0",
@@ -19,6 +20,7 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.63.0",
+    "@types/d3-force": "^3.0.10",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^4.7.0",

@@ -1,10 +1,18 @@
 {
+  "inputs": [
+    {
+      "type": "promptString",
+      "id": "factgraph-token",
+      "description": "FactGraph session token (board menu → API/MCP → Connect an agent)",
+      "password": true
+    }
+  ],
   "servers": {
     "factgraph": {
       "type": "http",
       "url": "http://127.0.0.1:8080/mcp/",
       "headers": {
-        "X-FactGraph-Token": "${env:FACTGRAPH_TOKEN}"
+        "X-FactGraph-Token": "${input:factgraph-token}"
       }
     }
   }

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import {
   Activity, ArrowDownToLine, ArrowLeft, ArrowRight, ChevronDown, ChevronRight, Clock, Command, Copy, CornerDownLeft,
-  FileText, GitBranch, Keyboard, Link2, ListTree, Merge, Moon, Pause, Pencil, Play, Plus, Plug, Search, ShieldCheck,
+  FileText, GitBranch, Keyboard, Link2, HardDrive, Server, Users, AlertTriangle, Lock, CircleHelp, ListTree, Merge, Moon, Pause, Pencil, Play, Plus, Plug, Search, ShieldCheck,
   SkipBack, SkipForward, Sparkles, Sun, Trash2, Undo2, Redo2, Upload, X, Crosshair, CheckCircle2, CircleDashed, Boxes, Zap, Layers, Ungroup, ImageDown,
 } from 'lucide-react'
 import { factsInWindow, timelineSteps, timelineEvents, periodLabel, evidencePeriod } from './timeline'
@@ -150,7 +150,7 @@ function Inspector({ data, selection, onAdd, onDelete, onRetract, onOpenEvidence
         <div className={`fact-predicate ${fact.truth_state}`}><span>{fact.predicate}</span><ArrowDownIcon /></div>
         <button onClick={() => onSelect({ kind: 'entity', id: fact.object_id }, true)}>{nameOf(data, fact.object_id)}</button>
       </div>}
-      <div className="fact-state"><StatePill state={fact.truth_state} /><span>{active.length} active · {confirmed} confirmed</span></div>
+      <div className="fact-state"><StatePill state={fact.truth_state} /><span>{active.length} active · {confirmed} confirmed</span>{!isActivity && confirmed > 0 && <span className="lock-note" title="Confirmed evidence refers to these two entities. Retract or unconfirm it before moving an end.">Ends locked</span>}</div>
       <dl className="meta-list"><dt>Valid from</dt><dd>{date(fact.valid_from)}</dd>{fact.valid_to && <><dt>Valid to</dt><dd>{date(fact.valid_to)}</dd></>}</dl>
       <Section title="Evidence" count={fact.assertions.length} action={<button className="text-button" onClick={() => onAdd('assertion')}><Plus size={14} /> Add evidence</button>}>
         {fact.assertions.length ? fact.assertions.map(assertion => <AssertionRow key={assertion.id} assertion={assertion} fact={fact} data={data} onCopy={onCopy} onOpen={() => onOpenEvidence(assertion.id)} onRetract={() => onRetract(assertion.id)} />)
@@ -454,7 +454,7 @@ function Explorer({ data, search, selection, onSelect, onClose }: { data: GraphD
       if (needle && !`${entity.name} ${entity.kind} ${entity.identifiers.map(i => i.raw_value).join(' ')}`.toLowerCase().includes(needle)) continue
       const list = byKind.get(entity.kind); if (list) list.push(entity); else byKind.set(entity.kind, [entity])
     }
-    return [...byKind.entries()].map(([kind, items]) => [kind, items.sort((a, b) => a.name.localeCompare(b.name))] as const).sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]))
+    return [...byKind.entries()].map(([kind, items]) => [kind, items.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }))] as const).sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]))
   }, [data.entities, needle])
   const total = groups.reduce((sum, [, items]) => sum + items.length, 0)
   return <aside className="explorer" aria-label="Entity explorer">
@@ -526,17 +526,129 @@ function CommandPalette({ items, onClose }: { items: PaletteItem[]; onClose: () 
   </div>
 }
 
-function ShortcutHelp({ onClose }: { onClose: () => void }) {
+type StorageInfo = { persisted: boolean | null; usage: number | null; quota: number | null }
+const formatBytes = (value: number) => value < 1024 * 1024 ? `${Math.max(1, Math.round(value / 1024))} KB` : value < 1024 ** 3 ? `${(value / 1024 / 1024).toFixed(1)} MB` : `${(value / 1024 ** 3).toFixed(1)} GB`
+
+/** Help: where data lives, version, and the keyboard and mouse controls. */
+function HelpDialog({ boardCount, onExport, onClose, initialTab = 'data' }: { boardCount: number; onExport: () => void; onClose: () => void; initialTab?: 'data' | 'keys' }) {
+  const [tab, setTab] = useState(initialTab)
+  const [storage, setStorage] = useState<StorageInfo>({ persisted: null, usage: null, quota: null })
+  const [server, setServer] = useState<string | null>(null)
+  useEffect(() => {
+    void (async () => {
+      try {
+        const [persisted, estimate] = await Promise.all([navigator.storage?.persisted?.() ?? null, navigator.storage?.estimate?.() ?? null])
+        setStorage({ persisted, usage: estimate?.usage ?? null, quota: estimate?.quota ?? null })
+      } catch { /* storage API unavailable */ }
+    })()
+    fetch('/api/health').then(r => r.json()).then(body => setServer(typeof body.version === 'string' ? body.version : null)).catch(() => setServer(null))
+  }, [])
+  const persist = async () => {
+    try { const granted = await navigator.storage.persist(); setStorage(current => ({ ...current, persisted: granted })) } catch { setStorage(current => ({ ...current, persisted: false })) }
+  }
   const rows: [string, string[]][] = [
     ['Command palette / jump to entity', [mod, 'K']], ['Focus search', ['/']], ['New entity at centre', ['N']], ['Fit view / center selection', ['F']],
-    ['Switch view', ['1', '–', '4']], ['Toggle explorer', ['E']], ['Toggle evidence window', ['T']], ['Undo / redo', [mod, 'Z', '·', '⇧', mod, 'Z']],
-    ['Delete selection', ['⌫']], ['Close / deselect', ['Esc']], ['Multi-select', ['Shift', 'drag']], ['Rename node', ['double-click']],
-    ['Connect', ['drag right handle']], ['Zoom', ['mouse wheel / pinch']], ['Pan', ['right-drag', '·', 'Space', 'drag']], ['Select area', ['left-drag']],
+    ['Group selected entities', ['G']], ['Switch view', ['1', '–', '4']], ['Toggle explorer', ['E']], ['Toggle evidence window', ['T']], ['Undo / redo', [mod, 'Z', '·', '⇧', mod, 'Z']],
+    ['Delete selection', ['⌫']], ['Close / deselect', ['Esc']], ['Rename node', ['double-click']], ['Connect', ['drag right handle']],
   ]
+  const pointer: [string, string][] = [
+    ['Zoom', 'Mouse wheel · trackpad pinch'], ['Pan', 'Right-drag · trackpad two-finger scroll · Space + drag'],
+    ['Select area', 'Left-drag on empty canvas'], ['Add to selection', 'Shift + click'], ['Scroll sideways', 'Shift + mouse wheel'],
+  ]
+  const mismatch = server && server !== __APP_VERSION__
   return <div className="modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) onClose() }}>
-    <div className="modal narrow" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts">
-      <div className="modal-header"><h2>Keyboard shortcuts</h2><button className="icon-button" onClick={onClose} aria-label="Close dialog"><X size={18} /></button></div>
-      <div className="modal-body"><dl className="shortcut-list">{rows.map(([label, keys]) => <div key={label}><dt>{label}</dt><dd>{keys.map((k, i) => ['–', '·'].includes(k) || k.includes(' ') ? <span key={i} className="muted">{k}</span> : <Kbd key={i}>{k}</Kbd>)}</dd></div>)}</dl></div>
+    <div className="modal help-modal" role="dialog" aria-modal="true" aria-label="Help">
+      <div className="modal-header"><div className="help-title"><span className="brand-mark"><GitBranch size={13} strokeWidth={2.4} /></span><h2>FactGraph</h2><span className="version-chip" title="App version">v{__APP_VERSION__}</span></div>
+        <button className="icon-button" onClick={onClose} aria-label="Close dialog"><X size={18} /></button></div>
+      <div className="help-tabs"><div className="segmented full" role="tablist" aria-label="Help topics">
+        <button role="tab" aria-selected={tab === 'data'} className={tab === 'data' ? 'active' : ''} onClick={() => setTab('data')}>Where your data lives</button>
+        <button role="tab" aria-selected={tab === 'keys'} className={tab === 'keys' ? 'active' : ''} onClick={() => setTab('keys')}>Keyboard & mouse</button></div></div>
+      <div className="modal-body">
+        {tab === 'data' ? <>
+          <div className="storage-hero"><HardDrive size={20} /><div><strong>Everything stays in this browser.</strong><p>Boards, entities, evidence and their history are stored only in this browser's local database (IndexedDB) on this device.</p></div></div>
+          <ul className="help-list">
+            <li><Server size={15} /><span><strong>The server stores nothing.</strong> It delivers the app and relays changes live between browsers that have the same board open.</span></li>
+            <li><Users size={15} /><span><strong>Sharing works while a browser is open.</strong> Another device receives the board only while a browser that holds it is connected. The board link itself contains no data.</span></li>
+            <li><Plug size={15} /><span><strong>Agents need an open board.</strong> REST and MCP write through this browser tab; without it they report the board as offline.</span></li>
+            <li><AlertTriangle size={15} /><span><strong>Deleting browser data deletes the boards.</strong> Clearing site data, private windows or cleanup tools remove them for good — export a JSON backup regularly.</span></li>
+            <li><Lock size={15} /><span><strong>No login.</strong> Anyone who can reach this server and knows a board link can read and change that board. Only expose FactGraph in trusted networks.</span></li>
+          </ul>
+          <div className="storage-status">
+            <div><span>This browser</span><strong>{boardCount} {boardCount === 1 ? 'board' : 'boards'}{storage.usage !== null ? ` · ${formatBytes(storage.usage)} used` : ''}{storage.quota ? ` of ${formatBytes(storage.quota)}` : ''}</strong></div>
+            <div><span>Protected from automatic cleanup</span><strong className={storage.persisted ? 'ok-text' : 'warn-text'}>{storage.persisted === null ? 'unknown' : storage.persisted ? 'Yes' : 'No'}</strong></div>
+            <div className="storage-actions">
+              {storage.persisted === false && <button className="secondary-button small" onClick={() => void persist()}><ShieldCheck size={14} /> Ask browser to keep data</button>}
+              <button className="secondary-button small" onClick={onExport}><ArrowDownToLine size={14} /> Export board JSON</button>
+            </div>
+          </div>
+          <p className="hint version-line">App v{__APP_VERSION__}{server ? ` · server v${server}` : ''}{mismatch ? ' — versions differ, reload the page after an update.' : ''} · <a href="/docs" target="_blank" rel="noreferrer">REST documentation</a></p>
+        </> : <>
+          <dl className="shortcut-list">{rows.map(([label, keys]) => <div key={label}><dt>{label}</dt><dd>{keys.map((k, i) => ['–', '·'].includes(k) || k.includes(' ') ? <span key={i} className="muted">{k}</span> : <Kbd key={i}>{k}</Kbd>)}</dd></div>)}</dl>
+          <div className="form-divider">Mouse & trackpad</div>
+          <dl className="shortcut-list">{pointer.map(([label, text]) => <div key={label}><dt>{label}</dt><dd className="muted">{text}</dd></div>)}</dl>
+        </>}
+      </div>
+    </div>
+  </div>
+}
+
+type AgentClient = 'vscode' | 'claude' | 'other'
+/** Copy-ready MCP/REST configuration for this board, including the token header. */
+function AgentConnectDialog({ boardId, token, onCopy, onClose }: { boardId: string; token: string; onCopy: (value: string, label: string) => void; onClose: () => void }) {
+  const [client, setClient] = useState<AgentClient>('vscode')
+  const [embed, setEmbed] = useState(false)
+  const origin = window.location.origin
+  const mcpUrl = `${origin}/mcp/`
+  const vscode = JSON.stringify(embed
+    ? { servers: { factgraph: { type: 'http', url: mcpUrl, headers: { 'X-FactGraph-Token': token } } } }
+    : { inputs: [{ type: 'promptString', id: 'factgraph-token', description: 'FactGraph session token (board menu → API/MCP)', password: true }],
+        servers: { factgraph: { type: 'http', url: mcpUrl, headers: { 'X-FactGraph-Token': '${input:factgraph-token}' } } } }, null, 2)
+  const claude = `claude mcp add --transport http factgraph ${mcpUrl} --header "X-FactGraph-Token: ${token}"`
+  const prompt = `Use the FactGraph MCP server for this investigation. Board ID: ${boardId}. Read the board with get_graph or find_entities before adding anything.`
+  const curl = `curl -s "${origin}/api/boards/${boardId}/graph" -H "X-FactGraph-Token: ${token}"`
+  const Snippet = ({ label, value, hint }: { label: string; value: string; hint?: string }) => <div className="snippet">
+    <div className="snippet-head"><span>{label}</span><button className="text-button" onClick={() => onCopy(value, label)}><Copy size={13} /> Copy</button></div>
+    <pre>{value}</pre>{hint && <p className="hint">{hint}</p>}</div>
+  return <div className="modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) onClose() }}>
+    <div className="modal help-modal" role="dialog" aria-modal="true" aria-label="Connect an agent">
+      <div className="modal-header"><h2>Connect an agent</h2><button className="icon-button" onClick={onClose} aria-label="Close dialog"><X size={18} /></button></div>
+      <div className="help-tabs"><div className="segmented full" role="tablist" aria-label="Agent client">
+        {([['vscode', 'VS Code / Copilot'], ['claude', 'Claude Code'], ['other', 'Other / REST']] as [AgentClient, string][]).map(([id, label]) =>
+          <button key={id} role="tab" aria-selected={client === id} className={client === id ? 'active' : ''} onClick={() => setClient(id)}>{label}</button>)}</div></div>
+      <div className="modal-body">
+        {client === 'vscode' && <>
+          <Snippet label=".vscode/mcp.json" value={vscode} hint={embed ? 'Contains this session’s token — do not commit it.' : 'VS Code asks for the token when the server starts, so the file can be committed.'} />
+          <label className="check"><input type="checkbox" checked={embed} onChange={e => setEmbed(e.target.checked)} /> Put the token into the file instead of asking</label>
+          <Snippet label="Token" value={token} hint="Paste it when VS Code asks for “FactGraph session token”." />
+          <p className="hint">Then run <strong>MCP: List Servers</strong> → factgraph → Start, and pick the FactGraph tools in the agent tool picker.</p>
+        </>}
+        {client === 'claude' && <Snippet label="Terminal" value={claude} hint="Adds the server with the token header to Claude Code (use --scope project to share the config, without the token)." />}
+        {client === 'other' && <>
+          <Snippet label="MCP endpoint (Streamable HTTP)" value={mcpUrl} />
+          <Snippet label="Header" value={`X-FactGraph-Token: ${token}`} hint="Or pass session_token in every tool call." />
+          <Snippet label="REST example" value={curl} hint="Full REST reference under /docs." />
+        </>}
+        <Snippet label="First message for the agent" value={prompt} hint="Tools need the board ID; the token only authorises the connection." />
+        <p className="hint lock-hint"><Lock size={13} /> The token belongs to this browser tab and stays valid while it is open. Opening the board in a new tab or browser creates a new token.</p>
+      </div>
+    </div>
+  </div>
+}
+
+/** First visit: choose the name other analysts see next to presence and changes. */
+function WelcomeDialog({ current, onSave, onLearnMore }: { current: string; onSave: (name: string) => void; onLearnMore: () => void }) {
+  const [name, setName] = useState('')
+  return <div className="modal-backdrop">
+    <div className="modal narrow" role="dialog" aria-modal="true" aria-label="Welcome">
+      <div className="modal-header"><div className="help-title"><span className="brand-mark"><GitBranch size={13} strokeWidth={2.4} /></span><h2>Welcome to FactGraph</h2></div></div>
+      <form onSubmit={event => { event.preventDefault(); onSave(name.trim() || current) }}>
+        <div className="modal-body">
+          <label>Your name<input autoFocus value={name} onChange={e => setName(e.target.value)} placeholder={current} maxLength={40} aria-label="Your name" /></label>
+          <p className="hint">Shown to other analysts on the same board and stored with your changes. You can change it later in the board menu.</p>
+          <button type="button" className="empty-storage" onClick={onLearnMore}><HardDrive size={13} /> Your boards are stored only in this browser — learn more</button>
+        </div>
+        <div className="modal-actions"><button type="button" className="secondary-button" onClick={() => onSave(current)}>Skip</button><button className="primary-button">Continue</button></div>
+      </form>
     </div>
   </div>
 }
@@ -567,7 +679,8 @@ export default function App() {
   const [editingAssertionId, setEditingAssertionId] = useState<string | null>(null)
   const [relationTargetId, setRelationTargetId] = useState<string | null>(null)
   const [explorerOpen, setExplorerOpen] = useState(() => { const v = readPref('explorer'); return v === null ? window.innerWidth >= 1280 : v === 'true' })
-  const [theme, setTheme] = useState<Theme>(() => { const v = readPref('theme'); return v === 'light' || v === 'dark' ? v : window.matchMedia?.('(prefers-color-scheme: light)').matches ? 'light' : 'dark' })
+  // Light is the default; dark is an explicit choice that is remembered.
+  const [theme, setTheme] = useState<Theme>(() => readPref('theme') === 'dark' ? 'dark' : 'light')
   const [search, setSearch] = useState('')
   const [stateFilter, setStateFilter] = useState<TruthState | 'all'>('all')
   const [error, setError] = useState('')
@@ -575,7 +688,9 @@ export default function App() {
   const [toast, setToast] = useState('')
   const [showLogImport, setShowLogImport] = useState(false)
   const [showPalette, setShowPalette] = useState(false)
-  const [showHelp, setShowHelp] = useState(false)
+  const [showHelp, setShowHelp] = useState<false | 'data' | 'keys'>(false)
+  const [showConnect, setShowConnect] = useState(false)
+  const [askName, setAskName] = useState(() => { try { return !localStorage.getItem('factgraph:displayName') } catch { return false } })
   const [showTime, setShowTime] = useState(false)
   const [request, setRequest] = useState<CanvasRequest | null>(null)
   // Layer visibility and display options; a saved perspective can set them in one step.
@@ -709,6 +824,7 @@ export default function App() {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); setShowPalette(open => !open); return }
       if (event.key === 'Escape') {
         if (showPalette) setShowPalette(false)
+        else if (showConnect) setShowConnect(false)
         else if (showHelp) setShowHelp(false)
         else if (dialog) setDialog(null)
         else if (showLogImport) setShowLogImport(false)
@@ -717,19 +833,19 @@ export default function App() {
         else setSelection(null)
         return
       }
-      if (typing || showPalette || dialog || readerId || showLogImport || showHelp) return
+      if (typing || showPalette || dialog || readerId || showLogImport || showHelp || showConnect || askName) return
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'z') { event.preventDefault(); if (event.shiftKey) redo(); else undo(); return }
       if (event.metaKey || event.ctrlKey || event.altKey) return
       if ((event.key === 'Delete' || event.key === 'Backspace') && selection) { event.preventDefault(); deleteItem(selection.kind, selection.id); return }
       if (event.key === '/') { event.preventDefault(); searchInput.current?.focus() }
-      else if (event.key === '?') setShowHelp(true)
+      else if (event.key === '?') setShowHelp('keys')
       else if (event.key.toLowerCase() === 'e') toggleExplorer()
       else if (event.key.toLowerCase() === 't') setShowTime(open => !open)
       else if (['1', '2', '3', '4'].includes(event.key)) setActiveTab((['graph', 'timeline', 'review', 'activity'] as WorkspaceTab[])[Number(event.key) - 1])
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [board.undo, board.redo, dialog, selection, showLogImport, readerId, showPalette, showHelp, activeTab])
+  }, [board.undo, board.redo, dialog, selection, showLogImport, readerId, showPalette, showHelp, showConnect, askName, activeTab])
 
   const navigate = (id: string) => { writePref('lastBoard', id); window.location.assign(`/boards/${id}`) }
   const copyValue = async (value: string, label: string) => {
@@ -796,6 +912,7 @@ export default function App() {
       { id: 'v-activity', group: 'View', label: 'Activity', hint: '4', icon: <Activity size={15} />, run: () => setActiveTab('activity') },
       { id: 'c-fit', group: 'Canvas', label: 'Fit graph to screen', hint: 'F', icon: <Crosshair size={15} />, run: () => { setActiveTab('graph'); canvas('fit') } },
       { id: 'c-arrange', group: 'Canvas', label: 'Auto-arrange graph', icon: <Sparkles size={15} />, run: () => { setActiveTab('graph'); canvas('arrange') } },
+      { id: 'c-arrange-organic', group: 'Canvas', label: 'Arrange organically (large graphs)', icon: <Sparkles size={15} />, run: () => { setActiveTab('graph'); canvas('arrange-organic') } },
       { id: 'c-arrange-layers', group: 'Canvas', label: 'Arrange by layer (swimlanes)', icon: <Layers size={15} />, run: () => { setActiveTab('graph'); canvas('arrange-layers') } },
       { id: 'c-all-layers', group: 'Canvas', label: 'Show all layers', icon: <Layers size={15} />, run: () => setLens({ ...lens, layers: null }) },
       { id: 'c-activities', group: 'Canvas', label: lens.collapseActivities ? 'Show activities as event nodes' : 'Show activities as edges', icon: <Zap size={15} />, run: () => setLens({ ...lens, collapseActivities: !lens.collapseActivities }) },
@@ -812,7 +929,9 @@ export default function App() {
       { id: 'b-import', group: 'Board', label: 'Import board JSON…', icon: <Upload size={15} />, run: () => importInput.current?.click() },
       { id: 'b-link', group: 'Board', label: 'Copy board link', icon: <Copy size={15} />, run: () => void copyValue(window.location.href, 'Board link') },
       { id: 'b-token', group: 'Board', label: 'Copy session token (REST + MCP)', icon: <Plug size={15} />, run: () => void copyValue(board.sessionToken, 'Session token') },
-      { id: 'b-help', group: 'Board', label: 'Keyboard shortcuts', hint: '?', icon: <Keyboard size={15} />, run: () => setShowHelp(true) },
+      { id: 'b-connect', group: 'Board', label: 'Connect an agent (VS Code, Claude Code)…', icon: <Plug size={15} />, run: () => setShowConnect(true) },
+      { id: 'b-help', group: 'Board', label: 'Keyboard & mouse controls', hint: '?', icon: <Keyboard size={15} />, run: () => setShowHelp('keys') },
+      { id: 'b-data', group: 'Board', label: 'Where is my data stored?', icon: <HardDrive size={15} />, run: () => setShowHelp('data') },
     ]
     const entities: PaletteItem[] = (data?.entities ?? []).map(entity => ({ id: `e-${entity.id}`, group: 'Entities', label: entity.name,
       hint: `${entity.kind}${entity.identifiers[0] ? ` · ${entity.identifiers[0].raw_value}` : ''}`, icon: <EntityAvatar entity={entity} data={data ?? undefined} size="sm" />,
@@ -850,6 +969,8 @@ export default function App() {
           <button onClick={() => navigate(uuid())}><Plus size={14} /> New board</button>
           <div className="menu-sep" />
           <button onClick={renameSelf}>Display name · <strong>{board.name}</strong></button>
+          <div className="menu-sep" />
+          <button className="menu-footer" onClick={() => setShowHelp('data')}><HardDrive size={14} /><span>Stored only in this browser</span><small>v{__APP_VERSION__}</small></button>
         </Menu>
         <span className={`presence ${board.connected ? 'online' : 'offline'}`} title={board.connected ? `Relay connected${board.peers.length ? ` · ${board.peers.map(p => p.name).join(', ')}` : ''}` : 'Relay offline: changes stay in this browser and sync when the connection returns.'}>
           <span className="connection-dot" /><span className="presence-text">{board.connected ? `${board.peers.length + 1} online` : 'Offline'}</span></span>
@@ -876,6 +997,7 @@ export default function App() {
         </Menu>
         <Menu label="API and MCP" align="right" className="api-menu" trigger={<Plug size={15} />}>
           <div className="menu-label">Integrations</div>
+          <button onClick={() => setShowConnect(true)}><Plug size={14} /> Connect an agent…</button>
           <button onClick={() => void copyValue(mcpEndpoint, 'MCP endpoint')}><Copy size={14} /> Copy MCP endpoint</button>
           <button onClick={() => void copyValue(`${window.location.origin}/api/boards/${boardId}`, 'REST endpoint')}><Copy size={14} /> Copy REST board endpoint</button>
           <button onClick={() => void copyValue(board.sessionToken, 'Session token')}><Copy size={14} /> Copy session token</button>
@@ -883,7 +1005,7 @@ export default function App() {
           <p className="menu-note">Same token for REST + MCP. Keep this board open while agents write.</p>
         </Menu>
         <button className="icon-button theme-toggle" onClick={toggleTheme} aria-label={theme === 'dark' ? 'Light theme' : 'Dark theme'} title="Toggle theme">{theme === 'dark' ? <Sun size={15} /> : <Moon size={15} />}</button>
-        <button className="icon-button help-button" onClick={() => setShowHelp(true)} aria-label="Keyboard shortcuts" title="Keyboard shortcuts · ?"><Keyboard size={15} /></button>
+        <button className="icon-button help-button" onClick={() => setShowHelp('data')} aria-label="Help and data storage" title="Help · data storage · shortcuts"><CircleHelp size={16} /></button>
       </div>
     </header>
 
@@ -908,6 +1030,7 @@ export default function App() {
             <div className="empty-graphic"><GitBranch size={26} /></div><h2>Start your investigation</h2>
             <p>Create entities and connect them with evidence-backed relationships — or let an agent fill the board via REST / MCP.</p>
             <div className="empty-actions"><button className="primary-button" onClick={() => canvas('place')}><Plus size={15} /> First entity</button><button className="secondary-button" onClick={() => void act(() => board.emitMany(demoDrafts()), 'Example data loaded')}><Sparkles size={15} /> Load example</button><button className="secondary-button" onClick={() => setShowLogImport(true)}><Upload size={15} /> Import logs</button></div>
+            <button className="empty-storage" onClick={() => setShowHelp('data')}><HardDrive size={13} /> Data stays in this browser — learn more</button>
             <div className="empty-keys"><span><Kbd>N</Kbd> new entity</span><span><Kbd>{mod}</Kbd><Kbd>K</Kbd> commands</span><span><Kbd>?</Kbd> shortcuts</span></div>
           </div></div>}
         </div>}
@@ -929,7 +1052,9 @@ export default function App() {
     {dialog && dialog !== 'activity' && data && <Dialog key={`${dialog}:${editingAssertionId ?? ''}:${relationTargetId ?? ''}`} kind={dialog} data={data} selection={selection} editingAssertionId={editingAssertionId} relationTargetId={relationTargetId} busy={busy} error={error} onClose={() => { setDialog(null); setEditingAssertionId(null); setRelationTargetId(null) }} onSubmit={submit} />}
     {showLogImport && <LogImportDialog boardId={boardId} sessionToken={board.sessionToken} onClose={() => setShowLogImport(false)} onDone={summary => { setShowLogImport(false); setToast(summary) }} />}
     {showPalette && <CommandPalette items={paletteItems} onClose={() => setShowPalette(false)} />}
-    {showHelp && <ShortcutHelp onClose={() => setShowHelp(false)} />}
+    {showConnect && <AgentConnectDialog boardId={boardId} token={board.sessionToken} onCopy={(value, label) => void copyValue(value, label)} onClose={() => setShowConnect(false)} />}
+    {askName && board.ready && !showHelp && <WelcomeDialog current={board.name} onSave={name => { board.setName(name); setAskName(false) }} onLearnMore={() => setShowHelp('data')} />}
+    {showHelp && <HelpDialog key={showHelp} initialTab={showHelp} boardCount={board.boards.length} onExport={download} onClose={() => setShowHelp(false)} />}
     <input ref={importInput} type="file" accept="application/json,.json" hidden onChange={event => { const file = event.target.files?.[0]; event.target.value = ''; void importFile(file) }} />
     <div className="toasts" aria-live="polite">
       {board.storageError && <div className="toast error">{board.storageError}</div>}

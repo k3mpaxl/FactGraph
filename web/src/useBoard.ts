@@ -39,8 +39,8 @@ async function renderExport(boardId: string, actions: BoardAction[], options: Re
 export type Peer = { id: string; name: string }
 
 function initialName(actor: string) {
-  try { return localStorage.getItem('factgraph:displayName') || `Gast ${actor.slice(0, 4)}` }
-  catch { return `Gast ${actor.slice(0, 4)}` }
+  try { return localStorage.getItem('factgraph:displayName') || `Guest ${actor.slice(0, 4)}` }
+  catch { return `Guest ${actor.slice(0, 4)}` }
 }
 
 function initialSessionToken(boardId: string) {

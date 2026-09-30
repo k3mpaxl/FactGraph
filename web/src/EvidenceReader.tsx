@@ -20,6 +20,13 @@ function RawEvidence({ text }: { text: string }) {
   </div>
 }
 
+/** Relationship: "A verb B"; activity: "verb · actor, identity, source → target" with every participant. */
+function claimLabel(fact: GraphData['facts'][number], name: (id: string) => string) {
+  if (!fact.participants?.length) return <>{name(fact.subject_id)} <em>{fact.predicate}</em> {name(fact.object_id)}</>
+  const targets = fact.participants.filter(p => p.role === 'target'), others = fact.participants.filter(p => p.role !== 'target')
+  return <><em>{fact.predicate}</em> · {others.map(p => name(p.entity_id)).join(', ')}{targets.length ? <> → {targets.map(p => name(p.entity_id)).join(', ')}</> : null}</>
+}
+
 type QueueFilter = 'unconfirmed' | 'confirmed' | 'retracted' | 'all'
 export function EvidenceQueue({ data, onOpen }: { data: GraphData; onOpen: (id: string) => void }) {
   const [filter, setFilter] = useState<QueueFilter>('unconfirmed')
@@ -28,6 +35,7 @@ export function EvidenceQueue({ data, onOpen }: { data: GraphData; onOpen: (id: 
   const matches = (a: Assertion, value: QueueFilter) => value === 'all' || (value === 'retracted' ? !!a.retracted_at : !a.retracted_at && (a.review_status ?? 'unconfirmed') === value)
   const items = all.filter(({ a }) => matches(a, filter))
   const name = (id: string) => data.entities.find(e => e.id === id)?.name ?? id
+  const claim = (f: GraphData['facts'][number]) => claimLabel(f, name)
   const filters: [QueueFilter, string][] = [['unconfirmed', 'Unconfirmed'], ['confirmed', 'Confirmed'], ['retracted', 'Retracted'], ['all', 'All']]
   return <section className="view-page review-queue">
     <header className="view-header"><div><h2>Evidence review</h2><p>Check each observation against its original source before confirming.</p></div>
@@ -37,9 +45,9 @@ export function EvidenceQueue({ data, onOpen }: { data: GraphData; onOpen: (id: 
         const status = a.retracted_at ? 'retracted' : a.review_status ?? 'unconfirmed'
         return <button className="review-queue-item" key={a.id} onClick={() => onOpen(a.id)}>
           <span className={`review-badge ${status}`}>{status === 'confirmed' ? <CheckCircle2 size={12} /> : <CircleDashed size={12} />}{status}</span>
-          <span className="review-body"><strong>{name(f.subject_id)} <em>{f.predicate}</em> {name(f.object_id)}</strong>
+          <span className="review-body"><strong>{claim(f)}</strong>
             <span className="review-observation">{a.observation || a.note || 'Observation still needed'}</span>
-            <small><span className={`stance ${a.stance}`}>{a.stance}</span> · {periodLabel(a.valid_from, a.valid_to)} · {data.sources.find(s => s.id === a.source_id)?.title ?? 'Source missing'}</small></span>
+            <small><span className={`stance ${a.stance}`}>{a.stance === 'supports' ? 'Supports' : 'Refutes'}</span> · {periodLabel(a.valid_from, a.valid_to)} · {data.sources.find(s => s.id === a.source_id)?.title ?? 'Source missing'}</small></span>
         </button>
       })}
       {!items.length && <div className="view-empty"><ShieldCheck size={22} /><p>No evidence in this view.</p></div>}
@@ -80,7 +88,7 @@ function Reader({ data, evidence, actions, onCommand, onClose, onCopy }: { data:
   const dirty = editing || sourceEditing
   const status = evidence.retracted_at ? 'retracted' : evidence.review_status ?? 'unconfirmed'
   return <div className="evidence-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) onClose() }}><section className={`evidence-reader ${wide ? 'wide' : ''}`} role="dialog" aria-modal="true" aria-label="Evidence reader">
-    <header className="reader-head"><div className="reader-title"><span className="eyebrow">Evidence</span><h2>{name(fact.subject_id)} <em>{fact.predicate}</em> {name(fact.object_id)}</h2></div>
+    <header className="reader-head"><div className="reader-title"><span className="eyebrow">Evidence</span><h2>{claimLabel(fact, name)}</h2></div>
       <button className="icon-button" onClick={() => setWide(!wide)} aria-label={wide ? 'Narrow' : 'Expand'} title={wide ? 'Narrow' : 'Expand'}>{wide ? <Minimize2 size={16} /> : <Maximize2 size={16} />}</button>
       <button className="icon-button" aria-label="Close evidence reader" onClick={onClose}><X size={18} /></button></header>
     <div className="evidence-summary"><span className={`review-badge ${status}`}>{status === 'confirmed' ? <CheckCircle2 size={12} /> : <CircleDashed size={12} />} {status}</span><span className={`stance ${evidence.stance}`}>{evidence.stance === 'supports' ? 'Supports claim' : 'Refutes claim'}</span><span className="muted">{periodLabel(evidence.valid_from, evidence.valid_to)}</span></div>

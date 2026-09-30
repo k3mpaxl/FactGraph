@@ -1,22 +1,51 @@
-# FactGraph MVP — Browser-Boards mit REST und MCP
+# FactGraph — gemeinsame Incident-Analyse als Beweisgraph
 
-FactGraph speichert Boards und Aktionen **ausschließlich im IndexedDB des Browsers**. Der lokale FastAPI-Server liefert die Oberfläche aus, stellt REST und FastMCP bereit und verteilt WebSocket-Nachrichten. Er speichert keine Board-Daten. Es gibt kein Login und keine externe Datenbank.
+FactGraph ist ein leichtgewichtiger **Relay-Dienst**, mit dem mehrere Analystinnen und Analysten zusammen mit **KI-Agenten** größere Sicherheitsvorfälle bearbeiten. Der Vorfall wird als **Graph** modelliert: Entitäten (IPs, Konten, Service Principals, Geräte, Key Vaults, Repositories …), Beziehungen und Ereignisse zwischen ihnen und zu jeder Aussage die **Belege** aus Logs, KQL-Ergebnissen oder Dateien. Menschen arbeiten im Browser, Agents über **MCP** oder **REST** – alle im selben Board, live synchronisiert.
+
+## Die Idee
+
+Bei einem größeren Incident entstehen schnell hunderte Spuren: Anmeldungen, Zugriffe, Prozesse, Cloud-Operationen. Wer hat was mit welcher Identität von wo getan – und woher wissen wir das? FactGraph beantwortet diese Frage als Graph und trennt dabei konsequent:
+
+- **Was behauptet wird** (eine Kante oder ein Ereignis im Graphen),
+- **womit es belegt ist** (Primärquelle, konkrete Fundstelle, Beobachtung, Zeitraum) und
+- **ob es geprüft wurde** (unbestätigt, bestätigt, widerlegt, zurückgezogen).
+
+KI-Agenten recherchieren Logs, werten Abfragen aus und tragen Funde mit Belegen ein. Analysten sehen dieselben Einträge sofort im Graphen, prüfen sie gegen das Original und bestätigen oder widersprechen. So wächst ein gemeinsames, nachvollziehbares Lagebild, statt dass Ergebnisse in Chats, Tickets und Tabellen verstreut sind.
+
+## Architektur: Relay statt Datenbank
+
+```text
+ Analyst A (Browser)          Analyst B (Browser)
+  IndexedDB ◄──────┐          ┌──────► IndexedDB
+                   │ WebSocket│
+             ┌─────┴──────────┴─────┐
+             │   FactGraph-Server   │   speichert keine Board-Daten
+             │  Relay · REST · MCP  │
+             └─────┬──────────┬─────┘
+                   │ REST     │ MCP
+            Skripte/Importe   KI-Agent (VS Code, Claude Code …)
+```
+
+- **Die Daten liegen ausschließlich in den Browsern** (IndexedDB). Jede Änderung ist eine Aktion mit ID und logischer Uhr; alle geöffneten Browser eines Boards tauschen diese Aktionen über den Server aus und berechnen daraus denselben Graphen.
+- **Der Server speichert nichts.** Er liefert die Oberfläche aus, verteilt Aktionen in Echtzeit und stellt REST und MCP bereit. Es gibt keine externe Datenbank und kein Login.
+- **REST und MCP schreiben über einen geöffneten Browser.** Ein Aufruf wird an einen Browser mit dem Board weitergereicht und erst nach dessen Speicherbestätigung beantwortet. Ohne geöffnetes Board antwortet die API mit `409`.
+- **Folge:** Ein Board existiert, solange mindestens ein Browser es hält. Ein neues Gerät erhält die Daten nur, während ein solcher Browser verbunden ist. Wer Browserdaten löscht, löscht die Boards – regelmäßig als JSON exportieren (Board-Menü).
 
 ## Start
 
-Mit Docker:
+Mit Docker Hub (amd64 und arm64):
+
+```bash
+docker run --rm -p 8080:8080 k3mpaxl/factgraph:latest
+```
+
+Mit Docker Compose aus dem Repository:
 
 ```bash
 docker compose -f deploy/compose.yaml up --build
 ```
 
-Mit einem veröffentlichten Docker-Hub-Image:
-
-```bash
-docker run --rm -p 8080:8080 <DOCKERHUB_USERNAME>/factgraph:latest
-```
-
-Oder direkt mit Python 3.11+ und Node.js 20+:
+Direkt mit Python 3.11+ und Node.js 20+:
 
 ```bash
 python3 -m venv .venv
@@ -25,116 +54,123 @@ cd web && npm ci && npm run build && cd ..
 .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8080
 ```
 
-- Oberfläche: [http://127.0.0.1:8080](http://127.0.0.1:8080)
-- REST-Dokumentation: [http://127.0.0.1:8080/docs](http://127.0.0.1:8080/docs)
+- Oberfläche: <http://127.0.0.1:8080>
+- REST-Dokumentation: <http://127.0.0.1:8080/docs>
 - MCP-Endpunkt: `http://127.0.0.1:8080/mcp/` (Streamable HTTP)
 
-Von einem anderen Gerät im selben LAN `http://<LAN-IP-des-Servers>:8080/boards/<BOARD-UUID>` öffnen. Auf diesem Rechner kann die LAN-IP zum Beispiel mit `ipconfig getifaddr en0` ermittelt werden. Für Docker `FACTGRAPH_BIND_IP=0.0.0.0 docker compose -f deploy/compose.yaml up --build` verwenden. Die Anwendung hat keine Anmeldung; den Port daher nur in einem vertrauenswürdigen Netz freigeben. Ein Browser mit dem Board muss verbunden bleiben, damit neue Geräte die im Browser gespeicherten Aktionen empfangen können.
+Jede Board-URL enthält eine UUID (`/boards/<uuid>`). Das **Board-Menü** oben links kopiert den Link, legt neue Boards an und listet die Boards dieses Browsers. Kollegen im selben Netz öffnen `http://<Server-IP>:8080/boards/<uuid>`. Compose bindet standardmäßig nur `127.0.0.1`; für das LAN:
 
-Die Board-URL enthält eine UUID. Das **Board-Menü** oben links kopiert den Link, legt neue Boards an und zeigt frühere Boards im selben Browser.
+```bash
+FACTGRAPH_BIND_IP=0.0.0.0 docker compose -f deploy/compose.yaml up -d
+```
 
-## Oberfläche
+> **Sicherheit:** Es gibt keine Anmeldung. Wer den Server erreicht und einen Board-Link kennt, kann das Board lesen und ändern. FactGraph nur in vertrauenswürdigen Netzen oder hinter einem Auth-Proxy betreiben.
 
-Die Oberfläche ist auf maximale Graph-Fläche ausgelegt: eine schmale Kopfleiste mit Board-Menü, Ansichten (Graph, Timeline, Evidence review, Activity), Suche, Undo/Redo, **Create** und API/MCP. Links lässt sich der **Entity-Explorer** (nach Typ gruppiert, mit Suche und Beziehungsanzahl) einblenden, rechts erscheint der **Inspector** nur bei einer Auswahl. Hell- und Dunkelmodus folgen dem System und lassen sich umschalten.
+## Arbeiten im Graphen
 
-Für große Graphen:
+### Oberfläche
 
-- **Fokus**: Eine ausgewählte Entität hebt ihre direkten Nachbarn hervor, alles andere tritt zurück (Fadenkreuz in der Canvas-Leiste).
-- **Springen**: `Cmd/Ctrl+K` öffnet die Command-Palette; ein Treffer wird ausgewählt und mit Nachbarn ins Bild gezoomt. Enter in der Suche springt zum ersten Treffer. Im Inspector führen Beziehungen und Nachbarn per Klick weiter.
-- **Level of Detail**: Kantenbeschriftungen erscheinen erst ab mittlerem Zoom, Details der Knoten erst beim Hineinzoomen. Kanten docken am Knotenrand an; parallele Beziehungen werden gebogen.
-- **Minimap** schaltet sich ab 60 Knoten automatisch ein; **Arrange** ordnet Graph oder Auswahl mit ELK an.
-- **Status-Filter** (oben rechts im Graph) und **Evidence-Zeitfenster** (`T`) filtern Kanten nach Prüfstatus und Zeitraum.
+- Schmale Kopfleiste mit Board-Menü, Ansichten (**Graph**, **Timeline**, **Evidence review**, **Activity**), Suche, Undo/Redo, **Create** und API/MCP. Links der einklappbare **Entity-Explorer** (nach Typ gruppiert), rechts der **Inspector**, der nur bei einer Auswahl erscheint.
+- Heller Modus ist Standard, der dunkle Modus lässt sich per Mond-Symbol einschalten und bleibt gespeichert.
+- Beim ersten Besuch fragt FactGraph nach dem Anzeigenamen, der anderen Analysten und in der Historie erscheint.
+- Das **?** oben rechts erklärt, wo die Daten liegen, zeigt den belegten Speicher, kann den Browser um dauerhafte Speicherung bitten, bietet den JSON-Export an und nennt die Versionen von App und Server. Der zweite Reiter listet alle Tastenkürzel.
 
-| Taste | Aktion |
+### Entitäten, Beziehungen, Belege
+
+- Entität anlegen: **Add entity** (Typ auswählen oder auf die Fläche ziehen), Doppelklick auf freie Fläche oder `N`.
+- Verbinden: den rechten Anfasser eines Knotens auf einen anderen ziehen – oder auf freie Fläche, um Ziel und Beziehung in einem Schritt anzulegen.
+- Doppelklick auf einen Titel benennt um; Rechtsklick bietet Typ/Farbe, Zusammenführen, ID kopieren, Fixieren, Löschen, Inhalt einklappen und Gruppen-Ausnahme.
+- Der Inspector zeigt Beziehungen, Kennungen und Belege und führt per Klick zu Nachbarn weiter. **Copy context for agent** kopiert IDs und Kontext für einen Agenten-Chat.
+- Lange Kantenbeschriftungen werden gekürzt; Mouseover oder Auswahl zeigt sie vollständig.
+
+### Große Graphen
+
+- **Fokus:** Eine Auswahl hebt ihre direkten Nachbarn hervor, der Rest tritt zurück.
+- **Springen:** `Cmd/Ctrl+K` öffnet die Command-Palette; ein Treffer wird ausgewählt und mit Nachbarn ins Bild gezoomt.
+- **Level of Detail:** Beschriftungen und Knotendetails erscheinen erst beim Hineinzoomen; Kanten docken am Knotenrand an, parallele Beziehungen werden gebogen.
+- **Minimap** ab 60 Knoten automatisch.
+- **Arrange:** bis 150 Knoten als gerichteter Fluss (links → rechts, ↓ für oben → unten), darüber **organisch** (Kräfte-Layout: Verbundenes bildet Cluster, Karten überlappen nicht; auch direkt über das Knoten-Symbol wählbar). 1.100 Knoten dauern rund zwei Sekunden. Fixierte Knoten behalten ihre Position.
+- **Status-Filter** und **Evidence-Zeitfenster** (`T`) filtern Kanten nach Prüfstatus und Zeitraum; das Zeitfenster lässt sich Schritt für Schritt abspielen.
+
+### Maus, Trackpad, Tastatur
+
+| Eingabe | Aktion |
 | --- | --- |
+| Mausrad, Trackpad-Pinch | Zoomen |
+| Rechte Maustaste ziehen, Trackpad mit zwei Fingern wischen, `Leertaste` + ziehen | Ansicht verschieben |
+| `Shift` + Mausrad | Seitwärts verschieben |
+| Linke Maustaste auf freier Fläche ziehen | Bereich auswählen |
 | `Cmd/Ctrl+K` | Command-Palette / Entität suchen |
 | `/` | Suche fokussieren |
-| `N` | Neue Entität in der Mitte |
+| `N` | Neue Entität |
 | `F` | Graph einpassen bzw. Auswahl zentrieren |
+| `G` | Auswahl gruppieren |
 | `1`–`4` | Ansicht wechseln |
-| `E` / `T` | Explorer / Zeitfenster umschalten |
+| `E` / `T` | Explorer / Zeitfenster |
 | `Cmd/Ctrl+Z`, `Shift+Cmd/Ctrl+Z` | Undo / Redo |
 | `Entf` | Auswahl löschen |
-| Mausrad / Pinch | Zoomen |
-| Rechte Maustaste ziehen (oder `Leertaste` + ziehen) | Ansicht verschieben |
-| Linke Maustaste ziehen | Bereich auswählen |
-| `G` | Mehrfachauswahl gruppieren |
-| `?` | Alle Tastenkürzel |
+| `?` | Hilfe und Tastenkürzel |
 
-## Ereignisse, Ebenen und Gruppen (ab 0.4.1)
+## Ereignisse, Ebenen und Gruppen
 
 ### Ereignisse mit mehreren Beteiligten
 
-„Angreifer verwendet IP a.a.a.a und Service Principal B und listet Key Vault C auf“ ist **ein** Ereignis, keine drei Kanten. Eine **Activity** hat eine Operation (`listed secrets`), optional eine ATT&CK-Technik, einen Zeitraum und Beteiligte mit Rollen: `actor`, `identity`, `source`, `tool`, `via`, `target`, `other`. Belege hängen am ganzen Ereignis; Review, Status, Timeline und Zeitfenster funktionieren wie bei Beziehungen. Im Graph erscheint die Activity als Raute mit beschrifteten Speichen, in der Ebenen-Leiste lässt sie sich als einfache Kante darstellen.
+„Angreifer verwendet IP a.a.a.a und Service Principal B und listet Key Vault C auf“ ist **ein** Ereignis, keine drei Kanten. Eine **Activity** hat eine Operation (`listed secrets`), optional eine MITRE-ATT&CK-Technik, einen Zeitraum und Beteiligte mit Rollen:
 
-- UI: **Create → Activity…**, Command-Palette oder Log-Import im Modus **Activities · several roles** (Spalte → Rolle → Typ, z. B. `CallerIPAddress → source → IP`, `AppId → identity → Service Principal`, `ResourceId → target → Key Vault`). Zeilen mit gleicher Operation und gleichen Beteiligten ergeben eine Activity, jede Zeile ist ein eigener Beleg mit Zeitstempel.
-- REST/MCP: `POST /activities` (MCP `create_activity`), `GET/PATCH/DELETE /activities/{id}`, `POST /imports/activities`. Belege über die bestehenden `/relations/{id}/evidence`-Endpunkte.
-- Die Zuordnung „IP gehört zum Angreifer“ ist eine eigene Aussage mit eigenem Beleg.
+| Rolle | Bedeutung |
+| --- | --- |
+| `actor` | wer handelt (Angreifer, Benutzer) |
+| `identity` | verwendete Identität (Konto, Service Principal) |
+| `source` | Herkunft (IP, Gerät) |
+| `tool` | Werkzeug oder Prozess |
+| `via` | Zwischensystem |
+| `target` | worauf gehandelt wurde |
+| `other` | sonstige Beteiligte |
 
-### Ebenen
+Belege hängen am ganzen Ereignis; Review, Status, Timeline und Zeitfenster funktionieren wie bei Beziehungen. Im Graphen erscheint die Activity als Raute mit beschrifteten Speichen, unter **Layers** auch als einfache Kante. Die Zuordnung „diese IP gehört zum Angreifer“ ist eine eigene Beziehung mit eigenem Beleg.
 
-Jeder Typ gehört zu einer Ebene: Identity & access, Network, Endpoint, Workload (Kubernetes), Cloud control plane, Data & storage, Code & CI, Other. Die Ebene wird aus dem Typ abgeleitet und lässt sich pro Typ (Typ-Editor) oder pro Entität (Inspector → Details) überschreiben. Die Schaltfläche **Layers** blendet Ebenen ein und aus (Verbindungen zu ausgeblendeten Ebenen zeigt ein Zähler am Knoten), zeichnet Bahnen und ordnet den Graphen **nach Ebenen** an. Kombinationen lassen sich als **Perspektive** speichern, werden mit dem Board synchronisiert und sind per `?lens=<id>` verlinkbar.
+### Ebenen und Perspektiven
 
-**Inhalt einklappen**: Hat ein Device oder Cluster `contains`/`runs`/`hosts`-Beziehungen, klappt der Kontextmenüeintrag **Collapse contents** alles darin Enthaltene in den Knoten („12 inside“). Verbindungen der Inhalte laufen dann gebündelt über den Container.
+Jeder Typ gehört zu einer Ebene: **Identity & access**, **Network**, **Endpoint**, **Workload** (Kubernetes, Container), **Cloud control plane** (Subscriptions, Key Vaults), **Data & storage** (Buckets, Blobs, Datenbanken), **Code & CI**, **Other**. Die Ebene wird aus dem Typ abgeleitet und lässt sich pro Typ oder pro Entität überschreiben.
+
+**Layers** blendet Ebenen ein und aus (Verbindungen in ausgeblendete Ebenen zählt ein Hinweis am Knoten), zeichnet Bahnen und ordnet **nach Ebenen** an. Kombinationen lassen sich als **Perspektive** speichern, werden mit dem Board synchronisiert und sind per `?lens=<id>` verlinkbar.
+
+**Inhalt einklappen:** Hat ein Gerät oder Cluster `contains`-, `runs`- oder `hosts`-Beziehungen, klappt der Kontextmenüeintrag **Collapse contents** alles Enthaltene in den Knoten („12 inside“).
 
 ### Gruppen
 
-Eine Gruppe bündelt viele Entitäten zu einem Knoten, z. B. 699 von 700 Repositories. Mitglieder sind explizit (Mehrfachauswahl → `G`) oder per Regel (Typ und/oder Textmuster); neue passende Entitäten kommen automatisch hinzu. **Take out** (Kontextmenü oder Inspector) hält einzelne Entitäten sichtbar außerhalb der Gruppe. Kanten zur Gruppe werden gebündelt und zeigen die Anzahl (`cloned ×699`), der Statusbalken zeigt die Prüfstatus der gebündelten Beziehungen. **Groups** in der Canvas-Leiste schlägt Gruppen aus Entitäten gleichen Typs mit identischen Verbindungen vor und nennt die Ausreißer, die sich unterscheiden. Gruppen und Perspektiven ändern nur die Ansicht, nie Aussagen oder Belege. REST/MCP: `/groups` (MCP `create_group`, `update_group`), `/perspectives`, `GET /api/layers`.
+Eine Gruppe bündelt viele Entitäten zu einem Knoten – etwa 699 von 700 Repositories, bei denen dasselbe passiert ist. Mitglieder sind explizit (Mehrfachauswahl, `G`) oder per Regel (Typ und/oder Textmuster); neue passende Entitäten kommen automatisch hinzu. **Take out** hält einzelne Entitäten außerhalb der Gruppe sichtbar – typischerweise genau die, bei denen etwas anderes passiert ist. Kanten zur Gruppe werden gebündelt und gezählt (`cloned ×699`). **Groups** in der Canvas-Leiste schlägt Gruppen aus Entitäten gleichen Typs mit identischen Verbindungen vor und nennt die Ausreißer. Beim Aufklappen zoomt die Ansicht auf die Mitglieder. Gruppen und Perspektiven ändern nur die Ansicht, nie Aussagen oder Belege.
 
-### Export als PNG/SVG (ab 0.4.2)
+## Belege und Prüfung
 
-Die Schaltfläche **Export image** (Bild-Symbol in der Canvas-Leiste), das Board-Menü und die Command-Palette exportieren den Graphen so, wie er gerade zu sehen ist: mit Filtern, ausgeblendeten Ebenen, Gruppen, Ereignissen und Bahnen.
+- Eine **Quelle** beschreibt die Herkunft: Titel, Referenz (Log-Export, `pfad@commit`, Portal-Link), Originalzeilen als Auszug und – bei Abfragen – die KQL. `primary` sind Originallogs, Telemetrie und Dateien; `secondary` ist Kontext und nie Beweis. **FactGraph führt keine Abfragen aus**; Abfrage und gelieferte Ergebnisse werden gemeinsam als Herkunft gespeichert.
+- Ein **Beleg** enthält Beobachtung, Fundstelle (Event-ID, CorrelationId, Ergebniszeile, Datei:Zeile), Zeitraum der Aktivität, Richtung (`supports`/`refutes`) und Konfidenz.
+- Neue Belege sind **unbestätigt**. Bestätigen setzt eine Primärquelle mit Referenz und Originalauszug, eine konkrete Fundstelle, eine Beobachtung und eine Prüfnotiz voraus und ist an die aktuelle Revision gebunden. Ändern sich Beleg, Aussage oder Quelle, wird die Bestätigung zurückgesetzt.
+- Der Status einer Beziehung ergibt sich nur aus aktiven, bestätigten Belegen: **Supported**, **Refuted**, **Disputed** (beides) oder **Unknown**. Zurückgezogene Belege bleiben in der Historie.
+- Beziehungen mit bestätigten Belegen lassen sich nicht per Ziehen umhängen („Ends locked“); eine Umbenennung fragt vorher nach.
+- **Evidence review** listet offene Belege; der Evidence-Reader zeigt Beobachtung, Quelle, Originalergebnisse als durchsuchbare Tabelle, Abfrage und Historie und erlaubt Bearbeiten, Bestätigen, Zurückziehen und Wiederherstellen.
+- Die **Timeline** zeigt aktive Belege chronologisch in UTC. `valid_from`/`valid_to` beschreiben den Zeitraum der Aktivität, nicht den Zeitpunkt der Erfassung; unbekannte Zeiten stehen am Ende.
 
-- **SVG** ist eine eigenständige Vektordatei ohne externe Schriften oder Stylesheets; Texte bleiben in Illustrator, Inkscape, Word oder PowerPoint editierbar.
-- **PNG** in 1×, 2× oder 3× Auflösung. Sehr große Graphen werden automatisch auf die Größengrenzen des Browsers reduziert (Hinweis im Toast); SVG hat keine Grenze.
-- Bereich: ganzer Graph, sichtbarer Ausschnitt oder Auswahl. Theme hell/dunkel unabhängig vom aktuellen Theme, optional transparenter Hintergrund, Titel mit Filtern und Datum, Status-Legende mit Zählern. **Copy** legt das Bild direkt in die Zwischenablage.
-- Agents: `POST /api/boards/{id}/export` bzw. MCP `export_image` mit `format` (`svg`/`png`), `theme`, `scale`, `perspective_id`, `title`. Die Antwort enthält `content` (SVG-Text bzw. PNG als Base64):
+## KI-Agenten anbinden (MCP und REST)
 
-```bash
-curl -s -X POST "http://127.0.0.1:8080/api/boards/BOARD_UUID/export" \
-  -H "X-FactGraph-Token: TOKEN" -H "Content-Type: application/json" \
-  -d '{"format":"png","theme":"light","scale":2}' | jq -r .content | base64 -d > graph.png
-```
+Beim Öffnen eines Boards erzeugt der Browser ein zufälliges **Sitzungs-Token**. REST und MCP erwarten es im Header `X-FactGraph-Token` (MCP akzeptiert zusätzlich den Parameter `session_token`). Das Token koppelt den Aufruf an diesen Browser-Tab; es ist kein Benutzerkonto. Ein neuer Tab oder Browser erzeugt ein neues Token.
 
-### Synchronisation und Konflikte
+**Connect an agent** (API/MCP-Menü oder Command-Palette) liefert kopierfertige Snippets:
 
-Alle Änderungen sind Aktionen mit logischer Uhr; jeder Browser sortiert sie gleich (Uhr, Akteur, ID), daher ergibt jede Ankunftsreihenfolge denselben Graphen. Gleichzeitige Änderungen desselben Feldes entscheidet diese Reihenfolge deterministisch. Wird eine Entität zusammengeführt, während ein anderer Browser (auch offline) noch mit der alten ID arbeitet, landen dessen neue Beziehungen, Activity-Rollen, Kennungen und Gruppenänderungen beim Ziel der Zusammenführung statt verloren zu gehen. Gruppenmitglieder lassen sich inkrementell ändern (`add_members`, `exclude` …), damit gleichzeitige Änderungen zweier Analysten beide erhalten bleiben. Quellen und Belege prüfen `expected_revision` und melden Konflikte mit HTTP 409.
+- `.vscode/mcp.json` für VS Code/GitHub Copilot – standardmäßig fragt VS Code beim Start nach dem Token, sodass die Datei ins Repository darf; optional mit eingebettetem Token,
+- den Befehl für Claude Code (`claude mcp add --transport http factgraph … --header "X-FactGraph-Token: …"`),
+- Endpunkt und Header für andere Clients,
+- eine erste Nachricht mit der Board-ID für den Agenten.
 
-## Untersuchung im Graphen
+Im Repository liegt außerdem [.vscode/mcp.json](.vscode/mcp.json); in VS Code **MCP: List Servers** → `factgraph` → Start. Von einem anderen Gerät `127.0.0.1` durch die IP des Servers ersetzen.
 
-Ein Knoten kann etwa eine IP, Datei im Repository, Umgebungsvariable, ein Credential oder eine Azure-Ressource sein. Eine gerichtete Kante beschreibt den Zusammenhang. Quellen und Aussagen belegen oder widerlegen ihn. Beispiel:
+### MCP-Tools
 
-```text
-IP --accessed--> repo/.env --enthält--> Azure-Credential
-Azure-Credential --ermöglicht Zugriff auf--> Blob-Storage
-```
+Standardmäßig zeigt der Server ein **kompaktes Agent-Profil mit 24 Tools** (rund 9.000 Tokens Tool-Beschreibungen). Weniger Tools bedeuten weniger Kontextverbrauch und bessere Tool-Wahl.
 
-The canvas uses React Flow with typed entity cards and visible connection handles:
-
-- Drag a type from **Add entity** onto the canvas, or double-click empty space. Drag a node's right handle to another node, or onto empty space to create the next entity and relation together.
-- Double-click a title to rename. Right-click for type/color editing, merge, copy ID, pin, or delete. **Arrange** uses ELK; pinned nodes retain their positions. Multi-select with Shift, align, distribute, and move groups.
-- **Undo / Redo** treats an import or group movement as one action. Browser Back changes the active view. The header is 38 px high; board/import/export and integration actions live in compact menus.
-- The evidence window uses observation times, includes an explicit undated toggle, and steps through event boundaries. Confirmed evidence within the selected interval determines the visible relationship status.
-
-### Evidence review
-
-New and legacy evidence starts **Unconfirmed**. Open **Evidence review** to inspect the claim, observation, event locator, original source/results, KQL query, interpretation, and history. The reader supports editing, confirmation/unconfirmation, retract/restore, and copying IDs/context for an agent. Original JSON results and the review queue are paginated.
-
-Confirmation requires a **primary source**, source reference, stored results/excerpt, a concrete locator, observation and review note. Updating evidence, its claim, or its source invalidates confirmation. Revisions prevent stale evidence/source edits and reviews. Supports/Refutes describes the evidence direction; Confirmed/Unconfirmed describes its review. Only active confirmed evidence contributes to Supported/Refuted/Disputed.
-
-The shared session token does not prove that a reviewer is human. Agents are instructed to submit unconfirmed findings for analyst review; enforced human-only approval would require separate permissions.
-
-## REST und MCP
-
-**Ein Browser mit dem Board muss geöffnet und verbunden sein.** REST und MCP senden Schreibaufträge an diesen Browser und antworten erst nach dessen IndexedDB-Bestätigung. Ohne Browser antwortet REST mit `409`. So bleibt die Architektur ohne Server-Datenbank erhalten.
-
-Beim Öffnen eines Boards erzeugt der Browser ein zufälliges Sitzungs-Token. REST und MCP erwarten es im Header `X-FactGraph-Token`; MCP akzeptiert zusätzlich den Tool-Parameter `session_token`. Nur ein damit verbundenes Browser-Board darf Aktionen ausführen. Das Token ist eine lokale Sitzungskopplung, kein Benutzerkonto und kein Ersatz für einen vorgeschalteten Auth-Proxy.
-
-Der MCP-Server zeigt standardmäßig ein **kompaktes Agent-Profil mit 24 Tools** (≈ 9.000 Tokens Tool-Definitionen statt ≈ 22.000). Weniger Tools bedeuten weniger Kontextverbrauch und bessere Tool-Wahl; VS Code/Copilot begrenzt zudem die Gesamtzahl der Tools.
-
-| Aufgabe | MCP-Tool (Agent-Profil) | REST |
+| Aufgabe | MCP-Tool | REST (relativ zu `/api/boards/{id}`) |
 | --- | --- | --- |
-| Graph lesen / Entitäten suchen | `get_graph`, `find_entities` | `GET /graph`, `GET /entities?q=` |
+| Graph lesen, Entitäten suchen | `get_graph`, `find_entities` | `GET /graph`, `GET /entities?q=` |
 | Entitäten | `create_entity`, `update_entity`, `merge_entities`, `delete_entity`, `add_identifier` | `/entities…` |
 | Beziehungen | `create_relation`, `update_relation`, `delete_relation` | `/relations…` |
 | Ereignisse | `create_activity`, `update_activity` | `/activities…` |
@@ -143,168 +179,117 @@ Der MCP-Server zeigt standardmäßig ein **kompaktes Agent-Profil mit 24 Tools**
 | Übersicht und Export | `create_group`, `update_group`, `export_image` | `/groups…`, `/export` |
 | Rückgängig | `undo` | `/undo` |
 
-Pfade relativ zu `/api/boards/{id}`. Die REST-API bleibt vollständig (Typen, Perspektiven, Einzelabfragen, Historie, Redo, rohe Aktionen …). Mit `FACTGRAPH_MCP_TOOLS=full` zeigt der MCP-Server statt des Agent-Profils für jede REST-Operation ein Tool `rest_<operation>` (vollständige Parität, z. B. `rest_create_perspective`). Agents dürfen Belege mit `review_evidence` bestätigen, aber nur mit Primärquelle, konkreter Fundstelle, Beobachtung, aktueller Revision und einer Prüfnotiz, was verglichen wurde.
-
-> **Änderung in 0.4.3:** Die alten MCP-Namen (`board_graph`, `add_entity`, `link_entities`, `add_kql_evidence`, `factgraph_guidelines` …) entfallen. Agent-Konfigurationen verwenden die Namen oben bzw. `rest_*` im Profil `full`.
-
-Docker: `docker run -e FACTGRAPH_MCP_TOOLS=full -p 8080:8080 k3mpaxl/factgraph:latest`.
-
-Beispiel für eine Entität:
+Die REST-API bleibt vollständig (Typen, Perspektiven, Einzelabfragen, Historie, Redo, rohe Aktionen …). Mit `FACTGRAPH_MCP_TOOLS=full` zeigt der MCP-Server stattdessen für jede REST-Operation ein Tool `rest_<operation>` mit identischen Parametern und Validierung:
 
 ```bash
-curl -X POST 'http://127.0.0.1:8080/api/boards/BOARD_UUID/entities' \
-  -H 'Content-Type: application/json' \
-  -d '{"name":"repo/.env","kind":"Datei"}'
+docker run -e FACTGRAPH_MCP_TOOLS=full -p 8080:8080 k3mpaxl/factgraph:latest
 ```
 
-Die Antwort enthält die Entitäts-ID. Mit zwei IDs eine Kante erstellen:
+Beim Verbinden überträgt der Server verbindliche **Arbeitsregeln** an den Agenten (auch per `GET /api/guidelines`): erst lesen und vorhandene IDs verwenden; konkrete Entitäten; spezifische Verben; bei drei oder mehr Beteiligten ein Ereignis; jede wichtige Aussage mit Primärbeleg; Unsicherheit und Widerspruch erhalten; Importe zuerst als `dry_run`. Agents dürfen Belege bestätigen, aber nur nach Prüfung des Originals und mit Prüfnotiz.
+
+### REST-Beispiele
 
 ```bash
-curl -X POST 'http://127.0.0.1:8080/api/boards/BOARD_UUID/relations' \
-  -H 'Content-Type: application/json' \
-  -d '{"subject_id":"IP_UUID","predicate":"accessed","object_id":"FILE_UUID","note":"Zeile aus Access-Log"}'
+TOKEN=...   # aus "Connect an agent" oder "Copy session token"
+BOARD=...   # Board-UUID
+
+curl -X POST "http://127.0.0.1:8080/api/boards/$BOARD/entities" \
+  -H "X-FactGraph-Token: $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"name":"203.0.113.7","kind":"IP"}'
+
+curl -X POST "http://127.0.0.1:8080/api/boards/$BOARD/activities" \
+  -H "X-FactGraph-Token: $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"operation":"listed secrets","participants":[
+        {"entity_id":"ACTOR_ID","role":"actor"},{"entity_id":"IP_ID","role":"source"},
+        {"entity_id":"SP_ID","role":"identity"},{"entity_id":"KV_ID","role":"target"}],
+       "valid_from":"2026-09-28T10:42:07Z","source_id":"SOURCE_ID",
+       "observation":"SecretList from 203.0.113.7 as sp-deploy-prod","locator":"CorrelationId=7f3a"}'
 ```
 
-Für große Mengen `POST /api/boards/{id}/actions` mit `{"actions":[{"id":"UUID","type":"entity.add","payload":{...}}, ...]}` verwenden. Die REST-API verarbeitet in Chargen von 200, mit gebündelter Neuzeichnung. Eigene Aktions-UUIDs machen Wiederholungen idempotent. Unterstützte Typen stehen in [board.ts](web/src/board.ts). Der Endpunkt nimmt bis zu 50.000 Aktionen pro Anfrage an. Für Logdaten ist der Import-Endpunkt einfacher.
-
-FastMCP ist unter `/mcp/` eingebunden. Ein lokaler Client kann sich so verbinden:
+Python mit FastMCP:
 
 ```python
 from fastmcp import Client
 
 async with Client("http://127.0.0.1:8080/mcp/") as client:
     result = await client.call_tool("create_entity", {
-        "board_id": "BOARD_UUID", "session_token": "TOKEN_FROM_BOARD_UI",
-        "body": {"name": "Azure-Credential", "kind": "Credential"}
+        "board_id": "BOARD_UUID", "session_token": "TOKEN",
+        "body": {"name": "Azure-Credential", "kind": "Credential"},
     })
-print(result.data)
+    print(result.data)
 ```
 
-Der MCP-Server liefert zusätzlich verbindliche Arbeitsregeln: Nodes sollen konkrete Entities sein, gerichtete Beziehungen sollen nicht erfunden werden, wichtige Claims brauchen Evidence, primäre Quellen (Logs, KQL-Ergebnisse, Repository-Dateien und First-Party-Telemetrie) haben Vorrang und sekundäre Quellen dienen nur als Kontext. Unsicherheit, Widerspruch, Confidence und Evidence-Zeiträume werden erhalten. Diese Regeln stehen in den Server-Instructions (werden beim Verbinden automatisch übertragen) und über REST unter `GET /api/guidelines`.
+PATCH-artige Aufrufe ändern nur übergebene Felder; ein explizites `null` leert ein Feld. Quellen und Belege akzeptieren `expected_revision`; bei gleichzeitiger Änderung antwortet die API mit `409`. Für große Mengen gibt es `POST /actions` (bis 50.000 Aktionen, eigene Aktions-IDs machen Wiederholungen idempotent) und die Import-Endpunkte. Es gibt bewusst keinen Endpunkt zum Auflisten aller Boards.
 
-### VS Code / GitHub Copilot
+## Logs und KQL-Ergebnisse importieren
 
-Im Repository liegt bereits [.vscode/mcp.json](.vscode/mcp.json). VS Code öffnen, den Ordner `/Users/gregor/Projekte/FactGraph` laden und in der Command Palette **MCP: List Servers** aufrufen. Den Server `factgraph` starten; danach stehen die 24 Agent-Tools im Agent-Tools-Picker zur Verfügung. Alternativ **MCP: Open Workspace Folder Configuration** öffnen und diesen Eintrag einfügen:
+**Import logs / KQL** (Board-Menü) übernimmt CSV, JSON-Arrays oder JSONL bis 20 MB und 50.000 Zeilen, zuerst als Vorschau:
+
+- **Relationships · 2 columns:** eine Quell- und eine Zielspalte (z. B. `IPAddress → accessed → FilePath`), gängige Spaltennamen werden erkannt.
+- **Activities · several roles:** mehrere Spalten mit Rollen, z. B. `CallerIPAddress → source → IP`, `AppId → identity → Service Principal`, `ResourceId → target → Key Vault`, die Operation fest oder aus einer Spalte (`OperationName`).
+
+Jede Zeile wird ein eigener, unbestätigter Beleg mit ihrem Zeitstempel (`TimeGenerated`, `timestamp`, `StartTime`/`EndTime` …). Gleiche Operation und gleiche Beteiligte ergeben ein gemeinsames Ereignis. Bestehende Entitäten werden wiederverwendet; ein erneuter Import derselben Zeilen verdoppelt nichts. Für Skripte: `POST /imports/file` (Multipart), `/imports/activity`, `/imports/kql` und `/imports/activities`, jeweils mit `dry_run`.
 
 ```json
 {
-  "servers": {
-    "factgraph": {
-      "type": "http",
-      "url": "http://127.0.0.1:8080/mcp/",
-      "headers": {
-        "X-FactGraph-Token": "${env:FACTGRAPH_TOKEN}"
-      }
-    }
-  }
+  "title": "Key Vault AuditEvent 28.09.",
+  "query": "AzureDiagnostics | where OperationName startswith \"Secret\"",
+  "rows": [{"CallerIPAddress": "203.0.113.7", "AppId": "sp-deploy-prod", "ResourceId": "kv-prod-secrets",
+            "OperationName": "SecretList", "TimeGenerated": "2026-09-28T10:42:07Z"}],
+  "roles": [{"field": "CallerIPAddress", "role": "source", "kind": "IP"},
+            {"field": "AppId", "role": "identity", "kind": "Service Principal"},
+            {"field": "ResourceId", "role": "target", "kind": "Key Vault"}],
+  "operation_field": "OperationName",
+  "dry_run": true
 }
 ```
 
-Vor einem Tool-Aufruf muss die passende Board-URL in einem Browser geöffnet sein. Das Token kann im **API/MCP-Menü** (Stecker-Symbol oben rechts) über **Copy session token** kopiert werden. Für VS Code `FACTGRAPH_TOKEN` auf den kopierten Wert setzen und den MCP-Server neu verbinden. Für REST:
+## Export als PNG oder SVG
+
+**Export image** (Bild-Symbol in der Canvas-Leiste, Board-Menü oder Command-Palette) exportiert den Graphen so, wie er gerade zu sehen ist – mit Filtern, Ebenen, Gruppen und Ereignissen:
+
+- **SVG** als eigenständige Vektordatei; Texte bleiben in Illustrator, Inkscape, Word oder PowerPoint editierbar.
+- **PNG** in 1×, 2× oder 3×; sehr große Graphen werden automatisch auf die Größengrenzen des Browsers reduziert.
+- Bereich: ganzer Graph, sichtbarer Ausschnitt oder Auswahl; helles oder dunkles Theme, transparenter Hintergrund, Titel mit Filtern und Datum, Status-Legende. **Copy** legt das Bild in die Zwischenablage.
+- Agents nutzen `export_image` bzw. `POST /export`; die Antwort enthält `content` als SVG-Text oder Base64-PNG:
 
 ```bash
-curl -X POST 'http://127.0.0.1:8080/api/boards/BOARD_UUID/entities' \
-  -H 'X-FactGraph-Token: TOKEN_FROM_BOARD_UI' \
-  -H 'Content-Type: application/json' \
-  -d '{"name":"Azure-Credential","kind":"Credential"}'
+curl -s -X POST "http://127.0.0.1:8080/api/boards/$BOARD/export" \
+  -H "X-FactGraph-Token: $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"format":"png","theme":"light","scale":2}' | jq -r .content | base64 -d > graph.png
 ```
 
-Für VS Code auf einem anderen Gerät `127.0.0.1` durch die LAN-IP des Servers ersetzen, zum Beispiel `http://10.42.12.221:8080/mcp/`.
+## Synchronisation, Konflikte und Grenzen
 
-## Aktivitätslogs und KQL als Evidence
+- Jeder Browser sortiert alle Aktionen gleich (logische Uhr, Akteur, ID). Deshalb ergibt jede Ankunftsreihenfolge denselben Graphen; gleichzeitige Änderungen desselben Feldes entscheidet diese Reihenfolge überall gleich.
+- Beim Beitreten und Wiederverbinden tauschen Browser ihre Historien aus. Offline vorgenommene Änderungen bleiben lokal und werden nachgeliefert.
+- Wird eine Entität zusammengeführt, während ein anderer Browser noch mit der alten ID arbeitet, landen dessen neue Beziehungen, Ereignis-Rollen, Kennungen und Gruppenänderungen beim Ziel der Zusammenführung, statt verloren zu gehen.
+- Gruppenmitglieder werden inkrementell geändert, damit gleichzeitige Änderungen zweier Analysten beide erhalten bleiben.
+- **Undo** (`Cmd/Ctrl+Z`) nimmt die letzte eigene Aktionsgruppe zurück (ein Import zählt als eine Gruppe) und verweigert das, wenn inzwischen jemand anderes dieselben Datensätze geändert hat. Die **Activity**-Ansicht zeigt alle Aktionen mit Kanal (UI, REST, MCP), Autor und Zeit.
+- Ist kein Browser mit dem Board geöffnet, kann ein neues Gerät es nicht allein aus der UUID wiederherstellen – dafür einen JSON-Export importieren. Ohne Export gehen Boards beim Löschen der Browserdaten verloren.
+- Das Sitzungs-Token belegt nicht, dass ein Mensch prüft. Eine technisch erzwungene menschliche Freigabe bräuchte getrennte Berechtigungen.
 
-**Logs/KQL** importiert CSV, JSON-Arrays oder JSONL direkt in der Oberfläche, ohne Agent. Für Skripte gibt es `POST /api/boards/{id}/imports/file` (Multipart), `/imports/activity` (JSON-Zeilen) und `/imports/kql` (JSON-Zeilen mit `query`). Bis zu 20 MB und 50.000 Zeilen pro Datei sind erlaubt. Quell- und Zielspalten werden für gängige Namen automatisch erkannt oder explizit angegeben. `predicate_field` kann pro Zeile einen anderen Kantentyp liefern; andernfalls gilt der gemeinsame `predicate`. Entitätsarten lassen sich mit `subject_kind` und `object_kind` festlegen.
-
-Beispiel für bereits vorliegende KQL-Ergebnisse:
-
-```json
-{
-  "title": "Access Logs 28.09.",
-  "query": "AccessLogs | project IPAddress, FilePath, TimeGenerated",
-  "rows": [
-    {"IPAddress": "10.0.0.8", "FilePath": "repo/.env", "TimeGenerated": "2026-09-28T10:00:00Z"}
-  ],
-  "subject_field": "IPAddress",
-  "object_field": "FilePath",
-  "subject_kind": "IP",
-  "object_kind": "Datei",
-  "predicate": "accessed"
-}
-```
-
-Der Import legt IP und Datei als Knoten, `IP → accessed → Datei` als Kante, die KQL-Abfrage als Quelle und jede Ergebniszeile als einzelne stützende Aussage an. Bestehende Knoten und Kanten mit gleichem Typ, Namen und Bezeichner werden wiederverwendet. Dieselben Ergebniszeilen können erneut importiert werden, ohne Belege zu verdoppeln. **FactGraph führt KQL nicht aus**; die Abfrage und die gelieferten Ergebnisse werden gemeinsam als Herkunft des Belegs gespeichert.
-
-Weitere Schritte der lateralen Bewegung können aus anderen Logdateien, manuell, per MCP oder REST ergänzt werden. Ein Beleg kann über `/evidence` ausdrücklich widerlegt werden (`"stance":"refutes"`).
-
-## Synchronisierung und Grenzen
-
-- Jede Änderung ist eine Aktion mit UUID und logischer Uhr. Geöffnete Ansichten desselben Boards tauschen beim Beitritt und Wiederverbinden ihre Historien aus; neue Aktionen, Namen und Anwesenheit werden live verteilt. Cursor werden bewusst nicht übertragen, weil viewport-relative Positionen bei unterschiedlichen Graph-Ansichten irreführend sind.
-- Ohne Verbindung bleiben Änderungen im Browser und werden später mit offenen Peers synchronisiert.
-- Wenn kein Browser mit den Board-Daten geöffnet ist, kann ein neues Gerät das Board allein aus der UUID nicht wiederherstellen. Dafür einen zuvor exportierten JSON-Datenstand importieren. Werden Browserdaten gelöscht, ist ohne Export keine Wiederherstellung möglich.
-- **Export** lädt den Aktionsverlauf als JSON; **JSON** kopiert ihn alternativ in die Zwischenablage. **Import** kann auch ältere FactGraph-JSON-Exporte übernehmen. Das Repository enthält keine Board-Datenbank und keine Forschungs-/Beispieldaten.
-- Der Dienst ist standardmäßig nur auf `127.0.0.1` erreichbar. Für andere Geräte im lokalen Netz kann Docker mit `FACTGRAPH_BIND_IP=0.0.0.0 docker compose -f deploy/compose.yaml up --build` gestartet werden. Ohne Authentifizierung kann jeder mit Zugang zum Relay und Board-Link lesen und schreiben.
-
-## GitHub und Docker Hub
-
-Das Repository enthält zwei GitHub-Actions:
-
-- `CI` führt die Python-Tests aus, baut das Frontend und prüft das Docker-Image bei Pushes und Pull Requests.
-- `Publish Docker image` veröffentlicht bei einem Versionstag wie `v0.4.5` oder über **Run workflow** nach Docker Hub.
-
-Dafür im GitHub-Repository die Actions-Secrets `DOCKERHUB_USERNAME` und `DOCKERHUB_TOKEN` anlegen. Der Token sollte ein Docker-Hub-Access-Token mit Schreibrecht für das Image `factgraph` sein. Nach dem Push eines Tags:
+## Entwicklung und Tests
 
 ```bash
-git tag v0.4.5
-git push origin v0.4.5
-```
-
-Das Image ist danach als `DOCKERHUB_USERNAME/factgraph:latest` und mit Versions-/Commit-Tags verfügbar. Für eine LAN-Freigabe beim Start des Compose-Stacks:
-
-```bash
-FACTGRAPH_BIND_IP=0.0.0.0 docker compose -f deploy/compose.yaml up -d
-```
-
-Die Docker-Hub-Tags enthalten `linux/amd64` und `linux/arm64`, damit dasselbe
-Image auf üblichen Linux-Servern und Apple-Silicon-Rechnern startet. Ein
-manueller Multi-Arch-Publish mit unveränderter Version ist ebenfalls möglich:
-
-```bash
-./deploy/publish-multiarch.sh
-```
-
-Für einen anderen Namespace oder Tag können `FACTGRAPH_IMAGE` und
-`FACTGRAPH_VERSION` gesetzt werden.
-
-## Tests
-
-```bash
-.venv/bin/python -m unittest discover -s tests -v
-cd web && npm run build
-```
-
-## Evidenzzeit und Bearbeitung
-
-Die Zeitachse zeigt aktive Belege chronologisch mit Uhrzeit in UTC. Belege derselben Beziehung mit demselben Zeitraum werden als ein Ereignis zusammengefasst. `valid_from` und `valid_to` beschreiben den Evidenzzeitraum; ein einzelner Beginn ist ein Ereigniszeitpunkt. Unbekannte Zeiten stehen am Ende. Erstellungszeiten werden nicht als Ersatz verwendet. Ältere Logimporte werden anhand der originalen JSON-Zeile gelesen, anschließend gelten explizite Gültigkeitszeiten der Beziehung als Rückfall.
-
-Logimporte erkennen `TimeGenerated`, `timestamp`, `Timestamp`, `time`, `event_time` sowie `StartTime`/`EndTime` und `valid_from`/`valid_to`. REST und MCP unterstützen Evidenzzeiträume beim Anlegen von Beziehungen und Belegen.
-
-Entitäten lassen sich im Inspektor über **Edit** umbenennen sowie in Typ, Farbe und Beschreibung ändern oder über **Merge** zusammenführen. Evidence kann direkt im Beleg bearbeitet werden. Vollständige Board-, Entity-, Relationship-, Identifier- und Evidence-IDs lassen sich für Agent-Chats kopieren. **Undo** beziehungsweise `Ctrl/Cmd+Z` nimmt die letzte eigene Aktion über eine synchronisierte Undo-Aktion zurück.
-
-Die Oberfläche verwaltet Boards lokal über ihre UUID. In der Oberfläche kopiert **Copy** den Endpunkt des aktuellen Boards. Die REST-Aufrufe müssen an denselben Server gehen wie die Browser-Verbindung. Ohne geöffneten Browser liefert ein Schreibaufruf `409`; unbekannte API-Pfade liefern `404`. Es gibt bewusst keinen globalen Board-Listing-Endpunkt und kein MCP-Tool zum Auflisten von Boards.
-
-## Shared REST/MCP contracts and tests
-
-With `FACTGRAPH_MCP_TOOLS=full`, every JSON REST operation has a `rest_<operation_id>` MCP tool with the same typed parameters, validation and result; the default agent profile exposes the 24 task tools listed above with the same bodies. For example, `update_evidence` takes `board_id`, `relation_id`, `evidence_id`, and a `body` patch. Explicit `null` clears nullable fields; omitted fields remain unchanged. Multipart file upload is REST-specific; MCP uses the equivalent JSON row import.
-
-Both interfaces cover board-scoped reads, entity/relation/source/evidence CRUD, identifiers, custom types, positions, merge, evidence review/retract/restore, import preview, history, undo and redo. There is no global board listing. Source/evidence PATCH accepts `expected_revision`; review requires current evidence and source revisions. Activity records include UI/REST/MCP channel, actor and action group.
-
-```bash
-python3 -m unittest discover -s tests -v
+.venv/bin/python -m unittest discover -s tests -v   # Backend, REST/MCP-Verträge, Relay
 cd web
 npm ci
-npm test
+npm test                                           # Projektion, Review, Konvergenz, Export, Layout, Wheel
 npx playwright install chromium
-npm run test:e2e
+npm run test:e2e                                   # Browser-Workflows gegen einen echten Server
 ```
 
-Browser tests use temporary board UUIDs on port 18088 and a real HTTP MCP client. They cover analyst/agent review, null patches, cross-board token isolation, two-browser synchronization, reload persistence, connection dragging, grouped undo/redo, mobile layout, import preview/deduplication, pinned layout, and 10,000 imported evidence rows. CI runs the same workflows.
+Die Browser-Tests laufen mit temporären Boards auf Port 18088 und einem echten MCP-Client. Sie prüfen unter anderem Analyst- und Agent-Review, Offline-Sync mit gleichzeitigem Zusammenführen in zwei Browsern, Ereignisse, Gruppen, Ebenen, Export, Maus- und Trackpad-Steuerung, Mobil-Layout, Importe mit Vorschau und Deduplizierung sowie 10.000 importierte Belege.
+
+## Veröffentlichung (GitHub und Docker Hub)
+
+- **CI** führt bei jedem Push alle Tests aus und baut das Docker-Image.
+- **Publish Docker image** baut bei einem Versionstag (`v*.*.*`) oder per **Run workflow** das Image für `linux/amd64` und `linux/arm64` und veröffentlicht es als `latest` und mit Versionsnummer. Voraussetzung sind die Repository-Secrets `DOCKERHUB_USERNAME` und `DOCKERHUB_TOKEN` (Docker-Hub-Access-Token mit Schreibrecht).
+
+```bash
+git tag v0.4.6
+git push origin v0.4.6
+```
+
+Ein manueller Multi-Arch-Build ist mit `./deploy/publish-multiarch.sh` möglich (`FACTGRAPH_IMAGE` und `FACTGRAPH_VERSION` überschreiben Namespace und Version).

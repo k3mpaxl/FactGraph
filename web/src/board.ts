@@ -471,28 +471,30 @@ function validPosition(x: unknown, y: unknown): x is number {
 
 export function demoDrafts(): ActionDraft[] {
   const at = new Date().toISOString()
-  const day = new Date(Date.now() - 86_400_000).toISOString()
-  const ids = Array.from({ length: 7 }, () => uuid())
-  const [web, db, incident, team, firewall, note, relation] = ids
-  const investigation = uuid()
-  const review = uuid()
-  return [
-    { type: 'board.rename', payload: { name: 'Demo: Incident Analyse' }, author: 'Demo' },
-    { type: 'source.add', payload: { id: firewall, title: 'Firewall-Log', uri: 'logs/firewall.csv', excerpt: '10.20.30.41 → db-prod:5432', created_at: at }, author: 'Demo' },
-    { type: 'source.add', payload: { id: note, title: 'Admin-Notiz', uri: 'notizen/admin.md', excerpt: 'Keine direkte Datenbankverbindung im Wartungsfenster.', created_at: at }, author: 'Demo' },
-    { type: 'entity.add', payload: { id: web, name: 'Webserver 01', kind: 'System', description: 'Produktionsserver im Web-Tier', created_at: at }, author: 'Demo' },
-    { type: 'entity.add', payload: { id: db, name: 'Datenbank Cluster', kind: 'System', description: 'Primärer Datenbankverbund', created_at: at }, author: 'Demo' },
-    { type: 'entity.add', payload: { id: incident, name: 'Incident', kind: 'Ereignis', description: 'Auffällige Verbindung', created_at: at }, author: 'Demo' },
-    { type: 'entity.add', payload: { id: team, name: 'SOC Team', kind: 'Organisation', description: 'Analysiert die Belege', created_at: at }, author: 'Demo' },
-    { type: 'identifier.add', payload: { id: uuid(), entity_id: web, scheme: 'hostname', namespace: 'prod', raw_value: 'WEB-01', normalized_value: 'web-01', confidence: 0.98, source_id: firewall, valid_from: null, valid_to: null }, author: 'Demo' },
-    { type: 'fact.add', payload: { id: relation, subject_id: web, predicate: 'kommuniziert mit', object_id: db, valid_from: day, valid_to: null, created_at: at }, author: 'Demo' },
-    { type: 'assertion.add', payload: { id: uuid(), fact_id: relation, stance: 'supports', confidence: 0.96, source_id: firewall, note: 'Verbindung im Log sichtbar.', created_at: at }, author: 'Demo' },
-    { type: 'assertion.add', payload: { id: uuid(), fact_id: relation, stance: 'refutes', confidence: 0.65, source_id: note, note: 'Admin bestreitet direkte Verbindung.', created_at: at }, author: 'Demo' },
-    { type: 'fact.add', payload: { id: investigation, subject_id: incident, predicate: 'betrifft', object_id: web, valid_from: day, valid_to: null, created_at: at }, author: 'Demo' },
-    { type: 'assertion.add', payload: { id: uuid(), fact_id: investigation, stance: 'supports', confidence: 0.94, source_id: firewall, note: '', created_at: at }, author: 'Demo' },
-    { type: 'fact.add', payload: { id: review, subject_id: team, predicate: 'untersucht', object_id: incident, valid_from: day, valid_to: null, created_at: at }, author: 'Demo' },
-    { type: 'assertion.add', payload: { id: uuid(), fact_id: review, stance: 'supports', confidence: 1, source_id: note, note: '', created_at: at }, author: 'Demo' },
+  const [attacker, ip, sp, vault, device, pwsh, audit, intel, control, reads, listing] = Array.from({ length: 11 }, () => uuid())
+  const drafts: ActionDraft[] = [
+    { type: 'board.rename', payload: { name: 'Example: Key Vault secret access' } },
+    { type: 'source.add', payload: { id: audit, title: 'Key Vault AuditEvent', source_kind: 'primary', uri: 'log-analytics://kv-prod-secrets/AuditEvent',
+      query: 'AzureDiagnostics | where ResourceType == "VAULTS" and OperationName == "SecretList"',
+      excerpt: '[{"TimeGenerated":"2026-09-28T10:42:07Z","OperationName":"SecretList","CallerIPAddress":"203.0.113.7","identity_claim_appid_g":"sp-deploy-prod","CorrelationId":"7f3a"}]', created_at: at } },
+    { type: 'source.add', payload: { id: intel, title: 'Threat intel note', source_kind: 'secondary', uri: 'notes/intel.md', excerpt: '203.0.113.7 seen in earlier campaign infrastructure.', created_at: at } },
+    { type: 'entity.add', payload: { id: attacker, name: 'Unknown actor', kind: 'Threat Actor', description: 'Working hypothesis', x: 0, y: 0, created_at: at } },
+    { type: 'entity.add', payload: { id: ip, name: '203.0.113.7', kind: 'IP', x: 0, y: 220, created_at: at } },
+    { type: 'entity.add', payload: { id: sp, name: 'sp-deploy-prod', kind: 'Service Principal', x: 380, y: -160, created_at: at } },
+    { type: 'entity.add', payload: { id: vault, name: 'kv-prod-secrets', kind: 'Key Vault', x: 800, y: 20, created_at: at } },
+    { type: 'entity.add', payload: { id: device, name: 'WS-0142', kind: 'Device', x: -420, y: 220, created_at: at } },
+    { type: 'entity.add', payload: { id: pwsh, name: 'powershell.exe', kind: 'Process', x: -420, y: 420, created_at: at } },
+    { type: 'identifier.add', payload: { id: uuid(), entity_id: device, scheme: 'hostname', namespace: 'corp', raw_value: 'WS-0142.corp.example', normalized_value: 'ws-0142.corp.example', confidence: 1, source_id: null, valid_from: null, valid_to: null } },
+    { type: 'fact.add', payload: { id: uuid(), subject_id: device, predicate: 'runs', object_id: pwsh, created_at: at } },
+    { type: 'fact.add', payload: { id: reads, subject_id: pwsh, predicate: 'connected to', object_id: ip, created_at: at } },
+    { type: 'fact.add', payload: { id: control, subject_id: attacker, predicate: 'controls', object_id: ip, created_at: at } },
+    { type: 'assertion.add', payload: { id: uuid(), fact_id: control, stance: 'supports', confidence: 0.6, source_id: intel, observation: 'IP listed in threat intel as campaign infrastructure', note: '', locator: 'intel.md line 3', created_at: at } },
+    { type: 'fact.add', payload: { id: listing, predicate: 'listed secrets', technique: 'T1555.006', valid_from: '2026-09-28T10:42:07Z',
+      participants: [{ entity_id: attacker, role: 'actor' }, { entity_id: ip, role: 'source' }, { entity_id: sp, role: 'identity' }, { entity_id: vault, role: 'target' }], created_at: at } },
+    { type: 'assertion.add', payload: { id: uuid(), fact_id: listing, stance: 'supports', confidence: 1, source_id: audit, observation: 'SecretList on kv-prod-secrets from 203.0.113.7 as sp-deploy-prod',
+      note: '', locator: 'CorrelationId=7f3a', valid_from: '2026-09-28T10:42:07Z', created_at: at } },
   ]
+  return drafts.map(draft => ({ ...draft, author: 'Example' }))
 }
 
 export function legacyDrafts(value: unknown): ActionDraft[] {

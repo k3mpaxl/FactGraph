@@ -1,9 +1,9 @@
-import { Box, Boxes, User, Monitor, KeyRound, Cloud, FileText, Network, Layers } from 'lucide-react'
+import { Box, Boxes, User, Monitor, KeyRound, Cloud, FileText, Network, Layers, Skull } from 'lucide-react'
 
 export const typeIcons = { Box, User, Monitor, KeyRound, Cloud, FileText, Network, Layers }
 
 export function KindIcon({ kind, icon, size = 16 }: { kind: string; icon?: string; size?: number }) {
-  const Icon = icon && icon in typeIcons ? typeIcons[icon as keyof typeof typeIcons] : /user|person/i.test(kind) ? User : /device|host|system/i.test(kind) ? Monitor : /secret|credential|variable|vault/i.test(kind) ? KeyRound : /file|repo/i.test(kind) ? FileText : /aks|kubernetes|pod/i.test(kind) ? Layers : /\bip\b|network/i.test(kind) ? Network : /cloud|storage|principal|bucket|s3/i.test(kind) ? Cloud : Box
+  const Icon = icon && icon in typeIcons ? typeIcons[icon as keyof typeof typeIcons] : /threat|attacker|adversary|\bactor\b|angreifer/i.test(kind) ? Skull : /user|person/i.test(kind) ? User : /device|host|system/i.test(kind) ? Monitor : /secret|credential|variable|vault/i.test(kind) ? KeyRound : /file|repo/i.test(kind) ? FileText : /aks|kubernetes|pod/i.test(kind) ? Layers : /\bip\b|network/i.test(kind) ? Network : /cloud|storage|principal|bucket|s3/i.test(kind) ? Cloud : Box
   return <Icon size={size} strokeWidth={1.9} />
 }
 

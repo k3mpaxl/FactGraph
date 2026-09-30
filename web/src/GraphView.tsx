@@ -5,19 +5,24 @@ import { ReactFlow, ReactFlowProvider, Background, BackgroundVariant, Controls, 
 import '@xyflow/react/dist/style.css'
 import { Layers, Plus, Search, X, Pin, Sparkles, Copy, ArrowDown,
   Grid3x3, Map as MapIcon, Crosshair, Pencil, Merge, Trash2, PinOff, Settings2, Boxes, Zap, ChevronRight, ChevronDown,
-  FolderTree, Group as GroupIcon, Ungroup, EyeOff, Save, Columns3, Workflow, Download, ClipboardCopy, ImageDown } from 'lucide-react'
+  FolderTree, Group as GroupIcon, Ungroup, EyeOff, Save, Columns3, Workflow, Download, ClipboardCopy, ImageDown, Waypoints } from 'lucide-react'
 import type { Entity, EntityType, Fact, Group, Perspective, TruthState } from './types'
 import { CONTAINS_PREDICATES, type ActionDraft } from './board'
 import { snapPosition } from './layout'
 import { KindIcon, iconMarkup, prepareIconMarkup, typeIcons } from './KindIcon'
 import { browserMeasure, buildGraphSvg, downloadBlob, exportFilename, svgToPng } from './exportGraph'
+import { createWheelClassifier, zoomAround, zoomFactor } from './wheel'
+import { ORGANIC_THRESHOLD, organicLayout } from './organicLayout'
+
+const MIN_ZOOM = 0.05
+const MAX_ZOOM = 2.5
 import { entityVisual } from './entityVisual'
 import { LAYERS, layerOf } from './layers'
 import { buildViewModel, groupSuggestions, activityNodeId, groupNodeId, edgeGeometry, edgeOffsets, edgeWidth, NODE_H, NODE_W, type NodeBox, type VNode } from './viewModel'
 import { uuid } from './uuid'
 
 export type Selection = { kind: 'entity' | 'fact' | 'group'; id: string } | null
-export type CanvasRequest = { type: 'focus' | 'fit' | 'arrange' | 'arrange-layers' | 'place' | 'export'; id?: string; kind?: string; n: number }
+export type CanvasRequest = { type: 'focus' | 'fit' | 'arrange' | 'arrange-layers' | 'arrange-organic' | 'place' | 'export'; id?: string; kind?: string; n: number }
 type ExportSettings = { format: 'png' | 'svg'; area: 'all' | 'visible' | 'selection'; theme: 'current' | 'light' | 'dark'; scale: number; title: boolean; legend: boolean; transparent: boolean }
 const defaultExport: ExportSettings = { format: 'png', area: 'all', theme: 'current', scale: 2, title: true, legend: true, transparent: false }
 export type Lens = { layers: Set<string> | null; collapseActivities: boolean; showLanes: boolean }
@@ -86,7 +91,7 @@ const GroupCard = memo(function GroupCard({ data, selected }: NodeProps<Node<Gro
     <div className="group-body">
       <div className="node-icon"><Boxes size={16} /></div>
       <div className="node-copy"><strong title={group.name}>{group.name}</strong>
-        <small>{count} {kinds.length === 1 ? kinds[0][0] : `entities · ${kinds.length} types`}{internal ? ` · ${internal} internal` : ''}</small></div>
+        <small>{count} members · {kinds.length === 1 ? kinds[0][0] : `${kinds.length} types`}{internal ? ` · ${internal} internal` : ''}</small></div>
       <button className="node-chip nodrag" title="Expand group" aria-label={`Expand ${group.name}`} onClick={event => { event.stopPropagation(); data.handlers.current.toggleGroup(group.id, false) }}><ChevronRight size={11} /></button>
     </div>
     {total > 0 && <div className="state-bar" title={`${states.supported} supported · ${states.disputed} disputed · ${states.refuted} refuted · ${states.unknown} unknown`}>
@@ -129,14 +134,15 @@ const FloatingEdge = memo(function FloatingEdge({ id, source, target, label, sel
       className={`fg-edge ${data.state}${selected ? ' selected' : ''}${data.dimmed ? ' dimmed' : ''}${data.spoke ? ' spoke' : ''}`} />
     {(showLabel || selected) && label && <EdgeLabelRenderer>
       <button type="button" className={`edge-label nodrag nopan ${data.state}${selected ? ' selected' : ''}${data.dimmed ? ' dimmed' : ''}${data.spoke ? ' spoke' : ''}`}
-        style={{ transform: `translate(-50%, -50%) translate(${lx}px, ${ly}px)` }}
+        style={{ transform: `translate(-50%, -50%) translate(${lx}px, ${ly}px)` }} title={String(label)}
         onClick={event => { event.stopPropagation(); data.onPick(id) }} onDoubleClick={event => { event.stopPropagation(); data.onEdit(id) }}>
         {label}{data.count > 1 && <b>×{data.count}</b>}</button>
     </EdgeLabelRenderer>}
   </>
 })
 
-const nodeTypes = { entity: EntityCard, group: GroupCard, activity: ActivityHub, frame: FrameNode }
+// "group" is a built-in React Flow type with its own default styles, so group nodes use the type name "bundle".
+const nodeTypes = { entity: EntityCard, bundle: GroupCard, activity: ActivityHub, frame: FrameNode }
 const edgeTypes = { floating: FloatingEdge }
 type Draft = { position: XYPosition; source?: string; target?: string; kind: string; name: string; predicate: string; relationId?: string }
 type GroupDraft = { members: string[]; name: string; rule?: { kinds: string[] } }
@@ -170,6 +176,47 @@ function Canvas(props: Props) {
   const setExportSettings = (next: ExportSettings) => { setExportSettingsState(next); try { localStorage.setItem('factgraph:export', JSON.stringify(next)) } catch { /* private mode */ } }
   const [exporting, setExporting] = useState(false)
   const shellRef = useRef<HTMLDivElement>(null)
+  // Mouse wheel zooms; trackpad two-finger scrolling pans and pinching zooms (see wheel.ts).
+  useEffect(() => {
+    const element = shellRef.current
+    if (!element) return
+    const classify = createWheelClassifier()
+    const onCanvas = (target: EventTarget | null) => target instanceof Element && !!target.closest('.react-flow') && !target.closest('.react-flow__minimap, .nowheel')
+    const pointOf = (clientX: number, clientY: number) => { const rect = element.getBoundingClientRect(); return { x: clientX - rect.left, y: clientY - rect.top } }
+    const onWheel = (event: WheelEvent) => {
+      if (!onCanvas(event.target)) return
+      event.preventDefault(); event.stopPropagation()
+      const viewport = flow.getViewport()
+      const kind = classify(event as WheelEvent & { wheelDeltaY?: number })
+      if (kind === 'pan' || (kind === 'zoom' && event.shiftKey)) {
+        // Shift + mouse wheel scrolls sideways, as in most canvas tools.
+        const dx = kind === 'zoom' || (event.shiftKey && !event.deltaX) ? event.deltaY : event.deltaX
+        const dy = kind === 'zoom' || (event.shiftKey && !event.deltaX) ? 0 : event.deltaY
+        void flow.setViewport({ x: viewport.x - dx, y: viewport.y - dy, zoom: viewport.zoom })
+        return
+      }
+      void flow.setViewport(zoomAround(viewport, pointOf(event.clientX, event.clientY), zoomFactor(event), MIN_ZOOM, MAX_ZOOM))
+    }
+    // Safari reports trackpad pinch as gesture events instead of ctrl + wheel.
+    let lastScale = 1
+    const onGesture = (event: Event) => {
+      const gesture = event as Event & { scale: number; clientX: number; clientY: number }
+      if (!onCanvas(event.target)) return
+      event.preventDefault()
+      if (event.type === 'gesturestart') { lastScale = 1; return }
+      const factor = gesture.scale / lastScale
+      lastScale = gesture.scale
+      void flow.setViewport(zoomAround(flow.getViewport(), pointOf(gesture.clientX, gesture.clientY), factor, MIN_ZOOM, MAX_ZOOM))
+    }
+    element.addEventListener('wheel', onWheel, { passive: false, capture: true })
+    element.addEventListener('gesturestart', onGesture, { passive: false })
+    element.addEventListener('gesturechange', onGesture, { passive: false })
+    return () => {
+      element.removeEventListener('wheel', onWheel, { capture: true })
+      element.removeEventListener('gesturestart', onGesture)
+      element.removeEventListener('gesturechange', onGesture)
+    }
+  }, [flow])
   const [typeEdit, setTypeEdit] = useState<EntityType | null>(null)
   const [typeSearch, setTypeSearch] = useState('')
   const [draft, setDraft] = useState<Draft | null>(null)
@@ -261,9 +308,9 @@ function Canvas(props: Props) {
           data = { v, match, dimmed: (!!needle && !match) || dimmedByFocus, handlers }
         } else if (v.kind === 'activity') data = { v, dimmed: !!needle || dimmedByFocus }
         else data = { v, handlers }
-        const sameData = old && old.type === v.kind && Object.keys(data).every(k => k === 'v' ? sameV(old.data.v, v) : (old.data as Record<string, unknown>)[k] === (data as Record<string, unknown>)[k])
+        const sameData = old && old.type === (v.kind === 'group' ? 'bundle' : v.kind) && Object.keys(data).every(k => k === 'v' ? sameV(old.data.v, v) : (old.data as Record<string, unknown>)[k] === (data as Record<string, unknown>)[k])
         if (old && sameData && old.selected === selected && old.position.x === base.position.x && old.position.y === base.position.y) return old
-        return { ...base, type: v.kind, data: sameData ? old!.data : data,
+        return { ...base, type: v.kind === 'group' ? 'bundle' : v.kind, data: sameData ? old!.data : data,
           draggable: v.kind === 'frame' ? false : v.kind === 'entity' ? !v.entity.pinned : true,
           selectable: v.kind !== 'frame', zIndex: v.kind === 'frame' ? -1 : undefined, ...(v.kind === 'frame' ? { width: v.width, height: v.height } : {}) } as Node<AnyData>
       })
@@ -284,19 +331,23 @@ function Canvas(props: Props) {
   editEdge.current = (id: string) => {
     const edge = view.edges.find(e => e.id === id)
     const f = edge && facts.find(x => x.id === (edge.activityId ?? edge.factIds[0]))
+    const confirmed = f?.assertions.filter(a => !a.retracted_at && a.review_status === 'confirmed').length ?? 0
+    if (confirmed && !window.confirm(`This relationship has ${confirmed} confirmed evidence ${confirmed === 1 ? 'item' : 'items'}. Changing it resets ${confirmed === 1 ? 'that review' : 'those reviews'}. Continue?`)) return
     if (f && edge && edge.factIds.length === 1) setDraft({ source: f.subject_id, target: f.object_id, position: { x: 0, y: 0 }, kind: '', name: '', predicate: f.predicate, relationId: f.id })
   }
   const edgeCallbacks = useMemo(() => ({ onPick: (id: string) => pickEdge.current(id), onEdit: (id: string) => editEdge.current(id) }), [])
+  // Relationships with confirmed evidence are locked against drag-reconnecting: moving an end would change what was confirmed.
+  const confirmedFacts = useMemo(() => new Set(facts.filter(f => f.assertions.some(a => !a.retracted_at && a.review_status === 'confirmed')).map(f => f.id)), [facts])
   const edges = useMemo<Edge<EdgeData>[]>(() => {
     const offsets = edgeOffsets(view.edges)
     return view.edges.map(edge => {
       const selected = selectedEdgeIds.has(edge.id) || (!!edge.activityId && selection?.kind === 'fact' && selection.id === edge.activityId)
       const incident = !focusIds || (selectedNodeId ? edge.source === selectedNodeId || edge.target === selectedNodeId || (focusIds.has(edge.source) && focusIds.has(edge.target) && (edge.source.startsWith('act:') || edge.target.startsWith('act:'))) : selected)
       return { id: edge.id, source: edge.source, target: edge.target, sourceHandle: 'out', targetHandle: 'in', type: 'floating', label: edge.label,
-        reconnectable: !edge.activityId && edge.count === 1 && !edge.source.includes(':') && !edge.target.includes(':'), selected,
+        reconnectable: !edge.activityId && edge.count === 1 && !edge.source.includes(':') && !edge.target.includes(':') && !confirmedFacts.has(edge.factIds[0]), selected,
         data: { state: edge.state, offset: offsets.get(edge.id) ?? 0, dimmed: !incident, count: edge.count, spoke: !!edge.role, ...edgeCallbacks } }
     })
-  }, [view, selection, selectedEdgeIds, selectedNodeId, focusIds, edgeCallbacks])
+  }, [view, selection, selectedEdgeIds, selectedNodeId, focusIds, edgeCallbacks, confirmedFacts])
 
   const center = () => flow.screenToFlowPosition({ x: window.innerWidth / 2, y: window.innerHeight / 2 })
   const beginConnection = (connection: Connection) => {
@@ -323,6 +374,7 @@ function Canvas(props: Props) {
     else if (request.type === 'fit') void flow.fitView({ padding: 0.2, maxZoom: 1.1, duration: 400 })
     else if (request.type === 'arrange') void align()
     else if (request.type === 'arrange-layers') void align('RIGHT', true)
+    else if (request.type === 'arrange-organic') void align('RIGHT', false, 'organic')
     else if (request.type === 'export') void runExport({ ...exportSettings, format: request.kind === 'svg' ? 'svg' : 'png', area: 'all' }, 'download')
     else if (request.type === 'place') setDraft({ position: center(), kind: request.kind || 'Device', name: '', predicate: '' })
   }, [request?.n])
@@ -373,7 +425,8 @@ function Canvas(props: Props) {
       setGroupDraft(null); onSelect({ kind: 'group', id })
     } catch { /* shown as canvas error */ }
   }
-  const align = async (direction = 'RIGHT', byLayer = false) => {
+  /** flow = directed ELK layers (readable for small graphs); organic = clustered force layout (large graphs); auto picks by size. */
+  const align = async (direction = 'RIGHT', byLayer = false, mode: 'auto' | 'flow' | 'organic' = 'auto') => {
     setBusy(true); setError('')
     try {
       const all = flow.getNodes().filter(n => n.type !== 'frame')
@@ -392,8 +445,30 @@ function Canvas(props: Props) {
         const near = view.edges.filter(e => e.source === id || e.target === id).map(e => layerIndex(e.source === id ? e.target : e.source)).filter(i => i >= 0)
         return near.length ? Math.max(...near) : 0
       }
+      const organic = !byLayer && (mode === 'organic' || (mode === 'auto' && movable.length > ORGANIC_THRESHOLD))
+      if (organic) {
+        // Let the browser paint the busy state before the synchronous simulation runs.
+        await new Promise(resolve => requestAnimationFrame(() => setTimeout(resolve, 0)))
+        const size = (n: Node<AnyData>) => ({ width: n.measured?.width ?? (n.type === 'activity' ? 28 : NODE_W), height: n.measured?.height ?? (n.type === 'activity' ? 28 : NODE_H) })
+        const positions = organicLayout(chosen.map(n => ({ id: n.id, ...size(n), x: n.position.x, y: n.position.y, pinned: isPinned(n) })),
+          view.edges.filter(e => ids.has(e.source) || ids.has(e.target)).map(e => ({ source: e.source, target: e.target })))
+        pendingFit.current = true
+        await run(movable.map(n => {
+          const position = snapPosition(positions.get(n.id)!)
+          if (n.id.startsWith('group:')) return { type: 'group.update' as const, payload: { id: n.id.slice(6), ...position } }
+          if (n.id.startsWith('act:')) return { type: 'fact.position' as const, payload: { id: n.id.slice(4), ...position } }
+          return { type: 'entity.position' as const, payload: { id: n.id, ...position } }
+        }))
+        // Layer lanes only make sense for the layer layout; in an organic layout they would overlap.
+        if (lens.showLanes) props.onLensChange({ ...lens, showLanes: false })
+        if (mode === 'auto') props.onNotice(`Organic layout for ${movable.length} nodes · use ↓ or Layers for a flow layout`)
+        return
+      }
+      const pane = shellRef.current?.getBoundingClientRect()
       const { default: ELK } = await import('elkjs/lib/elk.bundled.js')
-      const result = await new ELK().layout({ id: 'root', layoutOptions: { 'elk.algorithm': 'layered', 'elk.direction': direction, 'elk.spacing.nodeNode': '36', 'elk.layered.spacing.nodeNodeBetweenLayers': '110', 'elk.spacing.componentComponent': '60', 'elk.layered.considerModelOrder.strategy': 'NODES_AND_EDGES', ...(byLayer ? { 'elk.partitioning.activate': 'true' } : {}) },
+      const result = await new ELK().layout({ id: 'root', layoutOptions: { 'elk.algorithm': 'layered', 'elk.direction': direction, 'elk.spacing.nodeNode': '36', 'elk.layered.spacing.nodeNodeBetweenLayers': '110', 'elk.spacing.componentComponent': '60', 'elk.layered.considerModelOrder.strategy': 'NODES_AND_EDGES',
+        // Pack disconnected parts into a screen-shaped block instead of one long row.
+        'elk.separateConnectedComponents': 'true', 'elk.aspectRatio': String(pane ? Math.max(1, pane.width / Math.max(1, pane.height)) : 1.6), ...(byLayer ? { 'elk.partitioning.activate': 'true' } : {}) },
         children: movable.map(n => ({ id: n.id, width: n.measured?.width ?? NODE_W, height: n.measured?.height ?? NODE_H, ...(byLayer ? { layoutOptions: { 'elk.partitioning.partition': String(partition(n.id)) } } : {}) })),
         edges: view.edges.filter(e => ids.has(e.source) && ids.has(e.target)).map(e => ({ id: e.id, sources: [e.source], targets: [e.target] })) })
       const pinned = chosen.filter(isPinned)
@@ -448,7 +523,7 @@ function Canvas(props: Props) {
   }
   const moveDrafts = (moved: Node<AnyData>[]): ActionDraft[] => moved.filter(n => n.type !== 'frame').map(n => {
     const position = grid ? snapPosition(n.position) : n.position
-    if (n.type === 'group') return { type: 'group.update', payload: { id: n.id.slice(6), ...position } }
+    if (n.type === 'bundle') return { type: 'group.update', payload: { id: n.id.slice(6), ...position } }
     if (n.type === 'activity') return { type: 'fact.position', payload: { id: n.id.slice(4), ...position } }
     return { type: 'entity.position', payload: { id: n.id, ...position } }
   })
@@ -473,10 +548,10 @@ function Canvas(props: Props) {
     <ReactFlow nodes={nodes} edges={edges} nodeTypes={nodeTypes} edgeTypes={edgeTypes} onNodesChange={onNodesChange}
       onNodeClick={(_, n) => {
         cancelSelect(); setMenu(null)
-        const next: Selection = n.type === 'group' ? { kind: 'group', id: n.id.slice(6) } : n.type === 'activity' ? { kind: 'fact', id: n.id.slice(4) } : n.type === 'entity' ? { kind: 'entity', id: n.id } : null
+        const next: Selection = n.type === 'bundle' ? { kind: 'group', id: n.id.slice(6) } : n.type === 'activity' ? { kind: 'fact', id: n.id.slice(4) } : n.type === 'entity' ? { kind: 'entity', id: n.id } : null
         if (next) clickTimer.current = setTimeout(() => onSelect(next), n.type === 'entity' ? 220 : 0)
       }}
-      onNodeDoubleClick={(_, n) => { if (n.type === 'group') handlers.current.toggleGroup(n.id.slice(6), false) }}
+      onNodeDoubleClick={(_, n) => { if (n.type === 'bundle') handlers.current.toggleGroup(n.id.slice(6), false) }}
       onEdgeClick={(_, edge) => pickEdge.current(edge.id)}
       onEdgeDoubleClick={(_, edge) => editEdge.current(edge.id)}
       onPaneClick={() => { onSelect(null); setMenu(null) }} onConnect={beginConnection}
@@ -489,25 +564,26 @@ function Canvas(props: Props) {
         const point = 'changedTouches' in event ? event.changedTouches[0] : event
         setDraft({ source: state.fromNode.id, position: flow.screenToFlowPosition({ x: point.clientX, y: point.clientY }), kind: 'Device', name: '', predicate: '' })
       }}
-      onReconnect={(edge, c) => { if (entities.some(e => e.id === c.source) && entities.some(e => e.id === c.target)) void run([{ type: 'fact.update', payload: { id: edge.id, subject_id: c.source, object_id: c.target } }]).catch(() => {}) }}
+      onReconnect={(edge, c) => { if (confirmedFacts.has(edge.id)) { setError('Confirmed relationships cannot be reconnected. Retract or unconfirm the evidence first, or create a new relationship.'); return } if (entities.some(e => e.id === c.source) && entities.some(e => e.id === c.target)) void run([{ type: 'fact.update', payload: { id: edge.id, subject_id: c.source, object_id: c.target } }]).catch(() => {}) }}
       onNodeDragStop={(_, node, moved) => { void run(moveDrafts(moved.length ? moved : [node])).catch(() => {}) }}
       onNodeContextMenu={(e, n) => {
         e.preventDefault()
         if (n.type === 'entity') { onSelect({ kind: 'entity', id: n.id }); setMenu({ id: n.id, kind: 'entity', x: e.clientX, y: e.clientY }) }
-        else if (n.type === 'group') { onSelect({ kind: 'group', id: n.id.slice(6) }); setMenu({ id: n.id.slice(6), kind: 'group', x: e.clientX, y: e.clientY }) }
+        else if (n.type === 'bundle') { onSelect({ kind: 'group', id: n.id.slice(6) }); setMenu({ id: n.id.slice(6), kind: 'group', x: e.clientX, y: e.clientY }) }
       }}
       onDoubleClick={e => { if ((e.target as HTMLElement).classList.contains('react-flow__pane')) setDraft({ position: flow.screenToFlowPosition({ x: e.clientX, y: e.clientY }), kind: 'Device', name: '', predicate: '' }) }}
       deleteKeyCode={null} selectionOnDrag panOnDrag={[1, 2]} zoomOnScroll zoomOnPinch panActivationKeyCode="Space" zoomOnDoubleClick={false} selectionKeyCode="Shift" multiSelectionKeyCode="Shift"
-      minZoom={0.05} maxZoom={2.5} snapToGrid={grid} snapGrid={[20, 20]} connectionRadius={40} colorMode={props.theme} onlyRenderVisibleElements proOptions={{ hideAttribution: true }}>
+      minZoom={MIN_ZOOM} maxZoom={MAX_ZOOM} snapToGrid={grid} snapGrid={[20, 20]} connectionRadius={40} colorMode={props.theme} onlyRenderVisibleElements proOptions={{ hideAttribution: true }}>
       <Background variant={BackgroundVariant.Dots} gap={20} size={1.2} />
       <Controls showInteractive={false} fitViewOptions={{ padding: 0.2, maxZoom: 1.1, duration: 300 }} position="bottom-left" />
-      {minimap && <MiniMap pannable zoomable position="bottom-right" nodeBorderRadius={6} nodeColor={n => n.type === 'entity' ? (n.data as EntityData).color : n.type === 'group' ? 'var(--accent)' : 'transparent'} maskColor="var(--minimap-mask)" />}
+      {minimap && <MiniMap pannable zoomable position="bottom-right" nodeBorderRadius={6} nodeColor={n => n.type === 'entity' ? (n.data as EntityData).color : n.type === 'bundle' ? 'var(--accent)' : 'transparent'} maskColor="var(--minimap-mask)" />}
     </ReactFlow>
     <div className="canvas-toolbar" role="toolbar" aria-label="Canvas tools">
       <button className={`tool-primary${popover === 'palette' ? ' active' : ''}`} onClick={() => setPopover(popover === 'palette' ? null : 'palette')} title="Add entity · N"><Plus size={15} /><span>Add entity</span></button>
       <span className="tool-sep" />
-      <button onClick={() => void align()} disabled={busy} title="Auto layout selection or whole graph (left → right)" aria-label="Arrange"><Sparkles size={15} /><span>Arrange</span></button>
-      <button className="icon-only" onClick={() => void align('DOWN')} disabled={busy} title="Arrange top to bottom" aria-label="Arrange top to bottom"><ArrowDown size={15} /></button>
+      <button onClick={() => void align()} disabled={busy} title={`Auto layout of selection or whole graph: flow left → right, organic above ${ORGANIC_THRESHOLD} nodes`} aria-label="Arrange"><Sparkles size={15} /><span>Arrange</span></button>
+      <button className="icon-only" onClick={() => void align('DOWN', false, 'flow')} disabled={busy} title="Flow layout top to bottom" aria-label="Arrange top to bottom"><ArrowDown size={15} /></button>
+      <button className="icon-only" onClick={() => void align('RIGHT', false, 'organic')} disabled={busy} title="Organic layout: clusters connected entities, best for large graphs" aria-label="Arrange organically"><Waypoints size={15} /></button>
       <span className="tool-sep" />
       <button className={`${popover === 'layers' || hiddenLayers || lens.showLanes || lens.collapseActivities ? 'active' : ''}`} onClick={() => setPopover(popover === 'layers' ? null : 'layers')} title="Layers & perspectives" aria-label="Layers"><Layers size={15} /><span>{props.activePerspective ? props.perspectives.find(p => p.id === props.activePerspective)?.name ?? 'Layers' : hiddenLayers ? `${LAYERS.length - hiddenLayers}/${LAYERS.length} layers` : 'Layers'}</span></button>
       <button className={`${popover === 'suggest' ? 'active' : ''}`} onClick={() => setPopover(popover === 'suggest' ? null : 'suggest')} title="Group suggestions" aria-label="Group suggestions"><Boxes size={15} /><span>Groups</span>{suggestions.length > 0 && <b className="tool-badge">{suggestions.length}</b>}</button>

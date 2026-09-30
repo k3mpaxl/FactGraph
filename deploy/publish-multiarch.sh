@@ -2,7 +2,7 @@
 set -euo pipefail
 
 image="${FACTGRAPH_IMAGE:-k3mpaxl/factgraph}"
-version="${FACTGRAPH_VERSION:-0.3.0}"
+version="${FACTGRAPH_VERSION:-0.4.0}"
 
 docker buildx build \
   --platform linux/amd64,linux/arm64 \

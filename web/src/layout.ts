@@ -13,7 +13,7 @@ export function initialPosition(index: number): { x: number; y: number } {
   else if (fromEnd < side * 2) { x = -ring; y = -ring + fromEnd - side }
   else if (fromEnd < side * 3) { x = -ring + fromEnd - side * 2; y = ring }
   else { x = ring; y = ring - (fromEnd - side * 3) }
-  return { x: x * 200, y: y * 140 }
+  return { x: x * 300, y: y * 160 }
 }
 
 export function snapPosition(position: { x: number; y: number }) {

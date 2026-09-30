@@ -31,7 +31,31 @@ cd web && npm ci && npm run build && cd ..
 
 Von einem anderen Gerät im selben LAN `http://<LAN-IP-des-Servers>:8080/boards/<BOARD-UUID>` öffnen. Auf diesem Rechner kann die LAN-IP zum Beispiel mit `ipconfig getifaddr en0` ermittelt werden. Für Docker `FACTGRAPH_BIND_IP=0.0.0.0 docker compose -f deploy/compose.yaml up --build` verwenden. Die Anwendung hat keine Anmeldung; den Port daher nur in einem vertrauenswürdigen Netz freigeben. Ein Browser mit dem Board muss verbunden bleiben, damit neue Geräte die im Browser gespeicherten Aktionen empfangen können.
 
-Die Board-URL enthält eine UUID. **Link** kopiert sie; **Board** legt ein neues Board an. Die Board-Auswahl links zeigt frühere Boards im selben Browser.
+Die Board-URL enthält eine UUID. Das **Board-Menü** oben links kopiert den Link, legt neue Boards an und zeigt frühere Boards im selben Browser.
+
+## Oberfläche
+
+Die Oberfläche ist auf maximale Graph-Fläche ausgelegt: eine schmale Kopfleiste mit Board-Menü, Ansichten (Graph, Timeline, Evidence review, Activity), Suche, Undo/Redo, **Create** und API/MCP. Links lässt sich der **Entity-Explorer** (nach Typ gruppiert, mit Suche und Beziehungsanzahl) einblenden, rechts erscheint der **Inspector** nur bei einer Auswahl. Hell- und Dunkelmodus folgen dem System und lassen sich umschalten.
+
+Für große Graphen:
+
+- **Fokus**: Eine ausgewählte Entität hebt ihre direkten Nachbarn hervor, alles andere tritt zurück (Fadenkreuz in der Canvas-Leiste).
+- **Springen**: `Cmd/Ctrl+K` öffnet die Command-Palette; ein Treffer wird ausgewählt und mit Nachbarn ins Bild gezoomt. Enter in der Suche springt zum ersten Treffer. Im Inspector führen Beziehungen und Nachbarn per Klick weiter.
+- **Level of Detail**: Kantenbeschriftungen erscheinen erst ab mittlerem Zoom, Details der Knoten erst beim Hineinzoomen. Kanten docken am Knotenrand an; parallele Beziehungen werden gebogen.
+- **Minimap** schaltet sich ab 60 Knoten automatisch ein; **Arrange** ordnet Graph oder Auswahl mit ELK an.
+- **Status-Filter** (oben rechts im Graph) und **Evidence-Zeitfenster** (`T`) filtern Kanten nach Prüfstatus und Zeitraum.
+
+| Taste | Aktion |
+| --- | --- |
+| `Cmd/Ctrl+K` | Command-Palette / Entität suchen |
+| `/` | Suche fokussieren |
+| `N` | Neue Entität in der Mitte |
+| `F` | Graph einpassen bzw. Auswahl zentrieren |
+| `1`–`4` | Ansicht wechseln |
+| `E` / `T` | Explorer / Zeitfenster umschalten |
+| `Cmd/Ctrl+Z`, `Shift+Cmd/Ctrl+Z` | Undo / Redo |
+| `Entf` | Auswahl löschen |
+| `?` | Alle Tastenkürzel |
 
 ## Untersuchung im Graphen
 
@@ -133,7 +157,7 @@ Im Repository liegt bereits [.vscode/mcp.json](.vscode/mcp.json). VS Code öffne
 }
 ```
 
-Vor einem Tool-Aufruf muss die passende Board-URL in einem Browser geöffnet sein. Das Token kann in der kompakten API-Leiste über **Token** kopiert werden. Für VS Code `FACTGRAPH_TOKEN` auf den kopierten Wert setzen und den MCP-Server neu verbinden. Für REST:
+Vor einem Tool-Aufruf muss die passende Board-URL in einem Browser geöffnet sein. Das Token kann im **API/MCP-Menü** (Stecker-Symbol oben rechts) über **Copy session token** kopiert werden. Für VS Code `FACTGRAPH_TOKEN` auf den kopierten Wert setzen und den MCP-Server neu verbinden. Für REST:
 
 ```bash
 curl -X POST 'http://127.0.0.1:8080/api/boards/BOARD_UUID/entities' \
@@ -182,13 +206,13 @@ Weitere Schritte der lateralen Bewegung können aus anderen Logdateien, manuell,
 Das Repository enthält zwei GitHub-Actions:
 
 - `CI` führt die Python-Tests aus, baut das Frontend und prüft das Docker-Image bei Pushes und Pull Requests.
-- `Publish Docker image` veröffentlicht bei einem Versionstag wie `v0.3.0` oder über **Run workflow** nach Docker Hub.
+- `Publish Docker image` veröffentlicht bei einem Versionstag wie `v0.4.0` oder über **Run workflow** nach Docker Hub.
 
 Dafür im GitHub-Repository die Actions-Secrets `DOCKERHUB_USERNAME` und `DOCKERHUB_TOKEN` anlegen. Der Token sollte ein Docker-Hub-Access-Token mit Schreibrecht für das Image `factgraph` sein. Nach dem Push eines Tags:
 
 ```bash
-git tag v0.3.0
-git push origin v0.3.0
+git tag v0.4.0
+git push origin v0.4.0
 ```
 
 Das Image ist danach als `DOCKERHUB_USERNAME/factgraph:latest` und mit Versions-/Commit-Tags verfügbar. Für eine LAN-Freigabe beim Start des Compose-Stacks:

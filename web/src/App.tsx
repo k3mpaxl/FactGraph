@@ -1,20 +1,22 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import {
-  Activity, ArrowDownToLine, ArrowRight, Box, ChevronRight, CircleHelp, Copy,
-  Database, FileText, Fingerprint, GitBranch, Link2, Merge, Pencil, Plus, Search,
-  PanelLeftClose, PanelLeftOpen, ShieldCheck, Sparkles, Trash2, Undo2, Redo2, Upload, X,
+  Activity, ArrowDownToLine, ArrowLeft, ArrowRight, ChevronDown, ChevronRight, Clock, Command, Copy, CornerDownLeft,
+  FileText, GitBranch, Keyboard, Link2, ListTree, Merge, Moon, Pause, Pencil, Play, Plus, Plug, Search, ShieldCheck,
+  SkipBack, SkipForward, Sparkles, Sun, Trash2, Undo2, Redo2, Upload, X, Crosshair, CheckCircle2, CircleDashed,
 } from 'lucide-react'
 import { factsInWindow, timelineSteps, timelineEvents, periodLabel, evidencePeriod } from './timeline'
-import GraphView from './GraphView'
+import GraphView, { KindIcon, type CanvasRequest } from './GraphView'
 import EvidenceReader, { EvidenceQueue } from './EvidenceReader'
 import { demoDrafts, factKey, legacyDrafts, normalizeIdentifier, type BoardAction } from './board'
 import { useBoard } from './useBoard'
 import { uuid } from './uuid'
 import { entityVisual } from './entityVisual'
-import type { Assertion, GraphData, Identifier, TruthState } from './types'
+import type { Assertion, Entity, Fact, GraphData, Identifier, TruthState } from './types'
 
 type Selection = { kind: 'entity' | 'fact'; id: string } | null
 type DialogKind = 'entity' | 'entity-edit' | 'entity-merge' | 'fact' | 'source' | 'identifier' | 'assertion' | 'assertion-edit' | null
+type WorkspaceTab = 'graph' | 'timeline' | 'activity' | 'review'
+type Theme = 'light' | 'dark'
 
 const labels: Record<TruthState, string> = {
   supported: 'Supported', disputed: 'Disputed', refuted: 'Refuted', unknown: 'Unknown',
@@ -23,112 +25,149 @@ const allStates: TruthState[] = ['supported', 'disputed', 'refuted', 'unknown']
 const kinds = ['User', 'Person', 'Organization', 'Device', 'Service', 'Service Principal', 'Managed Identity', 'AKS Cluster', 'AKS Workload', 'System', 'IP', 'File', 'Repository', 'Process', 'Environment Variable', 'Credential', 'Secret', 'Azure Resource', 'Blob Storage', 'Location', 'Event', 'Document', 'Other']
 const customKindValue = '__custom__'
 const schemes = ['hostname', 'fqdn', 'ip', 'email', 'url', 'resource_id', 'external_id', 'other']
+const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform)
+const mod = isMac ? '⌘' : 'Ctrl'
 
 function date(value: string | null | undefined) {
   if (!value) return 'No date'
   const parsed = new Date(value)
-  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleDateString('de-DE', { day: '2-digit', month: 'short', year: 'numeric' })
+  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
 }
-
 function nameOf(data: GraphData, id: string) {
   return data.entities.find(item => item.id === id)?.name ?? 'Unknown'
 }
-
 function sourceOf(data: GraphData, id: string | null) {
   return data.sources.find(item => item.id === id)
 }
+function readPref(key: string) { try { return localStorage.getItem(`factgraph:${key}`) } catch { return null } }
+function writePref(key: string, value: string) { try { localStorage.setItem(`factgraph:${key}`, value) } catch { /* private mode */ } }
 
-function IconForKind({ kind, color }: { kind: string; color?: string }) {
-  const visual = entityVisual(kind)
-  return <span className="entity-avatar" style={{ background: color || visual.fill, border: `1px solid ${color || visual.border}` }}>{kind.slice(0, 1).toUpperCase() || <Box size={16} />}</span>
+function EntityAvatar({ entity, data, size = 'md' }: { entity: Pick<Entity, 'kind' | 'color'>; data?: GraphData; size?: 'sm' | 'md' | 'lg' }) {
+  const type = data?.entity_types?.find(t => t.name === entity.kind)
+  const color = entity.color || type?.color || entityVisual(entity.kind).border
+  return <span className={`entity-avatar ${size}`} style={{ '--entity-color': color } as CSSProperties}><KindIcon kind={entity.kind} icon={type?.icon} size={size === 'lg' ? 18 : size === 'sm' ? 12 : 14} /></span>
 }
-
 function StatePill({ state }: { state: TruthState }) {
   return <span className={`state-pill ${state}`}><span className="state-dot" />{labels[state]}</span>
 }
+function Kbd({ children }: { children: ReactNode }) { return <kbd>{children}</kbd> }
 
-function SourceLine({ data, sourceId }: { data: GraphData; sourceId: string | null }) {
-  const source = sourceOf(data, sourceId)
-  return <span>{source ? source.title : 'Manual entry'}</span>
+function Section({ title, count, action, children, defaultOpen = true }: { title: string; count?: number; action?: ReactNode; children: ReactNode; defaultOpen?: boolean }) {
+  const [open, setOpen] = useState(defaultOpen)
+  return <section className="inspector-section">
+    <div className="section-heading">
+      <button className="section-toggle" aria-expanded={open} onClick={() => setOpen(!open)}>{open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}<h3>{title}</h3>{count !== undefined && <span className="count">{count}</span>}</button>
+      {action}
+    </div>
+    {open && <div className="section-body">{children}</div>}
+  </section>
 }
 
-function DetailPanel({ data, selection, onAdd, onDelete, onRetract, onEditEvidence, onCopy, onClose }: {
-  data: GraphData; selection: Selection; onAdd: (kind: DialogKind) => void;
+function Inspector({ data, selection, onAdd, onDelete, onRetract, onOpenEvidence, onCopy, onClose, onSelect, onFocus }: {
+  data: GraphData; selection: NonNullable<Selection>; onAdd: (kind: DialogKind) => void;
   onDelete: (kind: 'entity' | 'fact' | 'identifier', id: string) => void;
-  onRetract: (id: string) => void; onEditEvidence: (id: string) => void;
+  onRetract: (id: string) => void; onOpenEvidence: (id: string) => void;
   onCopy: (value: string, label: string) => void; onClose: () => void;
+  onSelect: (selection: Selection, focus?: boolean) => void; onFocus: (id: string) => void;
 }) {
-  if (!selection) return <aside className="detail-panel detail-empty">
-    <div className="detail-head"><span>INSPECTOR</span><CircleHelp size={17} /></div>
-    <div className="detail-intro-icon"><GitBranch size={30} /></div>
-    <h2>Understand the connection.</h2>
-    <p>Select an entity or relationship in the graph. Identifiers, sources and evidence statements appear here.</p>
-    <div className="detail-tip"><ShieldCheck size={18} /><span>A relationship status is calculated from active evidence.</span></div>
-  </aside>
-
+  const closeButton = <button className="icon-button" onClick={onClose} aria-label="Close" title="Close · Esc"><X size={16} /></button>
   if (selection.kind === 'entity') {
     const entity = data.entities.find(item => item.id === selection.id)
     if (!entity) return null
     const related = data.facts.filter(item => item.subject_id === entity.id || item.object_id === entity.id)
-    return <aside className="detail-panel">
-      <div className="detail-head"><span>ENTITY</span><button className="icon-button" onClick={onClose} title="Close"><X size={17} /></button></div>
-      <div className="detail-title-row"><IconForKind kind={entity.kind} color={entity.color} /><div><div className="detail-kind">{entity.kind}</div><h2>{entity.name}</h2><div className="entity-quick-actions"><button className="text-button" onClick={() => onAdd('entity-edit')}><Pencil size={14} /> Edit</button><button className="text-button" onClick={() => onAdd('entity-merge')}><Merge size={14} /> Merge</button></div></div></div>
-      {entity.description && <p className="detail-description">{entity.description}</p>}
-      <button className="text-button context-copy" onClick={() => onCopy(JSON.stringify({entity,relationships:related},null,2), 'Entity context')}>Copy context for agent</button><button className="id-line copy-id" onClick={() => onCopy(entity.id, 'Entity ID')} title="Copy entity ID">ID {entity.id} <Copy size={13} /></button>
-      <section className="detail-section">
-        <div className="section-heading"><h3>Identifiers <small>{entity.identifiers.length}</small></h3><button className="text-button" onClick={() => onAdd('identifier')}><Plus size={15} /> Add</button></div>
-        {entity.identifiers.length ? entity.identifiers.map(identifier => <IdentifierRow key={identifier.id} identifier={identifier} data={data} onCopy={onCopy} onDelete={() => onDelete('identifier', identifier.id)} />) :
-          <p className="muted small">No identifiers yet.</p>}
-      </section>
-      <section className="detail-section">
-        <div className="section-heading"><h3>Relationships <small>{related.length}</small></h3></div>
-        {related.length ? related.map(fact => <div key={fact.id} className="related-row"><StatePill state={fact.truth_state} /><span>{fact.predicate} · {nameOf(data, fact.subject_id === entity.id ? fact.object_id : fact.subject_id)}</span></div>) :
-          <p className="muted small">No relationships yet.</p>}
-      </section>
-      <button className="primary-button link-from-node" onClick={() => onAdd('fact')}><Link2 size={15} /> Create relationship</button>
-      <div className="detail-bottom"><button className="danger-link" onClick={() => onDelete('entity', entity.id)}><Trash2 size={15} /> Delete entity</button></div>
+    return <aside className="inspector" aria-label="Inspector">
+      <div className="inspector-head"><span className="eyebrow">Entity</span><div className="head-actions">
+        <button className="icon-button" title="Copy context for agent" aria-label="Copy context for agent" onClick={() => onCopy(JSON.stringify({ entity, relationships: related }, null, 2), 'Entity context')}><Copy size={15} /></button>{closeButton}</div></div>
+      <div className="inspector-scroll">
+        <div className="inspector-title"><EntityAvatar entity={entity} data={data} size="lg" /><div><h2>{entity.name}</h2><span className="kind-label">{entity.kind}</span></div></div>
+        <div className="inspector-actions">
+          <button className="primary-button small" onClick={() => onAdd('fact')}><Link2 size={14} /> Connect</button>
+          <button className="secondary-button small" onClick={() => onAdd('entity-edit')}><Pencil size={14} /> Edit</button>
+          <button className="secondary-button small" onClick={() => onAdd('entity-merge')}><Merge size={14} /> Merge</button>
+          <button className="secondary-button small icon-only" title="Center in graph · F" aria-label="Center in graph" onClick={() => onFocus(entity.id)}><Crosshair size={14} /></button>
+        </div>
+        {entity.description && <p className="inspector-description">{entity.description}</p>}
+        <Section title="Relationships" count={related.length}>
+          {related.length ? <div className="relation-list">{related.map(fact => {
+            const outgoing = fact.subject_id === entity.id
+            const other = outgoing ? fact.object_id : fact.subject_id
+            return <div key={fact.id} className="relation-row">
+              <button className="relation-main" onClick={() => onSelect({ kind: 'fact', id: fact.id }, true)} title="Open relationship">
+                <span className={`state-dot ${fact.truth_state}`} title={labels[fact.truth_state]} />
+                <span className="relation-dir" title={outgoing ? 'Outgoing' : 'Incoming'}>{outgoing ? <ArrowRight size={13} /> : <ArrowLeft size={13} />}</span>
+                <span className="relation-predicate">{fact.predicate}</span>
+              </button>
+              <button className="relation-target" onClick={() => onSelect({ kind: 'entity', id: other }, true)} title="Go to entity">{nameOf(data, other)}</button>
+            </div>
+          })}</div> : <p className="muted small">No relationships yet. Drag from a node's right handle to connect.</p>}
+        </Section>
+        <Section title="Identifiers" count={entity.identifiers.length} action={<button className="text-button" onClick={() => onAdd('identifier')}><Plus size={14} /> Add</button>}>
+          {entity.identifiers.length ? entity.identifiers.map(identifier => <IdentifierRow key={identifier.id} identifier={identifier} data={data} onCopy={onCopy} onDelete={() => onDelete('identifier', identifier.id)} />) :
+            <p className="muted small">No identifiers yet.</p>}
+        </Section>
+        <Section title="Details" defaultOpen={false}>
+          <dl className="meta-list"><dt>Created</dt><dd>{date(entity.created_at)}</dd><dt>Position</dt><dd>{entity.pinned ? 'Pinned' : 'Free'}</dd><dt>ID</dt><dd><button className="copy-id" onClick={() => onCopy(entity.id, 'Entity ID')} title="Copy entity ID">{entity.id} <Copy size={12} /></button></dd></dl>
+        </Section>
+      </div>
+      <div className="inspector-foot"><button className="danger-link" onClick={() => onDelete('entity', entity.id)}><Trash2 size={14} /> Delete entity</button></div>
     </aside>
   }
 
   const fact = data.facts.find(item => item.id === selection.id)
   if (!fact) return null
-  return <aside className="detail-panel">
-    <div className="detail-head"><span>RELATIONSHIP / FACT</span><button className="icon-button" onClick={onClose} title="Close"><X size={17} /></button></div>
-    <div className="fact-heading"><span>{nameOf(data, fact.subject_id)}</span><ArrowRight size={19} /><span>{nameOf(data, fact.object_id)}</span></div>
-    <div className="predicate-label">{fact.predicate}</div>
-    <button className="id-line copy-id" onClick={() => onCopy(fact.id, 'Relationship ID')} title="Copy relationship ID">ID {fact.id} <Copy size={13} /></button>
-    <div className="fact-state"><StatePill state={fact.truth_state} /><span>{fact.assertions.filter(a => !a.retracted_at).length} active evidence items</span></div>
-    <div className="fact-meta"><span>Relation valid from</span><strong>{date(fact.valid_from)}</strong></div>
-    {fact.valid_to && <div className="fact-meta"><span>Relation valid to</span><strong>{date(fact.valid_to)}</strong></div>}
-    <section className="detail-section">
-      <div className="section-heading"><h3>Evidence <small>{fact.assertions.length}</small></h3><button className="text-button" onClick={() => onAdd('assertion')}><Plus size={15} /> Add evidence</button></div>
-      {fact.assertions.map(assertion => <AssertionRow key={assertion.id} assertion={assertion} data={data} onCopy={onCopy} onEdit={() => onEditEvidence(assertion.id)} onRetract={() => onRetract(assertion.id)} />)}
-    </section>
-    <div className="truth-explanation"><ShieldCheck size={18} /><span>Supporting and refuting evidence can coexist. Retracted evidence remains traceable.</span></div>
-    <div className="detail-bottom"><button className="danger-link" onClick={() => onDelete('fact', fact.id)}><Trash2 size={15} /> Delete relationship</button></div>
+  const active = fact.assertions.filter(a => !a.retracted_at)
+  const confirmed = active.filter(a => a.review_status === 'confirmed').length
+  return <aside className="inspector" aria-label="Inspector">
+    <div className="inspector-head"><span className="eyebrow">Relationship</span><div className="head-actions">
+      <button className="icon-button" title="Copy relationship ID" aria-label="Copy relationship ID" onClick={() => onCopy(fact.id, 'Relationship ID')}><Copy size={15} /></button>{closeButton}</div></div>
+    <div className="inspector-scroll">
+      <div className="fact-path">
+        <button onClick={() => onSelect({ kind: 'entity', id: fact.subject_id }, true)}>{nameOf(data, fact.subject_id)}</button>
+        <div className={`fact-predicate ${fact.truth_state}`}><span>{fact.predicate}</span><ArrowDownIcon /></div>
+        <button onClick={() => onSelect({ kind: 'entity', id: fact.object_id }, true)}>{nameOf(data, fact.object_id)}</button>
+      </div>
+      <div className="fact-state"><StatePill state={fact.truth_state} /><span>{active.length} active · {confirmed} confirmed</span></div>
+      <dl className="meta-list"><dt>Valid from</dt><dd>{date(fact.valid_from)}</dd>{fact.valid_to && <><dt>Valid to</dt><dd>{date(fact.valid_to)}</dd></>}</dl>
+      <Section title="Evidence" count={fact.assertions.length} action={<button className="text-button" onClick={() => onAdd('assertion')}><Plus size={14} /> Add evidence</button>}>
+        {fact.assertions.length ? fact.assertions.map(assertion => <AssertionRow key={assertion.id} assertion={assertion} fact={fact} data={data} onCopy={onCopy} onOpen={() => onOpenEvidence(assertion.id)} onRetract={() => onRetract(assertion.id)} />)
+          : <p className="muted small">No evidence yet. A relationship stays <em>unknown</em> until confirmed evidence exists.</p>}
+      </Section>
+      <p className="inspector-note"><ShieldCheck size={14} /> Status is derived from confirmed, active evidence. Supporting and refuting evidence can coexist.</p>
+    </div>
+    <div className="inspector-foot"><button className="danger-link" onClick={() => onDelete('fact', fact.id)}><Trash2 size={14} /> Delete relationship</button></div>
   </aside>
 }
+function ArrowDownIcon() { return <svg width="12" height="18" viewBox="0 0 12 18" aria-hidden="true"><path d="M6 0v15M1.5 11 6 16l4.5-5" fill="none" stroke="currentColor" strokeWidth="1.6" /></svg> }
 
 function IdentifierRow({ identifier, data, onCopy, onDelete }: { identifier: Identifier; data: GraphData; onCopy: (value: string, label: string) => void; onDelete: () => void }) {
+  const source = sourceOf(data, identifier.source_id)
   return <div className="identifier-row">
-    <div className="identifier-top"><span className="scheme-badge">{identifier.scheme}</span><button title="Delete identifier" className="row-delete" onClick={onDelete}><X size={14} /></button></div>
-    <button className="identifier-value copy-value" onClick={() => onCopy(identifier.raw_value, 'Identifier')} title="Copy identifier">{identifier.raw_value} <Copy size={12} /></button>
-    <button className="identifier-id" onClick={() => onCopy(identifier.id, 'Identifier ID')} title="Copy identifier record ID">ID {identifier.id.slice(0, 8)}…</button>
-    <div className="identifier-meta">{identifier.namespace && <span>{identifier.namespace} · </span>}<SourceLine data={data} sourceId={identifier.source_id} /> · {Math.round(identifier.confidence * 100)} %</div>
-    {(identifier.valid_from || identifier.valid_to) && <div className="identifier-meta">{date(identifier.valid_from)} – {identifier.valid_to ? date(identifier.valid_to) : 'heute'}</div>}
+    <span className="scheme-badge">{identifier.scheme}</span>
+    <button className="identifier-value" onClick={() => onCopy(identifier.raw_value, 'Identifier')} title="Copy identifier">{identifier.raw_value}</button>
+    <button title="Delete identifier" aria-label="Delete identifier" className="row-delete" onClick={onDelete}><X size={13} /></button>
+    <div className="identifier-meta">{identifier.namespace && <span>{identifier.namespace} · </span>}{source ? source.title : 'Manual'} · {Math.round(identifier.confidence * 100)}%
+      {(identifier.valid_from || identifier.valid_to) && <> · {date(identifier.valid_from)} – {identifier.valid_to ? date(identifier.valid_to) : 'now'}</>}</div>
   </div>
 }
 
-function AssertionRow({ assertion, data, onCopy, onEdit, onRetract }: { assertion: Assertion; data: GraphData; onCopy: (value: string, label: string) => void; onEdit: () => void; onRetract: () => void }) {
+function AssertionRow({ assertion, fact, data, onCopy, onOpen, onRetract }: { assertion: Assertion; fact: Fact; data: GraphData; onCopy: (value: string, label: string) => void; onOpen: () => void; onRetract: () => void }) {
   const source = sourceOf(data, assertion.source_id)
-  const period = evidencePeriod(assertion, data.facts.find(f => f.id === assertion.fact_id)!)
-  return <div className={`assertion-row ${assertion.retracted_at ? 'retracted' : ''}`}>
-    <div className="assertion-top"><span className={assertion.stance === 'supports' ? 'supports-text' : 'refutes-text'}>{assertion.stance === 'supports' ? '● Supports' : '● Refutes'}</span><span>{Math.round(assertion.confidence * 100)} %</span></div>
-    <div className="assertion-source"><FileText size={14} /><SourceLine data={data} sourceId={assertion.source_id} /></div>
-    {source && (source.excerpt || source.uri) && <details className="source-details"><summary>View source</summary>{source.excerpt && <blockquote>{source.excerpt}</blockquote>}{source.uri && <div>{source.uri}</div>}</details>}
-    {assertion.note && <p>{assertion.note}</p>}
-    <div className="assertion-id"><button onClick={() => onCopy(assertion.id, 'Evidence ID')} title="Copy evidence ID">ID {assertion.id.slice(0, 8)}… <Copy size={11} /></button></div>
-    <div className="assertion-footer"><span>{periodLabel(period.from, period.to)}{assertion.retracted_at && ' · Retracted'}</span><span className="assertion-actions"><span className={`review-badge ${assertion.review_status ?? 'unconfirmed'}`}>{assertion.review_status ?? 'unconfirmed'}</span><button onClick={onEdit}>Open & review</button>{!assertion.retracted_at && <button onClick={onRetract}>Retract</button>}</span></div>
+  const period = evidencePeriod(assertion, fact)
+  const status = assertion.retracted_at ? 'retracted' : assertion.review_status ?? 'unconfirmed'
+  return <div className={`assertion-card ${assertion.retracted_at ? 'retracted' : ''}`}>
+    <div className="assertion-top">
+      <span className={`stance ${assertion.stance}`}>{assertion.stance === 'supports' ? 'Supports' : 'Refutes'}</span>
+      <span className={`review-badge ${status}`}>{status === 'confirmed' ? <CheckCircle2 size={12} /> : <CircleDashed size={12} />}{status}</span>
+      <span className="assertion-conf">{Math.round(assertion.confidence * 100)}%</span>
+    </div>
+    <p className="assertion-text">{assertion.observation || assertion.note || <span className="muted">No observation recorded.</span>}</p>
+    <div className="assertion-source"><FileText size={13} /><span>{source ? source.title : 'Manual entry'}</span>{assertion.locator && <code>{assertion.locator}</code>}</div>
+    <div className="assertion-footer"><span>{periodLabel(period.from, period.to)}</span>
+      <span className="assertion-actions">
+        <button onClick={() => onCopy(assertion.id, 'Evidence ID')} title="Copy evidence ID" aria-label="Copy evidence ID"><Copy size={12} /></button>
+        {!assertion.retracted_at && <button onClick={onRetract}>Retract</button>}
+        <button className="strong" onClick={onOpen}>Open & review</button>
+      </span></div>
   </div>
 }
 
@@ -184,25 +223,28 @@ function Dialog({ kind, data, selection, editingAssertionId, relationTargetId, b
   const sourceSelect = <label>Source <span className="optional">optional</span><select name="source_id" defaultValue={editingAssertion?.source_id ?? ''}><option value="">Manual entry</option>{data.sources.map(source => <option key={source.id} value={source.id}>{source.title}</option>)}</select></label>
   const confidenceField = <label>Confidence <span className="optional">0–100 %</span><input name="confidence" type="number" min="0" max="100" defaultValue={editingAssertion ? Math.round(editingAssertion.confidence * 100) : 100} /></label>
   const dateFields = <div className="field-grid"><label>Evidence from <span className="optional">optional</span><input name="valid_from" type="datetime-local" defaultValue={localDate(editingAssertion?.valid_from)} /></label><label>Evidence to <span className="optional">optional</span><input name="valid_to" type="datetime-local" defaultValue={localDate(editingAssertion?.valid_to)} /></label></div>
+  const entityOptions = [...data.entities].sort((a, b) => a.name.localeCompare(b.name)).map(item => <option key={item.id} value={item.id}>{item.name} · {item.kind}</option>)
   return <div className="modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) onClose() }}>
     <div className="modal" role="dialog" aria-modal="true" aria-label={titles[kind]}>
-      <div className="modal-header"><div><span className="eyebrow">FACTGRAPH · EDIT</span><h2>{titles[kind]}</h2></div><button className="icon-button" onClick={onClose}><X size={20} /></button></div>
+      <div className="modal-header"><h2>{titles[kind]}</h2><button className="icon-button" onClick={onClose} aria-label="Close dialog"><X size={18} /></button></div>
       <form onSubmit={submit}>
-        {(kind === 'entity' || kind === 'entity-edit') && <><label>Name<input name="name" defaultValue={editing?.name} autoFocus required placeholder="e.g. Web server 01" /></label><div className="field-grid"><label>Type<select aria-label="Type" name="kind" defaultValue={editing ? (kinds.includes(editing.kind) ? editing.kind : customKindValue) : kinds[0]} onChange={event => setCustomEntityKind(event.target.value === customKindValue)}>{kinds.map(value => <option key={value}>{value}</option>)}<option value={customKindValue}>Custom type…</option></select>{customEntityKind && <input name="custom_kind" defaultValue={editing?.kind} required autoFocus placeholder="e.g. SaaS application" />}</label><label>Node color<input name="color" className="color-input" type="color" defaultValue={editing?.color || entityVisual(editing?.kind || kinds[0]).fill} /></label></div><label>Description <span className="optional">optional</span><textarea name="description" defaultValue={editing?.description} rows={3} placeholder="What is known about this entity?" /></label></>}
-        {kind === 'entity-merge' && selection?.kind === 'entity' && <><div className="modal-context">Merge <strong>{nameOf(data, selection.id)}</strong> into another entity. Its identifiers, relationships and evidence are retained.</div><label>Keep entity<select name="target_id" required autoFocus><option value="" disabled>Choose target entity</option>{data.entities.filter(item => item.id !== selection.id).map(item => <option key={item.id} value={item.id}>{item.name} · {item.kind}</option>)}</select></label><div className="form-warning">The selected source entity will disappear. Use Undo if you change your mind.</div></>}
-        {kind === 'source' && <><label>Title<input name="title" autoFocus required placeholder="e.g. EDR export from Sep 27" /></label><label>URL or reference <span className="optional">optional</span><input name="uri" placeholder="https://… or file path" /></label><label>Source classification<select name="source_kind"><option value="unknown">Unclassified</option><option value="primary">Primary evidence</option><option value="secondary">Secondary context</option></select></label><label>KQL query<textarea name="query" rows={2}/></label><label>Original excerpt / results <span className="optional">optional</span><textarea name="excerpt" rows={4} placeholder="Relevant passage from the source" /></label></>}
-        {kind === 'identifier' && <><div className="modal-context">Entity: <strong>{selection?.kind === 'entity' ? nameOf(data, selection.id) : ''}</strong></div><div className="field-grid"><label>Scheme<select name="scheme">{schemes.map(value => <option key={value}>{value}</option>)}</select></label><label>Namespace <span className="optional">optional</span><input name="namespace" placeholder="e.g. prod" /></label></div><label>Value<input name="raw_value" autoFocus required placeholder="External identifier" /></label>{dateFields}{sourceSelect}{confidenceField}</>}
-        {kind === 'fact' && <><div className="field-grid"><label>From<select name="subject_id" defaultValue={selection?.kind === 'entity' ? selection.id : ''} required><option value="" disabled>Choose entity</option>{data.entities.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label>To<div className="target-choice"><button type="button" className={newTarget ? 'active' : ''} onClick={() => setNewTarget(true)}>New node</button><button type="button" className={!newTarget ? 'active' : ''} onClick={() => setNewTarget(false)}>Existing node</button></div></label></div>{newTarget ? <div className="field-grid"><label>New node name<input name="new_object_name" required placeholder="e.g. Azure secret" /></label><label>Type<select name="new_object_kind" defaultValue={kinds[0]} onChange={event => setCustomTargetKind(event.target.value === customKindValue)}>{kinds.map(value => <option key={value}>{value}</option>)}<option value={customKindValue}>Custom type…</option></select>{customTargetKind && <input name="custom_new_object_kind" required autoFocus placeholder="e.g. SaaS application" />}</label></div> : <label>Target node<select name="object_id" defaultValue={relationTargetId ?? ''} required><option value="" disabled>Choose entity</option>{data.entities.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>}<label>Relationship / predicate<input name="predicate" autoFocus required placeholder="e.g. reads, grants access to, accessed" /></label>{dateFields}<div className="form-divider">First evidence statement</div><StanceSelect value={stance} onChange={setStance} />{sourceSelect}{confidenceField}<label>Note <span className="optional">optional</span><textarea name="note" rows={2} placeholder="What supports this statement?" /></label></>}
-        {(kind === 'assertion' || kind === 'assertion-edit') && <>{dateFields}<div className="modal-context">Relationship: <strong>{selection?.kind === 'fact' ? data.facts.find(item => item.id === selection.id)?.predicate : ''}</strong></div><StanceSelect value={stance} onChange={setStance} />{sourceSelect}{confidenceField}<label>Locator / event ID / result row<input name="locator" defaultValue={editingAssertion?.locator}/></label><label>Observation<textarea name="note" defaultValue={editingAssertion?.observation || editingAssertion?.note} rows={3} placeholder="What does the source show?" /></label></>}
-        {(error || localError) && <div className="form-error">{localError || error}</div>}
-        <div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>Cancel</button><button className="primary-button" disabled={busy}>{busy ? 'Saving…' : 'Save'} <ArrowRight size={16} /></button></div>
+        <div className="modal-body">
+          {(kind === 'entity' || kind === 'entity-edit') && <><label>Name<input name="name" defaultValue={editing?.name} autoFocus required placeholder="e.g. Web server 01" /></label><div className="field-grid"><label>Type<select aria-label="Type" name="kind" defaultValue={editing ? (kinds.includes(editing.kind) ? editing.kind : customKindValue) : kinds[0]} onChange={event => setCustomEntityKind(event.target.value === customKindValue)}>{kinds.map(value => <option key={value}>{value}</option>)}<option value={customKindValue}>Custom type…</option></select>{customEntityKind && <input name="custom_kind" defaultValue={editing?.kind} required autoFocus placeholder="e.g. SaaS application" />}</label><label>Node color<input name="color" className="color-input" type="color" defaultValue={editing?.color || entityVisual(editing?.kind || kinds[0]).border} /></label></div><label>Description <span className="optional">optional</span><textarea name="description" defaultValue={editing?.description} rows={3} placeholder="What is known about this entity?" /></label></>}
+          {kind === 'entity-merge' && selection?.kind === 'entity' && <><div className="modal-context">Merge <strong>{nameOf(data, selection.id)}</strong> into another entity. Its identifiers, relationships and evidence are retained.</div><label>Keep entity<select name="target_id" required autoFocus defaultValue=""><option value="" disabled>Choose target entity</option>{data.entities.filter(item => item.id !== selection.id).map(item => <option key={item.id} value={item.id}>{item.name} · {item.kind}</option>)}</select></label><div className="form-warning">The selected source entity will disappear. Use Undo if you change your mind.</div></>}
+          {kind === 'source' && <><label>Title<input name="title" autoFocus required placeholder="e.g. EDR export from Sep 27" /></label><label>URL or reference <span className="optional">optional</span><input name="uri" placeholder="https://… or file path" /></label><label>Source classification<select name="source_kind"><option value="unknown">Unclassified</option><option value="primary">Primary evidence</option><option value="secondary">Secondary context</option></select></label><label>KQL query <span className="optional">optional</span><textarea name="query" rows={2} className="mono" /></label><label>Original excerpt / results <span className="optional">optional</span><textarea name="excerpt" rows={4} className="mono" placeholder="Relevant passage from the source" /></label></>}
+          {kind === 'identifier' && <><div className="modal-context">Entity: <strong>{selection?.kind === 'entity' ? nameOf(data, selection.id) : ''}</strong></div><div className="field-grid"><label>Scheme<select name="scheme">{schemes.map(value => <option key={value}>{value}</option>)}</select></label><label>Namespace <span className="optional">optional</span><input name="namespace" placeholder="e.g. prod" /></label></div><label>Value<input name="raw_value" autoFocus required placeholder="External identifier" /></label>{dateFields}{sourceSelect}{confidenceField}</>}
+          {kind === 'fact' && <><div className="field-grid"><label>From<select name="subject_id" defaultValue={selection?.kind === 'entity' ? selection.id : ''} required><option value="" disabled>Choose entity</option>{entityOptions}</select></label><label>To<div className="segmented"><button type="button" className={newTarget ? 'active' : ''} onClick={() => setNewTarget(true)}>New node</button><button type="button" className={!newTarget ? 'active' : ''} onClick={() => setNewTarget(false)}>Existing node</button></div></label></div>{newTarget ? <div className="field-grid"><label>New node name<input name="new_object_name" required placeholder="e.g. Azure secret" /></label><label>Type<select name="new_object_kind" defaultValue={kinds[0]} onChange={event => setCustomTargetKind(event.target.value === customKindValue)}>{kinds.map(value => <option key={value}>{value}</option>)}<option value={customKindValue}>Custom type…</option></select>{customTargetKind && <input name="custom_new_object_kind" required autoFocus placeholder="e.g. SaaS application" />}</label></div> : <label>Target node<select name="object_id" defaultValue={relationTargetId ?? ''} required><option value="" disabled>Choose entity</option>{entityOptions}</select></label>}<label>Relationship / predicate<input name="predicate" autoFocus required placeholder="e.g. reads, grants access to, accessed" /></label>{dateFields}<div className="form-divider">First evidence statement</div><StanceSelect value={stance} onChange={setStance} /><div className="field-grid">{sourceSelect}{confidenceField}</div><label>Note <span className="optional">optional</span><textarea name="note" rows={2} placeholder="What supports this statement?" /></label></>}
+          {(kind === 'assertion' || kind === 'assertion-edit') && <><div className="modal-context">Relationship: <strong>{selection?.kind === 'fact' ? data.facts.find(item => item.id === selection.id)?.predicate : ''}</strong></div>{dateFields}<StanceSelect value={stance} onChange={setStance} /><div className="field-grid">{sourceSelect}{confidenceField}</div><label>Locator / event ID / result row<input name="locator" defaultValue={editingAssertion?.locator} /></label><label>Observation<textarea name="note" defaultValue={editingAssertion?.observation || editingAssertion?.note} rows={3} placeholder="What does the source show?" /></label></>}
+          {(error || localError) && <div className="form-error">{localError || error}</div>}
+        </div>
+        <div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>Cancel</button><button className="primary-button" disabled={busy}>{busy ? 'Saving…' : 'Save'} <CornerDownLeft size={14} /></button></div>
       </form>
     </div>
   </div>
 }
 
 function StanceSelect({ value, onChange }: { value: 'supports' | 'refutes'; onChange: (value: 'supports' | 'refutes') => void }) {
-  return <div className="stance-field"><span>Evidence stance</span><div className="stance-options"><button type="button" className={value === 'supports' ? 'active supports' : ''} onClick={() => onChange('supports')}>● Supports</button><button type="button" className={value === 'refutes' ? 'active refutes' : ''} onClick={() => onChange('refutes')}>● Refutes</button></div></div>
+  return <div className="stance-field"><span>Evidence stance</span><div className="segmented"><button type="button" className={value === 'supports' ? 'active supports' : ''} onClick={() => onChange('supports')}>Supports</button><button type="button" className={value === 'refutes' ? 'active refutes' : ''} onClick={() => onChange('refutes')}>Refutes</button></div></div>
 }
 
 function LogImportDialog({ boardId, sessionToken, onClose, onDone }: {
@@ -210,36 +252,38 @@ function LogImportDialog({ boardId, sessionToken, onClose, onDone }: {
 }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const [preview,setPreview] = useState<Record<string,unknown>|null>(null)
+  const [preview, setPreview] = useState<Record<string, unknown> | null>(null)
   const submit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     setBusy(true); setError('')
     try {
-      const body=new FormData(event.currentTarget)
-      body.set('dry_run',preview?'false':'true')
+      const body = new FormData(event.currentTarget)
+      body.set('dry_run', preview ? 'false' : 'true')
       const response = await fetch(`/api/boards/${boardId}/imports/file`, {
         method: 'POST', headers: { 'X-FactGraph-Token': sessionToken }, body,
       })
       const result = await response.json() as Record<string, unknown>
       if (!response.ok) throw new Error(String(result.detail ?? 'Import failed'))
-      if(!preview){setPreview(result);return}
+      if (!preview) { setPreview(result); return }
       onDone(`${result.rows} log rows · ${result.entities} entities · ${result.relations} relationships · ${result.evidence} evidence items`)
     } catch (problem) { setError(problem instanceof Error ? problem.message : 'Import failed') }
     finally { setBusy(false) }
   }
   return <div className="modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) onClose() }}>
     <div className="modal" role="dialog" aria-modal="true" aria-label="Import activity logs">
-      <div className="modal-header"><div><span className="eyebrow">FACTGRAPH · EVIDENCE</span><h2>Logs and KQL results</h2></div><button className="icon-button" onClick={onClose}><X size={20} /></button></div>
-      <form onChange={()=>setPreview(null)} onSubmit={event => void submit(event)}>
-        <p className="import-explanation">Import CSV, JSON or JSONL result rows. KQL is not executed here; the query and supplied rows are stored as the evidence source.</p>
-        <label>File<input name="file" type="file" accept=".csv,.json,.jsonl,.ndjson" required /></label>
-        <label>Source title<input name="title" defaultValue="Access Logs" required /></label>
-        <label>KQL query <span className="optional">optional</span><textarea name="query" rows={4} placeholder="AccessLogs | project IPAddress, FilePath, TimeGenerated" /></label>
-        <div className="field-grid"><label>Source column <span className="optional">blank = auto</span><input name="subject_field" placeholder="IPAddress" /></label><label>Target column <span className="optional">blank = auto</span><input name="object_field" placeholder="FilePath" /></label></div>
-        <div className="field-grid"><label>Source type<input name="subject_kind" defaultValue="IP" /></label><label>Target type<input name="object_kind" defaultValue="File" /></label></div>
-        <div className="field-grid"><label>Relationship<input name="predicate" defaultValue="accessed" required /></label><label>Relationship column <span className="optional">optional</span><input name="predicate_field" placeholder="OperationName" /></label></div>
-        {preview&&<div className="import-preview"><strong>Preview · no changes saved yet</strong><p>{String(preview.rows)} rows · {String(preview.entities)} entities · {String(preview.relations)} relationships · {String(preview.skipped)} skipped</p><p>Mapping: {String(preview.subject_field)} → {String(preview.object_field)}. New evidence is unconfirmed.</p></div>}{error && <div className="form-error">{error}</div>}
-        <div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>Cancel</button><button className="primary-button" disabled={busy}>{busy ? 'Processing…' : preview ? 'Apply import' : 'Preview import'} <ArrowRight size={16} /></button></div>
+      <div className="modal-header"><h2>Import logs & KQL results</h2><button className="icon-button" onClick={onClose} aria-label="Close dialog"><X size={18} /></button></div>
+      <form onChange={() => setPreview(null)} onSubmit={event => void submit(event)}>
+        <div className="modal-body">
+          <p className="hint">CSV, JSON or JSONL result rows. KQL is not executed here; the query and supplied rows are stored as the evidence source.</p>
+          <label>File<input name="file" type="file" accept=".csv,.json,.jsonl,.ndjson" required /></label>
+          <label>Source title<input name="title" defaultValue="Access Logs" required /></label>
+          <label>KQL query <span className="optional">optional</span><textarea name="query" rows={3} className="mono" placeholder="AccessLogs | project IPAddress, FilePath, TimeGenerated" /></label>
+          <div className="field-grid"><label>Source column <span className="optional">blank = auto</span><input name="subject_field" placeholder="IPAddress" /></label><label>Target column <span className="optional">blank = auto</span><input name="object_field" placeholder="FilePath" /></label></div>
+          <div className="field-grid"><label>Source type<input name="subject_kind" defaultValue="IP" /></label><label>Target type<input name="object_kind" defaultValue="File" /></label></div>
+          <div className="field-grid"><label>Relationship<input name="predicate" defaultValue="accessed" required /></label><label>Relationship column <span className="optional">optional</span><input name="predicate_field" placeholder="OperationName" /></label></div>
+          {preview && <div className="import-preview"><strong>Preview · no changes saved yet</strong><p>{String(preview.rows)} rows · {String(preview.entities)} entities · {String(preview.relations)} relationships · {String(preview.skipped)} skipped</p><p>Mapping: {String(preview.subject_field)} → {String(preview.object_field)}. New evidence is unconfirmed.</p></div>}{error && <div className="form-error">{error}</div>}
+        </div>
+        <div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>Cancel</button><button className="primary-button" disabled={busy}>{busy ? 'Processing…' : preview ? 'Apply import' : 'Preview import'} <ArrowRight size={14} /></button></div>
       </form>
     </div>
   </div>
@@ -247,11 +291,10 @@ function LogImportDialog({ boardId, sessionToken, onClose, onDone }: {
 
 function currentBoardId() {
   const fromUrl = window.location.pathname.match(/^\/boards\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/?$/i)?.[1]
-  let stored = ''
-  try { stored = localStorage.getItem('factgraph:lastBoard') ?? '' } catch { /* private mode */ }
+  const stored = readPref('lastBoard') ?? ''
   const id = fromUrl?.toLowerCase() ?? (/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(stored) ? stored : uuid())
-  window.history.replaceState(null, '', `/boards/${id}`)
-  try { localStorage.setItem('factgraph:lastBoard', id) } catch { /* private mode */ }
+  window.history.replaceState(null, '', `/boards/${id}${window.location.search}`)
+  writePref('lastBoard', id)
   return id
 }
 
@@ -270,22 +313,35 @@ function actionLabel(action: BoardAction) {
   return `${names[action.type]}${subject ? ` · ${subject}` : ''}`
 }
 
-type WorkspaceTab = 'graph' | 'timeline' | 'activity' | 'review'
-
 function TimelinePanel({ data, facts, selection, onSelect }: {
   data: GraphData; facts: GraphData['facts']; selection: Selection; onSelect: (selection: Selection) => void;
 }) {
   const entries = timelineEvents(facts)
-  return <section className="timeline-panel"><div className="card-header"><div><div className="card-title"><Activity size={18} /> Timeline</div><span>Evidence periods · chronological · UTC</span></div><span className="mini-count">{entries.length} evidence events</span></div><div className="timeline-list">{entries.length ? entries.map(({ fact, assertions, from, to }) => <button key={`${fact.id}:${from}:${to}:${assertions[0]?.locator ?? ''}`} className={`timeline-item ${selection?.id === fact.id ? 'active' : ''}`} onClick={() => onSelect({ kind: 'fact', id: fact.id })}><span className={`timeline-dot ${fact.truth_state}`} /><span className="timeline-date">{periodLabel(from, to)}</span><strong>{nameOf(data, fact.subject_id)} <span>→</span> {nameOf(data, fact.object_id)}</strong><small>{fact.predicate} · {assertions.length} evidence {assertions.length === 1 ? 'item' : 'items'} · {[...new Set(assertions.map(item => item.stance === 'supports' ? 'Supports' : 'Refutes'))].join(' + ')}</small></button>) : <div className="timeline-empty">No active evidence yet.</div>}</div></section>
+  const groups: { day: string; items: typeof entries }[] = []
+  for (const entry of entries) {
+    const day = entry.from ? new Date(entry.from).toLocaleDateString('en-GB', { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric', timeZone: 'UTC' }) : 'Undated'
+    const last = groups[groups.length - 1]
+    if (last?.day === day) last.items.push(entry); else groups.push({ day, items: [entry] })
+  }
+  return <section className="view-page">
+    <header className="view-header"><div><h2>Timeline</h2><p>Evidence periods in chronological order · UTC</p></div><span className="count-chip">{entries.length} events</span></header>
+    {entries.length ? groups.map(group => <div key={group.day} className="timeline-group"><div className="timeline-day">{group.day}</div>
+      {group.items.map(({ fact, assertions, from, to }) => <button key={`${fact.id}:${from}:${to}:${assertions[0]?.locator ?? ''}`} className={`timeline-item ${selection?.id === fact.id ? 'active' : ''}`} onClick={() => onSelect({ kind: 'fact', id: fact.id })}>
+        <span className="timeline-time">{from ? new Date(from).toISOString().slice(11, 16) : '—'}</span>
+        <span className={`timeline-dot ${fact.truth_state}`} />
+        <span className="timeline-body"><strong>{nameOf(data, fact.subject_id)} <em>{fact.predicate}</em> {nameOf(data, fact.object_id)}</strong>
+          <small>{periodLabel(from, to)} · {assertions.length} evidence {assertions.length === 1 ? 'item' : 'items'} · {[...new Set(assertions.map(item => item.stance === 'supports' ? 'supports' : 'refutes'))].join(' + ')}</small></span>
+      </button>)}</div>) : <div className="view-empty"><Clock size={22} /><p>No active evidence yet.</p></div>}
+  </section>
 }
 
-function EvidenceWindow({ facts, from, to, includeUndated, onIncludeUndatedChange, onFromChange, onToChange, onReset }: {
+function EvidenceWindow({ facts, from, to, includeUndated, onIncludeUndatedChange, onFromChange, onToChange, onReset, onClose }: {
   facts: GraphData['facts']; from: string; to: string;
   includeUndated: boolean; onIncludeUndatedChange: (value: boolean) => void;
-  onFromChange: (value: string) => void; onToChange: (value: string) => void; onReset: () => void;
+  onFromChange: (value: string) => void; onToChange: (value: string) => void; onReset: () => void; onClose: () => void;
 }) {
-  const [playing,setPlaying]=useState(false)
-  const steps = timelineSteps(facts)
+  const [playing, setPlaying] = useState(false)
+  const steps = useMemo(() => timelineSteps(facts), [facts])
   const maxStep = Math.max(steps.length - 1, 0)
   const nearestStep = (value: string, fallback: number) => {
     if (!value || !steps.length) return fallback
@@ -294,47 +350,181 @@ function EvidenceWindow({ facts, from, to, includeUndated, onIncludeUndatedChang
   }
   const fromStep = Math.min(nearestStep(from, 0), maxStep)
   const toStep = Math.max(nearestStep(to, maxStep), 0)
-  const position = (step: number) => maxStep ? Math.round((step / maxStep) * 1000) : 0
+  const position = (step: number) => maxStep ? (step / maxStep) * 100 : 0
   const moveFrom = (step: number) => onFromChange(steps[Math.min(step, toStep)] ?? '')
   const moveTo = (step: number) => onToChange(steps[Math.max(step, fromStep)] ?? '')
   const hasRange = steps.length > 1
-  useEffect(()=>{
-    if(!playing)return
-    if(toStep>=maxStep){setPlaying(false);return}
-    const timer=window.setTimeout(()=>moveTo(toStep+1),900)
-    return ()=>window.clearTimeout(timer)
-  },[playing,toStep,maxStep])
-  return <div className="evidence-window"><div><strong>Evidence window</strong><span>{from || to ? 'Edges update at each evidence step.' : 'Drag the handles through evidence activity.'}</span></div><div className="window-range" aria-label="Evidence time range"><div className="window-track" /><div className="window-selection" style={{ left: `${position(fromStep) / 10}%`, right: `${100 - position(toStep) / 10}%` }} /> <input aria-label="Evidence from" aria-valuetext={steps[fromStep] ?? 'No dated evidence'} className="range-input range-from" type="range" min="0" max={maxStep} step="1" value={fromStep} disabled={!hasRange} onChange={event => moveFrom(Number(event.target.value))} /><input aria-label="Evidence to" aria-valuetext={steps[toStep] ?? 'No dated evidence'} className="range-input range-to" type="range" min="0" max={maxStep} step="1" value={toStep} disabled={!hasRange} onChange={event => moveTo(Number(event.target.value))} /><div className="window-labels"><span>From <strong>{steps.length ? periodLabel(steps[fromStep], null) : 'No dated evidence'}</strong></span><span>To <strong>{steps.length ? periodLabel(steps[toStep], null) : 'No dated evidence'}</strong></span><em>{steps.length ? `${fromStep + 1}–${toStep + 1} / ${steps.length} steps` : ''}</em></div></div><div className="time-step-controls"><button aria-label="Previous evidence step" disabled={!hasRange||toStep<=fromStep} onClick={()=>moveTo(toStep-1)}>‹</button><button aria-label={playing?'Pause evidence playback':'Play evidence steps'} disabled={!hasRange} onClick={()=>{if(toStep===maxStep){onFromChange(steps[0]);onToChange(steps[0])}setPlaying(!playing)}}>{playing?'Ⅱ':'▶'}</button><button aria-label="Next evidence step" disabled={!hasRange||toStep===maxStep} onClick={()=>moveTo(toStep+1)}>›</button></div><label className="undated-toggle"><input type="checkbox" checked={includeUndated} onChange={event => onIncludeUndatedChange(event.target.checked)} /> Include undated</label>{(from || to) && <button className="text-button" onClick={onReset}>Show all</button>}</div>
+  useEffect(() => {
+    if (!playing) return
+    if (toStep >= maxStep) { setPlaying(false); return }
+    const timer = window.setTimeout(() => moveTo(toStep + 1), 900)
+    return () => window.clearTimeout(timer)
+  }, [playing, toStep, maxStep])
+  return <div className="time-bar" role="region" aria-label="Evidence window">
+    <div className="time-controls">
+      <button className="icon-button" aria-label="Previous evidence step" disabled={!hasRange || toStep <= fromStep} onClick={() => moveTo(toStep - 1)}><SkipBack size={14} /></button>
+      <button className="icon-button play" aria-label={playing ? 'Pause evidence playback' : 'Play evidence steps'} disabled={!hasRange} onClick={() => { if (toStep === maxStep) { onFromChange(steps[0]); onToChange(steps[0]) } setPlaying(!playing) }}>{playing ? <Pause size={14} /> : <Play size={14} />}</button>
+      <button className="icon-button" aria-label="Next evidence step" disabled={!hasRange || toStep === maxStep} onClick={() => moveTo(toStep + 1)}><SkipForward size={14} /></button>
+    </div>
+    <div className="time-main">
+      <div className="window-range" aria-label="Evidence time range"><div className="window-track" /><div className="window-selection" style={{ left: `${position(fromStep)}%`, right: `${100 - position(toStep)}%` }} />
+        <input aria-label="Evidence from" aria-valuetext={steps[fromStep] ?? 'No dated evidence'} className="range-input" type="range" min="0" max={maxStep} step="1" value={fromStep} disabled={!hasRange} onChange={event => moveFrom(Number(event.target.value))} />
+        <input aria-label="Evidence to" aria-valuetext={steps[toStep] ?? 'No dated evidence'} className="range-input" type="range" min="0" max={maxStep} step="1" value={toStep} disabled={!hasRange} onChange={event => moveTo(Number(event.target.value))} /></div>
+      <div className="window-labels"><span>{steps.length ? periodLabel(steps[fromStep], null) : 'No dated evidence'}</span><em>{steps.length ? `step ${fromStep + 1}–${toStep + 1} of ${steps.length}` : ''}</em><span>{steps.length ? periodLabel(steps[toStep], null) : ''}</span></div>
+    </div>
+    <label className="check"><input type="checkbox" checked={includeUndated} onChange={event => onIncludeUndatedChange(event.target.checked)} /> Undated</label>
+    {(from || to) && <button className="text-button" onClick={onReset}>Show all</button>}
+    <button className="icon-button" aria-label="Close evidence window" onClick={onClose}><X size={14} /></button>
+  </div>
 }
 
 function ActivityPanel({ actions }: { actions: BoardAction[] }) {
-  const [page,setPage]=useState(0)
-  const groups=new Map<string,BoardAction[]>()
-  for(const action of actions){const key=action.batch_id??action.id;groups.set(key,[...(groups.get(key)??[]),action])}
-  const batches=[...groups.entries()].reverse()
-  return <section className="activity-panel"><div className="card-header"><div className="card-title"><Activity size={18}/> Activity · {actions.length} changes in {batches.length} groups</div><div><button className="secondary-button" disabled={page===0} onClick={()=>setPage(page-1)}>Previous</button><button className="secondary-button" disabled={(page+1)*50>=batches.length} onClick={()=>setPage(page+1)}>Next</button></div></div><div className="activity-batches">{batches.slice(page*50,(page+1)*50).map(([id,items])=><details key={id}><summary><strong>{items.length===1?actionLabel(items[0]):`${items.length} changes`}</strong><span>{items[0].channel??items[0].author} · {items[0].author} · {new Date(items[0].at).toLocaleString('en-GB')}</span></summary>{items.map(action=><div key={action.id}><strong>{actionLabel(action)}</strong><small>{action.actor} · {action.id}</small><pre>{JSON.stringify(action.payload,null,2)}</pre></div>)}</details>)}</div></section>
+  const [page, setPage] = useState(0)
+  const batches = useMemo(() => {
+    const groups = new Map<string, BoardAction[]>()
+    for (const action of actions) { const key = action.batch_id ?? action.id; const list = groups.get(key); if (list) list.push(action); else groups.set(key, [action]) }
+    return [...groups.entries()].reverse()
+  }, [actions])
+  return <section className="view-page">
+    <header className="view-header"><div><h2>Activity</h2><p>{actions.length} changes in {batches.length} groups · UI, REST and MCP</p></div>
+      <div className="pager"><button className="secondary-button small" disabled={page === 0} onClick={() => setPage(page - 1)}>Previous</button><span>{page + 1} / {Math.max(1, Math.ceil(batches.length / 50))}</span><button className="secondary-button small" disabled={(page + 1) * 50 >= batches.length} onClick={() => setPage(page + 1)}>Next</button></div></header>
+    <div className="activity-list">{batches.slice(page * 50, (page + 1) * 50).map(([id, items]) => <details key={id} className="activity-item"><summary>
+      <span className={`channel-badge ${(items[0].channel ?? 'UI').toLowerCase()}`}>{items[0].channel ?? 'UI'}</span>
+      <strong>{items.length === 1 ? actionLabel(items[0]) : `${items.length} changes · ${actionLabel(items[0])}`}</strong>
+      <span className="activity-meta">{items[0].author} · {new Date(items[0].at).toLocaleString('en-GB')}</span></summary>
+      {items.map(action => <div key={action.id} className="activity-detail"><strong>{actionLabel(action)}</strong><small>{action.actor} · {action.id}</small><pre>{JSON.stringify(action.payload, null, 2)}</pre></div>)}</details>)}
+      {!batches.length && <div className="view-empty"><Activity size={22} /><p>No changes yet.</p></div>}</div>
+  </section>
+}
+
+function Explorer({ data, search, selection, onSelect, onClose }: { data: GraphData; search: string; selection: Selection; onSelect: (selection: Selection, focus?: boolean) => void; onClose: () => void }) {
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({})
+  const needle = search.trim().toLowerCase()
+  const degree = useMemo(() => {
+    const map = new Map<string, number>()
+    for (const f of data.facts) { map.set(f.subject_id, (map.get(f.subject_id) ?? 0) + 1); map.set(f.object_id, (map.get(f.object_id) ?? 0) + 1) }
+    return map
+  }, [data.facts])
+  const groups = useMemo(() => {
+    const byKind = new Map<string, Entity[]>()
+    for (const entity of data.entities) {
+      if (needle && !`${entity.name} ${entity.kind} ${entity.identifiers.map(i => i.raw_value).join(' ')}`.toLowerCase().includes(needle)) continue
+      const list = byKind.get(entity.kind); if (list) list.push(entity); else byKind.set(entity.kind, [entity])
+    }
+    return [...byKind.entries()].map(([kind, items]) => [kind, items.sort((a, b) => a.name.localeCompare(b.name))] as const).sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]))
+  }, [data.entities, needle])
+  const total = groups.reduce((sum, [, items]) => sum + items.length, 0)
+  return <aside className="explorer" aria-label="Entity explorer">
+    <div className="explorer-head"><div><strong>Entities</strong><span className="count">{needle ? `${total} / ${data.entities.length}` : data.entities.length}</span></div><button className="icon-button" aria-label="Hide explorer" title="Hide explorer" onClick={onClose}><X size={15} /></button></div>
+    <div className="explorer-list">
+      {groups.map(([kind, items]) => {
+        const isCollapsed = collapsed[kind] ?? false
+        const limit = expanded[kind] ? items.length : 100
+        return <div key={kind} className="explorer-group">
+          <button className="explorer-group-head" aria-expanded={!isCollapsed} onClick={() => setCollapsed({ ...collapsed, [kind]: !isCollapsed })}>
+            {isCollapsed ? <ChevronRight size={13} /> : <ChevronDown size={13} />}<EntityAvatar entity={{ kind }} data={data} size="sm" /><span>{kind}</span><span className="count">{items.length}</span></button>
+          {!isCollapsed && items.slice(0, limit).map(entity => <button key={entity.id} className={`explorer-item ${selection?.id === entity.id ? 'active' : ''}`} onClick={() => onSelect({ kind: 'entity', id: entity.id }, true)} title={entity.name}>
+            <span className="explorer-name">{entity.name}</span>{entity.identifiers[0] && <span className="explorer-hint">{entity.identifiers[0].raw_value}</span>}<span className="explorer-degree" title="Relationships">{degree.get(entity.id) ?? 0}</span></button>)}
+          {!isCollapsed && items.length > limit && <button className="explorer-more" onClick={() => setExpanded({ ...expanded, [kind]: true })}>Show all {items.length}</button>}
+        </div>
+      })}
+      {!groups.length && <div className="explorer-empty">{needle ? 'No matches.' : 'No entities yet.'}</div>}
+    </div>
+  </aside>
+}
+
+type PaletteItem = { id: string; group: string; label: string; hint?: string; icon: ReactNode; run: () => void }
+function CommandPalette({ items, onClose }: { items: PaletteItem[]; onClose: () => void }) {
+  const [query, setQuery] = useState('')
+  const [index, setIndex] = useState(0)
+  const list = useRef<HTMLDivElement>(null)
+  const q = query.trim().toLowerCase()
+  const results = useMemo(() => {
+    const matched = q ? items.filter(item => `${item.label} ${item.hint ?? ''} ${item.group}`.toLowerCase().includes(q)) : items.filter(item => item.group !== 'Entities').concat(items.filter(item => item.group === 'Entities').slice(0, 8))
+    return matched.slice(0, 60)
+  }, [items, q])
+  useEffect(() => setIndex(0), [q])
+  useEffect(() => { list.current?.querySelector('.active')?.scrollIntoView({ block: 'nearest' }) }, [index])
+  const choose = (item?: PaletteItem) => { if (!item) return; onClose(); item.run() }
+  let lastGroup = ''
+  return <div className="command-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) onClose() }}>
+    <div className="command-palette" role="dialog" aria-modal="true" aria-label="Command palette">
+      <label className="command-input"><Search size={16} /><input autoFocus placeholder="Search entities or run a command…" value={query} onChange={e => setQuery(e.target.value)}
+        onKeyDown={e => {
+          if (e.key === 'ArrowDown') { e.preventDefault(); setIndex(Math.min(index + 1, results.length - 1)) }
+          else if (e.key === 'ArrowUp') { e.preventDefault(); setIndex(Math.max(index - 1, 0)) }
+          else if (e.key === 'Enter') { e.preventDefault(); choose(results[index]) }
+          else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); onClose() }
+        }} /><Kbd>esc</Kbd></label>
+      <div className="command-list" ref={list}>
+        {results.map((item, i) => {
+          const header = item.group !== lastGroup ? <div className="command-group" key={`g-${item.group}`}>{item.group}</div> : null
+          lastGroup = item.group
+          return [header, <button key={item.id} className={`command-item ${i === index ? 'active' : ''}`} onMouseMove={() => setIndex(i)} onClick={() => choose(item)}>
+            <span className="command-icon">{item.icon}</span><span className="command-label">{item.label}</span>{item.hint && <span className="command-hint">{item.hint}</span>}</button>]
+        })}
+        {!results.length && <div className="command-empty">No results for “{query}”.</div>}
+      </div>
+      <div className="command-foot"><span><Kbd>↑</Kbd><Kbd>↓</Kbd> navigate</span><span><Kbd>↵</Kbd> select</span></div>
+    </div>
+  </div>
+}
+
+function ShortcutHelp({ onClose }: { onClose: () => void }) {
+  const rows: [string, string[]][] = [
+    ['Command palette / jump to entity', [mod, 'K']], ['Focus search', ['/']], ['New entity at centre', ['N']], ['Fit view / center selection', ['F']],
+    ['Switch view', ['1', '–', '4']], ['Toggle explorer', ['E']], ['Toggle evidence window', ['T']], ['Undo / redo', [mod, 'Z', '·', '⇧', mod, 'Z']],
+    ['Delete selection', ['⌫']], ['Close / deselect', ['Esc']], ['Multi-select', ['Shift', 'drag']], ['Rename node', ['double-click']],
+    ['Connect', ['drag right handle']], ['Pan', ['scroll / right-drag']],
+  ]
+  return <div className="modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) onClose() }}>
+    <div className="modal narrow" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts">
+      <div className="modal-header"><h2>Keyboard shortcuts</h2><button className="icon-button" onClick={onClose} aria-label="Close dialog"><X size={18} /></button></div>
+      <div className="modal-body"><dl className="shortcut-list">{rows.map(([label, keys]) => <div key={label}><dt>{label}</dt><dd>{keys.map((k, i) => ['–', '·'].includes(k) || k.includes(' ') ? <span key={i} className="muted">{k}</span> : <Kbd key={i}>{k}</Kbd>)}</dd></div>)}</dl></div>
+    </div>
+  </div>
+}
+
+function Menu({ label, trigger, children, className = '', align = 'left' }: { label: string; trigger: ReactNode; children: ReactNode; className?: string; align?: 'left' | 'right' }) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!open) return
+    const close = (event: MouseEvent) => { if (!ref.current?.contains(event.target as Node)) setOpen(false) }
+    const esc = (event: KeyboardEvent) => { if (event.key === 'Escape') { setOpen(false); event.stopImmediatePropagation() } }
+    document.addEventListener('mousedown', close); window.addEventListener('keydown', esc, true)
+    return () => { document.removeEventListener('mousedown', close); window.removeEventListener('keydown', esc, true) }
+  }, [open])
+  return <div className={`menu ${className}`} ref={ref}>
+    <button className={`menu-trigger ${open ? 'open' : ''}`} aria-label={label} aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen(!open)}>{trigger}</button>
+    {open && <div className={`menu-content popover ${align}`} role="menu" onClick={event => { if ((event.target as HTMLElement).closest('button, a')) setOpen(false) }}>{children}</div>}
+  </div>
 }
 
 export default function App() {
   const [boardId] = useState(currentBoardId)
   const board = useBoard(boardId)
   const data = board.ready ? board.data : null
-  const [selection, setSelection] = useState<Selection>(null)
+  const [selection, setSelectionState] = useState<Selection>(null)
   const [dialog, setDialog] = useState<DialogKind>(null)
   const [readerId, setReaderId] = useState<string | null>(null)
   const [editingAssertionId, setEditingAssertionId] = useState<string | null>(null)
   const [relationTargetId, setRelationTargetId] = useState<string | null>(null)
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
-    try { return localStorage.getItem('factgraph:sidebarCollapsed') !== 'false' }
-    catch { return false }
-  })
+  const [explorerOpen, setExplorerOpen] = useState(() => { const v = readPref('explorer'); return v === null ? window.innerWidth >= 1280 : v === 'true' })
+  const [theme, setTheme] = useState<Theme>(() => { const v = readPref('theme'); return v === 'light' || v === 'dark' ? v : window.matchMedia?.('(prefers-color-scheme: light)').matches ? 'light' : 'dark' })
   const [search, setSearch] = useState('')
   const [stateFilter, setStateFilter] = useState<TruthState | 'all'>('all')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [toast, setToast] = useState('')
-  const [showBoards, setShowBoards] = useState(false)
   const [showLogImport, setShowLogImport] = useState(false)
+  const [showPalette, setShowPalette] = useState(false)
+  const [showHelp, setShowHelp] = useState(false)
+  const [showTime, setShowTime] = useState(false)
+  const [request, setRequest] = useState<CanvasRequest | null>(null)
+  const searchInput = useRef<HTMLInputElement>(null)
+  const canvas = (type: CanvasRequest['type'], extra: Partial<CanvasRequest> = {}) => setRequest(current => ({ type, n: (current?.n ?? 0) + 1, ...extra }))
   const tabFromUrl = (): WorkspaceTab => {
     const tab = new URLSearchParams(location.search).get('view')
     return tab === 'timeline' || tab === 'review' || tab === 'activity' ? tab : 'graph'
@@ -347,29 +537,37 @@ export default function App() {
     history.pushState(null, '', url)
     updateActiveTab(tab)
   }
+  const setSelection = (next: Selection, focus = false) => {
+    setSelectionState(next)
+    if (next && focus) { if (activeTab !== 'graph') setActiveTab('graph'); window.setTimeout(() => canvas('focus', { id: next.id }), 30) }
+  }
   useEffect(() => {
     const onBack = () => updateActiveTab(tabFromUrl())
     window.addEventListener('popstate', onBack)
     return () => window.removeEventListener('popstate', onBack)
   }, [])
+  useEffect(() => { document.documentElement.dataset.theme = theme; document.querySelector('meta[name=theme-color]')?.setAttribute('content', theme === 'dark' ? '#0c0e13' : '#f7f8fa') }, [theme])
   const [evidenceFrom, setEvidenceFrom] = useState('')
   const [evidenceTo, setEvidenceTo] = useState('')
   const [includeUndated, setIncludeUndated] = useState(true)
   const importInput = useRef<HTMLInputElement>(null)
 
-  useEffect(() => { if (toast) { const timer = window.setTimeout(() => setToast(''), 3300); return () => clearTimeout(timer) } }, [toast])
+  useEffect(() => { if (toast) { const timer = window.setTimeout(() => setToast(''), 3000); return () => clearTimeout(timer) } }, [toast])
 
   const act = async (action: () => Promise<unknown>, message: string) => {
     setBusy(true); setError('')
     try { await action(); setDialog(null); setRelationTargetId(null); setToast(message) }
-    catch (problem) { setError(problem instanceof Error ? problem.message : 'Ein Fehler ist aufgetreten.') }
+    catch (problem) { setError(problem instanceof Error ? problem.message : 'Something went wrong.') }
     finally { setBusy(false) }
   }
 
   const submit = async (kind: Exclude<DialogKind, null>, values: Record<string, unknown>) => {
     if (!data) return
     const created_at = new Date().toISOString()
-    if (kind === 'entity') await act(() => board.emit('entity.add', { id: uuid(), ...values, created_at }), 'Entity saved')
+    if (kind === 'entity') {
+      const id = uuid()
+      await act(async () => { await board.emit('entity.add', { id, ...values, created_at }); setSelection({ kind: 'entity', id }, true) }, 'Entity saved')
+    }
     else if (kind === 'entity-edit' && selection?.kind === 'entity') await act(() => board.emit('entity.update', { id: selection.id, ...values }), 'Entity updated')
     else if (kind === 'entity-merge' && selection?.kind === 'entity') await act(async () => {
       await board.emit('entity.merge', { source_id: selection.id, target_id: values.target_id })
@@ -380,23 +578,27 @@ export default function App() {
       const raw = String(values.raw_value ?? '')
       const scheme = String(values.scheme ?? 'other')
       await act(() => board.emit('identifier.add', { id: uuid(), entity_id: selection.id,
-        ...values, normalized_value: normalizeIdentifier(scheme, raw) }), 'Kennung gespeichert')
+        ...values, normalized_value: normalizeIdentifier(scheme, raw) }), 'Identifier saved')
     } else if (kind === 'fact') {
       const assertion = values.assertion as Record<string, unknown>
       const newObjectName = String(values.new_object_name ?? '').trim()
       const newObjectId = newObjectName ? uuid() : ''
+      const subject = data.entities.find(e => e.id === String(values.subject_id))
       const fact = { id: uuid(), subject_id: String(values.subject_id),
         predicate: String(values.predicate).trim(), object_id: newObjectId || String(values.object_id),
         valid_from: values.valid_from as string | null, valid_to: values.valid_to as string | null, created_at }
       const existing = data.facts.find(item => factKey(item) === factKey(fact))
       const assertionPayload = { id: uuid(), fact_id: existing?.id ?? fact.id, ...assertion, created_at }
       if (existing) await act(() => board.emit('assertion.add', assertionPayload), 'Evidence added to existing relationship')
-      else await act(() => board.emitMany([
-        ...(newObjectId ? [{ type: 'entity.add' as const, payload: { id: newObjectId,
-          name: newObjectName, kind: String(values.new_object_kind || 'Sonstiges'),
-          description: '', created_at } }] : []),
-        { type: 'fact.add', payload: fact }, { type: 'assertion.add', payload: assertionPayload },
-      ]), 'Relationship saved')
+      else await act(async () => {
+        await board.emitMany([
+          ...(newObjectId ? [{ type: 'entity.add' as const, payload: { id: newObjectId,
+            name: newObjectName, kind: String(values.new_object_kind || 'Other'),
+            description: '', created_at, ...(subject?.position ? { x: subject.position.x + 320, y: subject.position.y } : {}) } }] : []),
+          { type: 'fact.add', payload: fact }, { type: 'assertion.add', payload: assertionPayload },
+        ])
+        setSelection({ kind: 'fact', id: fact.id })
+      }, 'Relationship saved')
     } else if (kind === 'assertion' && selection?.kind === 'fact')
       await act(() => board.emit('assertion.add', { id: uuid(), fact_id: selection.id,
         ...values, created_at }), 'Evidence saved')
@@ -408,63 +610,52 @@ export default function App() {
     const text = kind === 'entity' ? 'Delete this entity and its relationships?' : kind === 'fact' ? 'Delete this relationship and all evidence?' : 'Delete this identifier?'
     if (!window.confirm(text)) return
     const type = kind === 'entity' ? 'entity.delete' : kind === 'fact' ? 'fact.delete' : 'identifier.delete'
-    void act(async () => { await board.emit(type, { id }); if (kind !== 'identifier') setSelection(null) }, 'Deleted')
+    void act(async () => { await board.emit(type, { id }); if (kind !== 'identifier') setSelection(null) }, 'Deleted · undo available')
   }
+  const undo = () => void board.undo().then(changed => setToast(changed ? 'Change undone' : 'Nothing to undo')).catch(e => setError(String(e)))
+  const redo = () => void board.redo().then(changed => setToast(changed ? 'Change restored' : 'Nothing to redo')).catch(e => setError(String(e)))
+  const toggleExplorer = () => setExplorerOpen(current => { writePref('explorer', String(!current)); return !current })
+  const toggleTheme = () => setTheme(current => { const next = current === 'dark' ? 'light' : 'dark'; writePref('theme', next); return next })
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null
+      const typing = !!target && (['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName) || target.isContentEditable)
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); setShowPalette(open => !open); return }
       if (event.key === 'Escape') {
-        if (dialog) setDialog(null)
+        if (showPalette) setShowPalette(false)
+        else if (showHelp) setShowHelp(false)
+        else if (dialog) setDialog(null)
         else if (showLogImport) setShowLogImport(false)
         else if (readerId) setReaderId(null)
+        else if (typing && target === searchInput.current) { setSearch(''); target.blur() }
         else setSelection(null)
         return
       }
-      if (target && (['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName) || target.isContentEditable)) return
-      if ((event.key === 'Delete' || event.key === 'Backspace') && selection) {
-        event.preventDefault()
-        deleteItem(selection.kind, selection.id)
-      }
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'z') {
-        event.preventDefault()
-        void (event.shiftKey ? board.redo() : board.undo()).then(changed => setToast(changed ? 'History updated' : 'Nothing to change')).catch(e => setError(String(e)))
-      }
+      if (typing || showPalette || dialog || readerId || showLogImport || showHelp) return
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'z') { event.preventDefault(); if (event.shiftKey) redo(); else undo(); return }
+      if (event.metaKey || event.ctrlKey || event.altKey) return
+      if ((event.key === 'Delete' || event.key === 'Backspace') && selection) { event.preventDefault(); deleteItem(selection.kind, selection.id); return }
+      if (event.key === '/') { event.preventDefault(); searchInput.current?.focus() }
+      else if (event.key === '?') setShowHelp(true)
+      else if (event.key.toLowerCase() === 'e') toggleExplorer()
+      else if (event.key.toLowerCase() === 't') setShowTime(open => !open)
+      else if (['1', '2', '3', '4'].includes(event.key)) setActiveTab((['graph', 'timeline', 'review', 'activity'] as WorkspaceTab[])[Number(event.key) - 1])
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [board.undo, board.redo, dialog, selection, showLogImport, readerId])
+  }, [board.undo, board.redo, dialog, selection, showLogImport, readerId, showPalette, showHelp, activeTab])
 
-  const navigate = (id: string) => {
-    try { localStorage.setItem('factgraph:lastBoard', id) } catch { /* private mode */ }
-    window.location.assign(`/boards/${id}`)
-  }
-  const copyLink = async () => {
-    try { await navigator.clipboard.writeText(window.location.href); setToast('Board link copied') }
-    catch { window.prompt('Copy board link:', window.location.href) }
-  }
-  const mcpEndpoint = `${window.location.origin}/mcp/`
-  const restDocsEndpoint = `${window.location.origin}/docs`
-  const copyMcpEndpoint = async () => {
-    try { await navigator.clipboard.writeText(mcpEndpoint); setToast('MCP-Endpunkt kopiert') }
-    catch { window.prompt('MCP-Endpunkt kopieren:', mcpEndpoint) }
-  }
-  const copySessionToken = async () => {
-    try { await navigator.clipboard.writeText(board.sessionToken); setToast('Session token copied') }
-    catch { window.prompt('Session token:', board.sessionToken) }
-  }
+  const navigate = (id: string) => { writePref('lastBoard', id); window.location.assign(`/boards/${id}`) }
   const copyValue = async (value: string, label: string) => {
     try { await navigator.clipboard.writeText(value); setToast(`${label} copied`) }
     catch { window.prompt(`Copy ${label}:`, value) }
   }
-  const toggleSidebar = () => setSidebarCollapsed(current => {
-    const next = !current
-    try { localStorage.setItem('factgraph:sidebarCollapsed', String(next)) } catch { /* private mode */ }
-    return next
-  })
+  const mcpEndpoint = `${window.location.origin}/mcp/`
+  const restDocsEndpoint = `${window.location.origin}/docs`
+  const exportJson = () => JSON.stringify({ format: 'factgraph-board-v1', boardId, name: board.boardName, actions: board.actions }, null, 2)
   const download = () => {
-    const content = JSON.stringify({ format: 'factgraph-board-v1', boardId, name: board.boardName, actions: board.actions }, null, 2)
-    const url = URL.createObjectURL(new Blob([content], { type: 'application/json' }))
+    const url = URL.createObjectURL(new Blob([exportJson()], { type: 'application/json' }))
     const anchor = document.createElement('a')
     anchor.href = url
     anchor.download = `factgraph-${boardId.slice(0, 8)}.json`
@@ -474,11 +665,6 @@ export default function App() {
     anchor.remove()
     window.setTimeout(() => URL.revokeObjectURL(url), 1000)
     setToast('Board export started')
-  }
-  const copyExport = async () => {
-    const content = JSON.stringify({ format: 'factgraph-board-v1', boardId, name: board.boardName, actions: board.actions }, null, 2)
-    try { await navigator.clipboard.writeText(content); setToast('Board JSON copied') }
-    catch { window.prompt('Copy board JSON:', content) }
   }
   const importFile = async (file: File | undefined) => {
     if (!file) return
@@ -490,68 +676,152 @@ export default function App() {
       else await act(() => board.emitMany(legacyDrafts(parsed)), 'Legacy data imported')
     } catch (problem) { setError(problem instanceof Error ? problem.message : 'Import failed') }
   }
+  const renameBoard = () => { const value = window.prompt('Board name', board.boardName); if (value?.trim()) void act(() => board.emit('board.rename', { name: value.trim() }), 'Board renamed') }
+  const renameSelf = () => { const value = window.prompt('Your display name', board.name); if (value?.trim()) board.setName(value) }
+  const openDialog = (kind: DialogKind) => { setError(''); setDialog(kind) }
 
   const timeFacts = useMemo(() => factsInWindow(data?.facts ?? [], evidenceFrom || null, evidenceTo || null, includeUndated), [data, evidenceFrom, evidenceTo, includeUndated])
   const filteredFacts = useMemo(() => timeFacts.filter(item => stateFilter === 'all' || item.truth_state === stateFilter), [timeFacts, stateFilter])
-  // React Flow culls offscreen elements; retain the complete board model for layout and search.
-  const visibleFacts = filteredFacts
-  const visibleEntities = data?.entities ?? []
-  const searchResults = useMemo(() => data?.entities.filter(item =>
-    `${item.name} ${item.kind} ${item.identifiers.map(identifier => identifier.raw_value).join(' ')}`.toLocaleLowerCase().includes(search.toLocaleLowerCase())
-  ).slice(0, 150) ?? [], [data, search])
-  const selectedFact = selection?.kind === 'fact' ? data?.facts.find(item => item.id === selection.id) : null
-  const counts = Object.fromEntries(allStates.map(state => [state, timeFacts.filter(item => item.truth_state === state).length])) as Record<TruthState, number>
+  const counts = useMemo(() => Object.fromEntries(allStates.map(state => [state, timeFacts.filter(item => item.truth_state === state).length])) as Record<TruthState, number>, [timeFacts])
+  const reviewCount = useMemo(() => data?.facts.reduce((sum, f) => sum + f.assertions.filter(a => !a.retracted_at && a.review_status !== 'confirmed').length, 0) ?? 0, [data])
+  const timelineCount = useMemo(() => timelineEvents(filteredFacts).length, [filteredFacts])
+  const matchCount = useMemo(() => {
+    const q = search.trim().toLowerCase()
+    return q && data ? data.entities.filter(e => `${e.name} ${e.kind} ${e.identifiers.map(i => i.raw_value).join(' ')}`.toLowerCase().includes(q)).length : 0
+  }, [data, search])
+  const timeActive = !!(evidenceFrom || evidenceTo) || !includeUndated
 
-  return <div className={`app-shell ${sidebarCollapsed ? 'sidebar-is-collapsed' : ''}`}>
-    <aside className={`sidebar ${sidebarCollapsed ? 'collapsed' : ''}`}>
-      <div className="brand"><div className="brand-mark"><GitBranch size={21} strokeWidth={2.6} /></div><div className="brand-copy"><strong>FactGraph</strong><small>BROWSER BOARDS</small></div><button className="sidebar-toggle" onClick={toggleSidebar} title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'} aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}>{sidebarCollapsed ? <PanelLeftOpen size={17} /> : <PanelLeftClose size={17} />}</button></div>
-      <div className="sidebar-section-label">BOARDS</div>
-      <button className="workspace-card" onClick={() => setShowBoards(!showBoards)}><div className="workspace-icon"><Database size={18} /></div><div><strong>{board.boardName}</strong><span>Stored in browser</span></div><ChevronRight size={16} /></button>
-      {showBoards && <div className="board-list">{board.boards.map(item => <button key={item.id} className={item.id === boardId ? 'active' : ''} onClick={() => navigate(item.id)}><span>{item.name}</span><small>{item.id.slice(0, 8)}</small></button>)}<button className="new-board" onClick={() => navigate(uuid())}><Plus size={14} /> New board</button></div>}
-      <div className="sidebar-section-label list-heading">ENTITIES <span>{data?.entities.length ?? 0}</span></div>
-      <div className="search-box"><Search size={16} /><input aria-label="Search entities" placeholder="Search entities…" value={search} onChange={event => setSearch(event.target.value)} />{search && <button onClick={() => setSearch('')}><X size={14} /></button>}</div>
-      <div className="entity-list">
-        {searchResults.map(entity => <button key={entity.id} className={`entity-list-item ${selection?.id === entity.id ? 'active' : ''}`} onClick={() => setSelection({ kind: 'entity', id: entity.id })}><IconForKind kind={entity.kind} color={entity.color} /><span><strong>{entity.name}</strong><small>{entity.kind} · {entity.identifiers.length} identifiers</small></span><ChevronRight size={15} /></button>)}
-        {data && data.entities.length > 150 && <div className="sidebar-empty">Maximum 150 results · narrow your search</div>}
-        {data && !searchResults.length && <div className="sidebar-empty">{search ? 'No matches.' : 'No entities yet.'}</div>}
-      </div>
-      <div className="sidebar-footer"><div className="local-badge"><span /> Browser storage · no sign-in</div><button onClick={() => setShowLogImport(true)}><Upload size={15} /> Import logs / KQL</button><button onClick={download}><ArrowDownToLine size={15} /> Export JSON</button><button onClick={() => importInput.current?.click()}><Upload size={15} /> Import JSON</button></div>
-    </aside>
+  const paletteItems = useMemo<PaletteItem[]>(() => {
+    const actions: PaletteItem[] = [
+      { id: 'a-entity', group: 'Create', label: 'New entity', hint: 'N', icon: <Plus size={15} />, run: () => { setActiveTab('graph'); canvas('place') } },
+      { id: 'a-entity-form', group: 'Create', label: 'New entity with details…', icon: <Plus size={15} />, run: () => openDialog('entity') },
+      { id: 'a-fact', group: 'Create', label: 'New relationship…', icon: <Link2 size={15} />, run: () => openDialog('fact') },
+      { id: 'a-source', group: 'Create', label: 'New source…', icon: <FileText size={15} />, run: () => openDialog('source') },
+      { id: 'v-graph', group: 'View', label: 'Graph', hint: '1', icon: <GitBranch size={15} />, run: () => setActiveTab('graph') },
+      { id: 'v-timeline', group: 'View', label: 'Timeline', hint: '2', icon: <Clock size={15} />, run: () => setActiveTab('timeline') },
+      { id: 'v-review', group: 'View', label: 'Evidence review', hint: '3', icon: <ShieldCheck size={15} />, run: () => setActiveTab('review') },
+      { id: 'v-activity', group: 'View', label: 'Activity', hint: '4', icon: <Activity size={15} />, run: () => setActiveTab('activity') },
+      { id: 'c-fit', group: 'Canvas', label: 'Fit graph to screen', hint: 'F', icon: <Crosshair size={15} />, run: () => { setActiveTab('graph'); canvas('fit') } },
+      { id: 'c-arrange', group: 'Canvas', label: 'Auto-arrange graph', icon: <Sparkles size={15} />, run: () => { setActiveTab('graph'); canvas('arrange') } },
+      { id: 'c-explorer', group: 'Canvas', label: explorerOpen ? 'Hide entity explorer' : 'Show entity explorer', hint: 'E', icon: <ListTree size={15} />, run: toggleExplorer },
+      { id: 'c-time', group: 'Canvas', label: showTime ? 'Hide evidence window' : 'Show evidence window', hint: 'T', icon: <Clock size={15} />, run: () => setShowTime(!showTime) },
+      { id: 'c-theme', group: 'Canvas', label: theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme', icon: theme === 'dark' ? <Sun size={15} /> : <Moon size={15} />, run: toggleTheme },
+      { id: 'b-import-logs', group: 'Board', label: 'Import logs / KQL results…', icon: <Upload size={15} />, run: () => setShowLogImport(true) },
+      { id: 'b-export', group: 'Board', label: 'Export board JSON', icon: <ArrowDownToLine size={15} />, run: download },
+      { id: 'b-import', group: 'Board', label: 'Import board JSON…', icon: <Upload size={15} />, run: () => importInput.current?.click() },
+      { id: 'b-link', group: 'Board', label: 'Copy board link', icon: <Copy size={15} />, run: () => void copyValue(window.location.href, 'Board link') },
+      { id: 'b-token', group: 'Board', label: 'Copy session token (REST + MCP)', icon: <Plug size={15} />, run: () => void copyValue(board.sessionToken, 'Session token') },
+      { id: 'b-help', group: 'Board', label: 'Keyboard shortcuts', hint: '?', icon: <Keyboard size={15} />, run: () => setShowHelp(true) },
+    ]
+    const entities: PaletteItem[] = (data?.entities ?? []).map(entity => ({ id: `e-${entity.id}`, group: 'Entities', label: entity.name,
+      hint: `${entity.kind}${entity.identifiers[0] ? ` · ${entity.identifiers[0].raw_value}` : ''}`, icon: <EntityAvatar entity={entity} data={data ?? undefined} size="sm" />,
+      run: () => setSelection({ kind: 'entity', id: entity.id }, true) }))
+    return [...actions, ...entities]
+  }, [data, explorerOpen, showTime, theme, board.sessionToken, activeTab])
 
-    <main className="main-area">
-      <header className="topbar compact-header" onClick={e=>{const target=e.target as HTMLElement;if(target.closest('.header-menu-content button, .header-menu-content a'))target.closest('details')?.removeAttribute('open')}}>
-        <details className="header-menu board-menu"><summary aria-label="Board menu"><GitBranch size={16}/><strong>{board.boardName}</strong><ChevronRight size={12}/></summary><div className="header-menu-content">
-          <button onClick={() => {const value=window.prompt('Board name',board.boardName);if(value?.trim())void act(()=>board.emit('board.rename',{name:value.trim()}),'Board renamed')}}>Rename board</button>
-          <button onClick={()=>void copyValue(boardId,'Board ID')}><Copy size={14}/> Copy board ID</button><button onClick={()=>void copyLink()}>Copy board link</button>
-          <button onClick={()=>{setShowLogImport(true)}}><Upload size={14}/> Import logs / KQL</button><button onClick={()=>importInput.current?.click()}>Import board JSON</button><button onClick={download}>Export board JSON</button><button onClick={()=>void copyExport()}>Copy board JSON</button><button onClick={()=>navigate(uuid())}>New board</button>
-          <button onClick={()=>{const value=window.prompt('Your display name',board.name);if(value?.trim())board.setName(value)}}>Display name: {board.name}</button>
-        </div></details>
-        <span className="header-presence"><span className={`connection-dot ${board.connected?'online':''}`}/>{board.connected?`${board.peers.length+1} online`:'Offline'}</span>
-        <div className="header-search"><Search size={13}/><input aria-label="Search graph" placeholder="Find an entity…" value={search} onChange={e=>setSearch(e.target.value)}/>{search&&<button aria-label="Clear search" onClick={()=>setSearch('')}><X size={12}/></button>}</div>
-        <div className="header-actions"><button aria-label="Undo" title="Undo · Ctrl/Cmd+Z" onClick={()=>void board.undo().then(changed=>setToast(changed?'Change undone':'Nothing to undo')).catch(e=>setError(String(e)))}><Undo2 size={16}/></button><button aria-label="Redo" title="Redo · Ctrl/Cmd+Shift+Z" onClick={()=>void board.redo().then(changed=>setToast(changed?'Change restored':'Nothing to redo')).catch(e=>setError(String(e)))}><Redo2 size={16}/></button>
-          <details className="header-menu"><summary><Plus size={15}/> Create</summary><div className="header-menu-content"><button onClick={()=>setDialog('entity')}>Entity</button><button onClick={()=>setDialog('fact')} disabled={!data||data.entities.length<2}>Relationship</button><button onClick={()=>setDialog('source')}>Source</button></div></details>
-          <details className="header-menu"><summary>API / MCP</summary><div className="header-menu-content"><button onClick={()=>void copyMcpEndpoint()}>Copy MCP endpoint</button><a href={restDocsEndpoint} target="_blank" rel="noreferrer">REST documentation</a><button onClick={()=>void copyValue(`${window.location.origin}/api/boards/${boardId}`,'REST endpoint')}>Copy REST board endpoint</button><button onClick={()=>void copySessionToken()}>Copy session token</button><small>Same token for REST + MCP. Keep this board open.</small></div></details>
-        </div>
-      </header>
-      {board.ready && !board.connected && <div className="offline-note">Relay offline: changes stay in this browser and sync when the connection returns.</div>}
-      <EvidenceWindow facts={data?.facts ?? []} from={evidenceFrom} to={evidenceTo} includeUndated={includeUndated} onIncludeUndatedChange={setIncludeUndated} onFromChange={setEvidenceFrom} onToChange={setEvidenceTo} onReset={() => { setEvidenceFrom(''); setEvidenceTo('') }} />
-      <div className="workspace-grid">
-        <div className="visual-column"><section className="workspace-tabs" aria-label="Board views"><div className="tab-list" role="tablist" aria-label="Board views"><button role="tab" aria-selected={activeTab === 'graph'} className={activeTab === 'graph' ? 'active' : ''} onClick={() => setActiveTab('graph')}><GitBranch size={15} /> Graph <b>{data?.entities.length ?? 0}</b></button><button role="tab" aria-selected={activeTab === 'timeline'} className={activeTab === 'timeline' ? 'active' : ''} onClick={() => setActiveTab('timeline')}><Activity size={15} /> Timeline <b>{timelineEvents(filteredFacts).length}</b></button><button role="tab" aria-selected={activeTab === 'review'} className={activeTab === 'review' ? 'active' : ''} onClick={() => setActiveTab('review')}><ShieldCheck size={15}/> Evidence review <b>{data?.facts.flatMap(f => f.assertions).filter(a => !a.retracted_at && a.review_status !== 'confirmed').length ?? 0}</b></button><button role="tab" aria-selected={activeTab === 'activity'} className={activeTab === 'activity' ? 'active' : ''} onClick={() => setActiveTab('activity')}><Activity size={15} /> Activity <b>{board.actions.length}</b></button></div><div className="tab-panel" role="tabpanel">{activeTab === 'graph' && <section className="graph-card"><div className="card-header"><div><div className="card-title"><GitBranch size={18} /> Relationship graph</div><span>Interactive view of all entities and facts</span></div><div className="graph-count">{visibleEntities.length} / {data?.entities.length ?? 0} NODES · {visibleFacts.length} / {filteredFacts.length} EDGES</div></div><div className="filter-row"><button className={stateFilter === 'all' ? 'filter-chip active' : 'filter-chip'} onClick={() => setStateFilter('all')}>All <b>{data?.facts.length ?? 0}</b></button>{allStates.map(state => <button key={state} className={`filter-chip ${state} ${stateFilter === state ? 'active' : ''}`} onClick={() => setStateFilter(stateFilter === state ? 'all' : state)}><span className="state-dot" />{labels[state]} <b>{counts[state]}</b></button>)}</div>
-          <div className="graph-stage">{data && <GraphView entityTypes={data.entity_types ?? []} onCommand={board.emitMany} onEdit={id => {setSelection({kind:'entity',id});setDialog('entity-edit')}} onMerge={id => {setSelection({kind:'entity',id});setDialog('entity-merge')}} entities={visibleEntities} facts={visibleFacts} selection={selection} search={search} pathIds={[]} onSelect={setSelection} onCreateNode={() => setDialog('entity')} onCreateRelation={(sourceId, targetId) => { setSelection({ kind: 'entity', id: sourceId }); setRelationTargetId(targetId ?? null); setDialog('fact') }} onMoveNode={(id, position) => void board.emit('entity.position', { id, ...position })} />}{data && data.entities.length === 0 && <div className="empty-overlay"><div className="empty-graphic"><GitBranch size={31} /></div><h2>Your graph starts here.</h2><p>Create entities and connect them with evidence-backed statements, or load a small example dataset.</p><div><button className="primary-button" onClick={() => setDialog('entity')}><Plus size={16} /> First entity</button><button className="secondary-button" onClick={() => void act(() => board.emitMany(demoDrafts()), 'Example data loaded')}><Sparkles size={16} /> Load example</button></div></div>}</div>
-          <div className="legend"><span><i className="legend-line supported" /> Supported</span><span><i className="legend-line disputed" /> Disputed</span><span><i className="legend-line refuted" /> Refuted</span><span><i className="legend-line unknown" /> Unknown</span></div>
-        </section>}
-        {activeTab === 'review' && data && <EvidenceQueue data={data} onOpen={setReaderId}/>}
-        {activeTab === 'timeline' && data && <TimelinePanel data={data} facts={filteredFacts} selection={selection} onSelect={setSelection} />}{activeTab === 'activity' && <ActivityPanel actions={board.actions} />}</div></section></div>
-        {data && <DetailPanel data={data} selection={selection} onAdd={kind => { setError(''); setDialog(kind) }} onDelete={deleteItem} onCopy={(value, label) => void copyValue(value, label)} onEditEvidence={id => setReaderId(id)} onRetract={id => void act(() => board.emit('assertion.retract', { id, retracted_at: new Date().toISOString() }), 'Evidence retracted')} onClose={() => setSelection(null)} />}
+  const tabs: { id: WorkspaceTab; label: string; short: string; icon: ReactNode; count: number }[] = [
+    { id: 'graph', label: 'Graph', short: 'Graph', icon: <GitBranch size={14} />, count: data?.entities.length ?? 0 },
+    { id: 'timeline', label: 'Timeline', short: 'Timeline', icon: <Clock size={14} />, count: timelineCount },
+    { id: 'review', label: 'Evidence review', short: 'Review', icon: <ShieldCheck size={14} />, count: reviewCount },
+    { id: 'activity', label: 'Activity', short: 'Activity', icon: <Activity size={14} />, count: board.actions.length },
+  ]
+  const showInspector = !!(data && selection)
+
+  return <div className={`app-shell${explorerOpen ? ' explorer-open' : ''}${showInspector ? ' inspector-open' : ''}`}>
+    <header className="topbar compact-header">
+      <div className="topbar-left">
+        <button className={`icon-button explorer-toggle ${explorerOpen ? 'active' : ''}`} onClick={toggleExplorer} aria-label={explorerOpen ? 'Hide explorer' : 'Show explorer'} title="Entity explorer · E"><ListTree size={16} /></button>
+        <Menu label="Board menu" className="board-menu" trigger={<><span className="brand-mark"><GitBranch size={13} strokeWidth={2.4} /></span><strong className="board-name">{board.boardName}</strong><ChevronDown size={13} /></>}>
+          <div className="menu-label">Board</div>
+          <button onClick={renameBoard}><Pencil size={14} /> Rename board</button>
+          <button onClick={() => void copyValue(window.location.href, 'Board link')}><Link2 size={14} /> Copy board link</button>
+          <button onClick={() => void copyValue(boardId, 'Board ID')}><Copy size={14} /> Copy board ID</button>
+          <div className="menu-sep" />
+          <button onClick={() => setShowLogImport(true)}><Upload size={14} /> Import logs / KQL</button>
+          <button onClick={() => importInput.current?.click()}><Upload size={14} /> Import board JSON</button>
+          <button onClick={download}><ArrowDownToLine size={14} /> Export board JSON</button>
+          <button onClick={() => void copyValue(exportJson(), 'Board JSON')}><Copy size={14} /> Copy board JSON</button>
+          <div className="menu-sep" />
+          <div className="menu-label">Boards in this browser</div>
+          <div className="menu-scroll">{board.boards.map(item => <button key={item.id} className={item.id === boardId ? 'current' : ''} onClick={() => navigate(item.id)}><span className="menu-board-name">{item.name}</span><small>{item.id.slice(0, 8)}</small></button>)}</div>
+          <button onClick={() => navigate(uuid())}><Plus size={14} /> New board</button>
+          <div className="menu-sep" />
+          <button onClick={renameSelf}>Display name · <strong>{board.name}</strong></button>
+        </Menu>
+        <span className={`presence ${board.connected ? 'online' : 'offline'}`} title={board.connected ? `Relay connected${board.peers.length ? ` · ${board.peers.map(p => p.name).join(', ')}` : ''}` : 'Relay offline: changes stay in this browser and sync when the connection returns.'}>
+          <span className="connection-dot" /><span className="presence-text">{board.connected ? `${board.peers.length + 1} online` : 'Offline'}</span></span>
       </div>
-      {selectedFact && <div className="selection-footnote"><Fingerprint size={14} /> Selected fact: {selectedFact.id}</div>}
-    </main>
-    {readerId && data && <EvidenceReader data={data} evidenceId={readerId} actions={board.actions} onCommand={board.emitMany} onClose={()=>setReaderId(null)}/>}
+      <nav className="view-tabs" role="tablist" aria-label="Board views">
+        {tabs.map(tab => <button key={tab.id} role="tab" aria-label={tab.label} aria-selected={activeTab === tab.id} className={activeTab === tab.id ? 'active' : ''} onClick={() => setActiveTab(tab.id)} title={tab.label}>
+          {tab.icon}<span className="tab-text">{tab.short}</span>{tab.count > 0 && <b className={tab.id === 'review' ? 'attention' : ''}>{tab.count > 9999 ? '9k+' : tab.count}</b>}</button>)}
+      </nav>
+      <div className="topbar-right">
+        <div className={`header-search ${search ? 'has-value' : ''}`}><Search size={14} /><input ref={searchInput} aria-label="Search graph" placeholder="Search…" value={search} onChange={e => setSearch(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && search.trim() && data) { const q = search.trim().toLowerCase(); const hit = data.entities.find(x => `${x.name} ${x.kind} ${x.identifiers.map(i => i.raw_value).join(' ')}`.toLowerCase().includes(q)); if (hit) setSelection({ kind: 'entity', id: hit.id }, true) } }} />
+          {search ? <><span className="search-count">{matchCount}</span><button className="icon-button" aria-label="Clear search" onClick={() => setSearch('')}><X size={12} /></button></> : <Kbd>/</Kbd>}</div>
+        <button className="icon-button command-button hide-sm" onClick={() => setShowPalette(true)} aria-label="Command palette" title={`Command palette · ${mod}K`}><Command size={15} /></button>
+        <button className={`icon-button hide-sm ${showTime ? 'active' : ''} ${timeActive ? 'flagged' : ''}`} onClick={() => setShowTime(!showTime)} aria-label="Evidence window" aria-pressed={showTime} title="Evidence time window · T"><Clock size={15} /></button>
+        <span className="topbar-sep" />
+        <button className="icon-button" aria-label="Undo" title={`Undo · ${mod}Z`} onClick={undo}><Undo2 size={15} /></button>
+        <button className="icon-button hide-sm" aria-label="Redo" title={`Redo · ⇧${mod}Z`} onClick={redo}><Redo2 size={15} /></button>
+        <span className="topbar-sep" />
+        <Menu label="Create" align="right" className="create-menu" trigger={<><Plus size={15} /><span className="trigger-text">Create</span></>}>
+          <button onClick={() => { setActiveTab('graph'); canvas('place') }}><Plus size={14} /> Entity <Kbd>N</Kbd></button>
+          <button onClick={() => openDialog('entity')}><Pencil size={14} /> Entity with details…</button>
+          <button onClick={() => openDialog('fact')} disabled={!data || data.entities.length < 2}><Link2 size={14} /> Relationship…</button>
+          <button onClick={() => openDialog('source')}><FileText size={14} /> Source…</button>
+        </Menu>
+        <Menu label="API and MCP" align="right" className="api-menu" trigger={<Plug size={15} />}>
+          <div className="menu-label">Integrations</div>
+          <button onClick={() => void copyValue(mcpEndpoint, 'MCP endpoint')}><Copy size={14} /> Copy MCP endpoint</button>
+          <button onClick={() => void copyValue(`${window.location.origin}/api/boards/${boardId}`, 'REST endpoint')}><Copy size={14} /> Copy REST board endpoint</button>
+          <button onClick={() => void copyValue(board.sessionToken, 'Session token')}><Copy size={14} /> Copy session token</button>
+          <a href={restDocsEndpoint} target="_blank" rel="noreferrer"><FileText size={14} /> REST documentation</a>
+          <p className="menu-note">Same token for REST + MCP. Keep this board open while agents write.</p>
+        </Menu>
+        <button className="icon-button theme-toggle" onClick={toggleTheme} aria-label={theme === 'dark' ? 'Light theme' : 'Dark theme'} title="Toggle theme">{theme === 'dark' ? <Sun size={15} /> : <Moon size={15} />}</button>
+        <button className="icon-button help-button" onClick={() => setShowHelp(true)} aria-label="Keyboard shortcuts" title="Keyboard shortcuts · ?"><Keyboard size={15} /></button>
+      </div>
+    </header>
+
+    <div className="workspace">
+      {explorerOpen && data && <Explorer data={data} search={search} selection={selection} onSelect={setSelection} onClose={toggleExplorer} />}
+      <main className={`stage${showTime ? ' time-open' : ''}`}>
+        {activeTab === 'graph' && <div className="graph-stage">
+          {data && <GraphView entityTypes={data.entity_types ?? []} onCommand={board.emitMany} theme={theme} request={request}
+            onEdit={id => { setSelection({ kind: 'entity', id }); openDialog('entity-edit') }} onMerge={id => { setSelection({ kind: 'entity', id }); openDialog('entity-merge') }}
+            onCopy={(value, label) => void copyValue(value, label)}
+            entities={data.entities} facts={filteredFacts} selection={selection} search={search} onSelect={setSelectionState} />}
+          {data && data.entities.length > 0 && <div className="status-filter" role="group" aria-label="Filter relationships by status">
+            <button className={stateFilter === 'all' ? 'active' : ''} onClick={() => setStateFilter('all')}>All <b>{timeFacts.length}</b></button>
+            {allStates.map(state => <button key={state} className={`${state} ${stateFilter === state ? 'active' : ''}`} onClick={() => setStateFilter(stateFilter === state ? 'all' : state)} title={`Show only ${labels[state].toLowerCase()} relationships`}><span className="legend-line" />{labels[state]} <b>{counts[state]}</b></button>)}
+          </div>}
+          {data && data.entities.length === 0 && <div className="empty-overlay"><div className="empty-card">
+            <div className="empty-graphic"><GitBranch size={26} /></div><h2>Start your investigation</h2>
+            <p>Create entities and connect them with evidence-backed relationships — or let an agent fill the board via REST / MCP.</p>
+            <div className="empty-actions"><button className="primary-button" onClick={() => canvas('place')}><Plus size={15} /> First entity</button><button className="secondary-button" onClick={() => void act(() => board.emitMany(demoDrafts()), 'Example data loaded')}><Sparkles size={15} /> Load example</button><button className="secondary-button" onClick={() => setShowLogImport(true)}><Upload size={15} /> Import logs</button></div>
+            <div className="empty-keys"><span><Kbd>N</Kbd> new entity</span><span><Kbd>{mod}</Kbd><Kbd>K</Kbd> commands</span><span><Kbd>?</Kbd> shortcuts</span></div>
+          </div></div>}
+        </div>}
+        {activeTab === 'review' && data && <div className="scroll-stage"><EvidenceQueue data={data} onOpen={setReaderId} /></div>}
+        {activeTab === 'timeline' && data && <div className="scroll-stage"><TimelinePanel data={data} facts={filteredFacts} selection={selection} onSelect={setSelection} /></div>}
+        {activeTab === 'activity' && <div className="scroll-stage"><ActivityPanel actions={board.actions} /></div>}
+        {showTime && data && <EvidenceWindow facts={data.facts} from={evidenceFrom} to={evidenceTo} includeUndated={includeUndated} onIncludeUndatedChange={setIncludeUndated} onFromChange={setEvidenceFrom} onToChange={setEvidenceTo} onReset={() => { setEvidenceFrom(''); setEvidenceTo(''); setIncludeUndated(true) }} onClose={() => setShowTime(false)} />}
+        {!showTime && timeActive && <button className="time-chip" onClick={() => setShowTime(true)}><Clock size={13} /> Time window active</button>}
+      </main>
+      {showInspector && selection && data && <Inspector data={data} selection={selection} onAdd={openDialog} onDelete={deleteItem} onCopy={(value, label) => void copyValue(value, label)}
+        onOpenEvidence={id => setReaderId(id)} onRetract={id => void act(() => board.emit('assertion.retract', { id, retracted_at: new Date().toISOString() }), 'Evidence retracted')}
+        onClose={() => setSelection(null)} onSelect={setSelection} onFocus={id => { setActiveTab('graph'); canvas('focus', { id }) }} />}
+    </div>
+    {readerId && data && <EvidenceReader data={data} evidenceId={readerId} actions={board.actions} onCommand={board.emitMany} onClose={() => setReaderId(null)} onCopy={(value, label) => void copyValue(value, label)} />}
     {dialog && data && <Dialog key={`${dialog}:${editingAssertionId ?? ''}:${relationTargetId ?? ''}`} kind={dialog} data={data} selection={selection} editingAssertionId={editingAssertionId} relationTargetId={relationTargetId} busy={busy} error={error} onClose={() => { setDialog(null); setEditingAssertionId(null); setRelationTargetId(null) }} onSubmit={submit} />}
     {showLogImport && <LogImportDialog boardId={boardId} sessionToken={board.sessionToken} onClose={() => setShowLogImport(false)} onDone={summary => { setShowLogImport(false); setToast(summary) }} />}
+    {showPalette && <CommandPalette items={paletteItems} onClose={() => setShowPalette(false)} />}
+    {showHelp && <ShortcutHelp onClose={() => setShowHelp(false)} />}
     <input ref={importInput} type="file" accept="application/json,.json" hidden onChange={event => { const file = event.target.files?.[0]; event.target.value = ''; void importFile(file) }} />
-    {board.storageError && <div className="toast error">{board.storageError}</div>}
-    {error && !dialog && <div className="toast error" onClick={() => setError('')}>{error} <X size={15} /></div>}
-    {toast && <div className="toast success">{toast}</div>}
+    <div className="toasts" aria-live="polite">
+      {board.storageError && <div className="toast error">{board.storageError}</div>}
+      {error && !dialog && <div className="toast error" onClick={() => setError('')}>{error} <X size={14} /></div>}
+      {toast && <div className="toast success"><CheckCircle2 size={14} /> {toast}</div>}
+    </div>
   </div>
 }

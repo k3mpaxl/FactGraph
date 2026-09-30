@@ -203,3 +203,41 @@ export function groupSuggestions(entities: Entity[], facts: Fact[], groups: Grou
   }
   return result.sort((a, b) => b.members.length - a.members.length).slice(0, 10)
 }
+
+// Shared edge geometry: the canvas and image export draw edges identically.
+export type NodeBox = { x: number; y: number; w: number; h: number }
+export function borderPoint(from: NodeBox, toward: Point, pad = 0): Point {
+  const dx = toward.x - from.x, dy = toward.y - from.y
+  if (!dx && !dy) return { x: from.x, y: from.y }
+  const scale = Math.min((from.w / 2 + pad) / Math.abs(dx || 1e-9), (from.h / 2 + pad) / Math.abs(dy || 1e-9))
+  return { x: from.x + dx * scale, y: from.y + dy * scale }
+}
+
+/** Floating edge between two node boxes (centre + size); parallel edges bend by `offset`. */
+export function edgeGeometry(a: NodeBox, b: NodeBox, offset: number) {
+  const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2
+  const len = Math.hypot(b.x - a.x, b.y - a.y) || 1
+  const cx = mx + (-(b.y - a.y) / len) * offset * 2, cy = my + ((b.x - a.x) / len) * offset * 2
+  const start = borderPoint(a, offset ? { x: cx, y: cy } : b)
+  const end = borderPoint(b, offset ? { x: cx, y: cy } : a, 3)
+  const path = offset ? `M ${start.x} ${start.y} Q ${cx} ${cy} ${end.x} ${end.y}` : `M ${start.x} ${start.y} L ${end.x} ${end.y}`
+  const label = offset ? { x: 0.25 * start.x + 0.5 * cx + 0.25 * end.x, y: 0.25 * start.y + 0.5 * cy + 0.25 * end.y } : { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 }
+  return { path, label, start, end }
+}
+
+export const edgeWidth = (count: number) => count > 1 ? Math.min(1.5 + Math.log10(count) * 1.6, 5) : 1.5
+
+/** Parallel edges between the same two nodes get symmetric offsets so they do not overlap. */
+export function edgeOffsets(edges: Pick<VEdge, 'id' | 'source' | 'target'>[]) {
+  const pairs = new Map<string, Pick<VEdge, 'id' | 'source' | 'target'>[]>()
+  for (const edge of edges) {
+    const key = edge.source < edge.target ? `${edge.source}|${edge.target}` : `${edge.target}|${edge.source}`
+    const list = pairs.get(key); if (list) list.push(edge); else pairs.set(key, [edge])
+  }
+  const offsets = new Map<string, number>()
+  for (const list of pairs.values()) list.forEach((edge, index) => {
+    const raw = list.length > 1 ? (index - (list.length - 1) / 2) * 34 : 0
+    offsets.set(edge.id, edge.source < edge.target ? raw : -raw)
+  })
+  return offsets
+}

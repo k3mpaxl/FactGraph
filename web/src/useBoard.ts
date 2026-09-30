@@ -4,6 +4,37 @@ import { listBoards, loadActions, saveActions, touchBoard, type BoardMeta } from
 import { initialPosition } from './layout'
 import { uuid } from './uuid'
 import { validateDrafts } from './validation'
+import { buildViewModel } from './viewModel'
+import { browserMeasure, buildGraphSvg, svgToPng } from './exportGraph'
+import { iconMarkup, prepareIconMarkup } from './KindIcon'
+
+const MAX_EXPORT_CHARS = 12_000_000
+
+/** Render the board for REST/MCP with a saved perspective (or everything) and the stored group state. */
+async function renderExport(boardId: string, actions: BoardAction[], options: Record<string, unknown>) {
+  const { data, name } = project(boardId, actions)
+  const perspective = typeof options.perspective_id === 'string' ? data.views?.find(v => v.id === options.perspective_id) : undefined
+  if (options.perspective_id && !perspective) throw new Error('Perspective does not exist on this board')
+  const view = buildViewModel(data.entities, data.facts, data.groups ?? [], { visibleLayers: perspective?.layers ? new Set(perspective.layers) : null,
+    collapseActivities: options.collapse_activities === true || !!perspective?.collapse_activities, showLanes: !!perspective?.show_lanes, entityTypes: data.entity_types ?? [] })
+  await prepareIconMarkup()
+  const theme = options.theme === 'dark' ? 'dark' : 'light'
+  const title = typeof options.title === 'string' ? options.title : name
+  const result = buildGraphSvg({ nodes: view.nodes, edges: view.edges, entityTypes: data.entity_types ?? [], theme, legend: options.legend !== false,
+    transparent: options.transparent === true, title: title || undefined, subtitle: [perspective ? `Perspective ${perspective.name}` : '', `exported ${new Date().toISOString().slice(0, 16).replace('T', ' ')} UTC`].filter(Boolean).join(' · '),
+    measure: browserMeasure, icon: iconMarkup })
+  if (options.format === 'png') {
+    const { blob, scale } = await svgToPng(result.svg, result.width, result.height, Number(options.scale ?? 2))
+    const bytes = new Uint8Array(await blob.arrayBuffer())
+    let binary = ''
+    for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
+    const content = btoa(binary)
+    if (content.length > MAX_EXPORT_CHARS) throw new Error('PNG too large for the API; use format svg or a lower scale')
+    return { format: 'png', mime: 'image/png', encoding: 'base64', content, width: Math.round(result.width * scale), height: Math.round(result.height * scale), scale, node_count: result.nodeCount }
+  }
+  if (result.svg.length > MAX_EXPORT_CHARS) throw new Error('SVG too large for the API; export it from the board UI instead')
+  return { format: 'svg', mime: 'image/svg+xml', encoding: 'utf-8', content: result.svg, width: result.width, height: result.height, node_count: result.nodeCount }
+}
 
 export type Peer = { id: string; name: string }
 
@@ -204,6 +235,8 @@ export function useBoard(boardId: string) {
               } else if (message.operation === 'undo' || message.operation === 'redo') {
                 const changed = await (message.operation === 'undo' ? undo() : redo())
                 send({ type: 'api-result', requestId, ok: true, changed })
+              } else if (message.operation === 'export') {
+                send({ type: 'api-result', requestId, ok: true, export: await renderExport(boardId, actionsRef.current, (message.options ?? {}) as Record<string, unknown>) })
               } else if (message.operation === 'snapshot') {
                 const snapshot = project(boardId, actionsRef.current)
                 send({ type: 'api-result', requestId, ok: true, graph: {

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNod
 import {
   Activity, ArrowDownToLine, ArrowLeft, ArrowRight, ChevronDown, ChevronRight, Clock, Command, Copy, CornerDownLeft,
   FileText, GitBranch, Keyboard, Link2, ListTree, Merge, Moon, Pause, Pencil, Play, Plus, Plug, Search, ShieldCheck,
-  SkipBack, SkipForward, Sparkles, Sun, Trash2, Undo2, Redo2, Upload, X, Crosshair, CheckCircle2, CircleDashed, Boxes, Zap, Layers, Ungroup,
+  SkipBack, SkipForward, Sparkles, Sun, Trash2, Undo2, Redo2, Upload, X, Crosshair, CheckCircle2, CircleDashed, Boxes, Zap, Layers, Ungroup, ImageDown,
 } from 'lucide-react'
 import { factsInWindow, timelineSteps, timelineEvents, periodLabel, evidencePeriod } from './timeline'
 import GraphView, { KindIcon, type CanvasRequest, type Lens, type Selection } from './GraphView'
@@ -775,6 +775,13 @@ export default function App() {
     return q && data ? data.entities.filter(e => `${e.name} ${e.kind} ${e.identifiers.map(i => i.raw_value).join(' ')}`.toLowerCase().includes(q)).length : 0
   }, [data, search])
   const timeActive = !!(evidenceFrom || evidenceTo) || !includeUndated
+  const filterSummary = [
+    activePerspective ? `Perspective ${data?.views?.find(v => v.id === activePerspective)?.name ?? ''}` : '',
+    lens.layers ? `Layers: ${LAYERS.filter(l => lens.layers!.has(l.id)).map(l => l.label).join(', ')}` : '',
+    stateFilter !== 'all' ? `Status: ${labels[stateFilter]}` : '',
+    evidenceFrom || evidenceTo ? `Evidence ${periodLabel(evidenceFrom || null, evidenceTo || null)}` : '',
+    !includeUndated ? 'dated evidence only' : '',
+  ].filter(Boolean).join(' · ')
 
   const paletteItems = useMemo<PaletteItem[]>(() => {
     const actions: PaletteItem[] = [
@@ -798,6 +805,8 @@ export default function App() {
       { id: 'c-explorer', group: 'Canvas', label: explorerOpen ? 'Hide entity explorer' : 'Show entity explorer', hint: 'E', icon: <ListTree size={15} />, run: toggleExplorer },
       { id: 'c-time', group: 'Canvas', label: showTime ? 'Hide evidence window' : 'Show evidence window', hint: 'T', icon: <Clock size={15} />, run: () => setShowTime(!showTime) },
       { id: 'c-theme', group: 'Canvas', label: theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme', icon: theme === 'dark' ? <Sun size={15} /> : <Moon size={15} />, run: toggleTheme },
+      { id: 'x-png', group: 'Export', label: 'Export graph as PNG', icon: <ImageDown size={15} />, run: () => { setActiveTab('graph'); window.setTimeout(() => canvas('export', { kind: 'png' }), 50) } },
+      { id: 'x-svg', group: 'Export', label: 'Export graph as SVG (vector)', icon: <ImageDown size={15} />, run: () => { setActiveTab('graph'); window.setTimeout(() => canvas('export', { kind: 'svg' }), 50) } },
       { id: 'b-import-logs', group: 'Board', label: 'Import logs / KQL results…', icon: <Upload size={15} />, run: () => setShowLogImport(true) },
       { id: 'b-export', group: 'Board', label: 'Export board JSON', icon: <ArrowDownToLine size={15} />, run: download },
       { id: 'b-import', group: 'Board', label: 'Import board JSON…', icon: <Upload size={15} />, run: () => importInput.current?.click() },
@@ -832,6 +841,8 @@ export default function App() {
           <button onClick={() => setShowLogImport(true)}><Upload size={14} /> Import logs / KQL</button>
           <button onClick={() => importInput.current?.click()}><Upload size={14} /> Import board JSON</button>
           <button onClick={download}><ArrowDownToLine size={14} /> Export board JSON</button>
+          <button onClick={() => { setActiveTab('graph'); window.setTimeout(() => canvas('export', { kind: 'png' }), 50) }}><ImageDown size={14} /> Export graph as PNG</button>
+          <button onClick={() => { setActiveTab('graph'); window.setTimeout(() => canvas('export', { kind: 'svg' }), 50) }}><ImageDown size={14} /> Export graph as SVG</button>
           <button onClick={() => void copyValue(exportJson(), 'Board JSON')}><Copy size={14} /> Copy board JSON</button>
           <div className="menu-sep" />
           <div className="menu-label">Boards in this browser</div>
@@ -887,6 +898,7 @@ export default function App() {
             activePerspective={activePerspective} onApplyPerspective={applyPerspective}
             onSavePerspective={name => { const id = uuid(); void act(async () => { await board.emit('view.add', { id, name, layers: lens.layers ? [...lens.layers] : null, collapse_activities: lens.collapseActivities, show_lanes: lens.showLanes }); setPerspectiveParam(id) }, 'Perspective saved') }}
             onDeletePerspective={id => { void act(() => board.emit('view.delete', { id }), 'Perspective deleted'); if (id === activePerspective) setPerspectiveParam(null) }}
+            boardName={board.boardName} filterSummary={filterSummary} onNotice={setToast} onRequestDone={() => setRequest(null)}
             selection={selection} search={search} onSelect={setSelectionState} />}
           {data && data.entities.length > 0 && <div className="status-filter" role="group" aria-label="Filter relationships by status">
             <button className={stateFilter === 'all' ? 'active' : ''} onClick={() => setStateFilter('all')}>All <b>{timeFacts.length}</b></button>

@@ -52,9 +52,9 @@ Editing and concurrency
 - Every change is an action with channel (UI/REST/MCP), actor and batch; rest_board_history shows them, rest_undo_board undoes the session's last batch.
 - Content changes of a relationship, activity, evidence or source reset affected reviews.
 """
-mcp = FastMCP("FactGraph Browser Boards", version="0.4.1", instructions=MCP_INSTRUCTIONS)
+mcp = FastMCP("FactGraph Browser Boards", version="0.4.2", instructions=MCP_INSTRUCTIONS)
 mcp_app = mcp.http_app(path="/")
-app = FastAPI(title="FactGraph API", version="0.4.1", lifespan=mcp_app.lifespan)
+app = FastAPI(title="FactGraph API", version="0.4.2", lifespan=mcp_app.lifespan)
 
 
 @dataclass

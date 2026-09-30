@@ -3,19 +3,23 @@ import { ReactFlow, ReactFlowProvider, Background, BackgroundVariant, Controls, 
   useReactFlow, useNodesState, useInternalNode, useStore, type Node, type Edge, type NodeProps, type EdgeProps, type Connection,
   type XYPosition, type InternalNode } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
-import { Box, User, Monitor, KeyRound, Cloud, FileText, Network, Layers, Plus, Search, X, Pin, Sparkles, Copy, ArrowDown,
+import { Layers, Plus, Search, X, Pin, Sparkles, Copy, ArrowDown,
   Grid3x3, Map as MapIcon, Crosshair, Pencil, Merge, Trash2, PinOff, Settings2, Boxes, Zap, ChevronRight, ChevronDown,
-  FolderTree, Group as GroupIcon, Ungroup, EyeOff, Save, Columns3, Workflow } from 'lucide-react'
+  FolderTree, Group as GroupIcon, Ungroup, EyeOff, Save, Columns3, Workflow, Download, ClipboardCopy, ImageDown } from 'lucide-react'
 import type { Entity, EntityType, Fact, Group, Perspective, TruthState } from './types'
 import { CONTAINS_PREDICATES, type ActionDraft } from './board'
 import { snapPosition } from './layout'
+import { KindIcon, iconMarkup, prepareIconMarkup, typeIcons } from './KindIcon'
+import { browserMeasure, buildGraphSvg, downloadBlob, exportFilename, svgToPng } from './exportGraph'
 import { entityVisual } from './entityVisual'
 import { LAYERS, layerOf } from './layers'
-import { buildViewModel, groupSuggestions, activityNodeId, groupNodeId, NODE_H, NODE_W, type VNode, type VEdge } from './viewModel'
+import { buildViewModel, groupSuggestions, activityNodeId, groupNodeId, edgeGeometry, edgeOffsets, edgeWidth, NODE_H, NODE_W, type NodeBox, type VNode } from './viewModel'
 import { uuid } from './uuid'
 
 export type Selection = { kind: 'entity' | 'fact' | 'group'; id: string } | null
-export type CanvasRequest = { type: 'focus' | 'fit' | 'arrange' | 'arrange-layers' | 'place'; id?: string; kind?: string; n: number }
+export type CanvasRequest = { type: 'focus' | 'fit' | 'arrange' | 'arrange-layers' | 'place' | 'export'; id?: string; kind?: string; n: number }
+type ExportSettings = { format: 'png' | 'svg'; area: 'all' | 'visible' | 'selection'; theme: 'current' | 'light' | 'dark'; scale: number; title: boolean; legend: boolean; transparent: boolean }
+const defaultExport: ExportSettings = { format: 'png', area: 'all', theme: 'current', scale: 2, title: true, legend: true, transparent: false }
 export type Lens = { layers: Set<string> | null; collapseActivities: boolean; showLanes: boolean }
 type Props = {
   entityTypes: EntityType[]; entities: Entity[]; facts: Fact[]; groups: Group[]; perspectives: Perspective[];
@@ -26,13 +30,12 @@ type Props = {
   onCommand: (drafts: ActionDraft[]) => Promise<unknown>;
   onEdit: (id: string) => void; onMerge: (id: string) => void;
   onCopy: (value: string, label: string) => void;
+  boardName: string; filterSummary: string; onNotice: (message: string) => void;
+  /** Called once a request was handled, so a remounted canvas never replays it. */
+  onRequestDone: () => void;
 }
 const builtInKinds = ['User', 'Device', 'IP', 'Service Principal', 'Key Vault', 'AKS Cluster', 'S3 Bucket', 'File', 'Repository', 'Credential', 'Environment Variable', 'Blob Storage']
-const typeIcons = { Box, User, Monitor, KeyRound, Cloud, FileText, Network, Layers }
-export function KindIcon({ kind, icon, size = 16 }: { kind: string; icon?: string; size?: number }) {
-  const Icon = icon && icon in typeIcons ? typeIcons[icon as keyof typeof typeIcons] : /user|person/i.test(kind) ? User : /device|host|system/i.test(kind) ? Monitor : /secret|credential|variable|vault/i.test(kind) ? KeyRound : /file|repo/i.test(kind) ? FileText : /aks|kubernetes|pod/i.test(kind) ? Layers : /\bip\b|network/i.test(kind) ? Network : /cloud|storage|principal|bucket|s3/i.test(kind) ? Cloud : Box
-  return <Icon size={size} strokeWidth={1.9} />
-}
+export { KindIcon }
 
 // Callbacks live in a ref so node data stays referentially stable and memoised cards do not re-render on every parent render.
 type Handlers = { rename: (id: string, name: string) => void; cancelSelect: () => void; toggleGroup: (groupId: string, collapsed: boolean) => void }
@@ -110,32 +113,17 @@ const FrameNode = memo(function FrameNode({ data }: NodeProps<Node<FrameData>>) 
 })
 
 // Floating edges attach to the node border along the line between centres, so edges never loop around cards.
-type Box2 = { x: number; y: number; w: number; h: number }
-const boxOf = (node: InternalNode): Box2 => {
+const boxOf = (node: InternalNode): NodeBox => {
   const w = node.measured.width ?? 200, h = node.measured.height ?? 56
   return { x: node.internals.positionAbsolute.x + w / 2, y: node.internals.positionAbsolute.y + h / 2, w, h }
-}
-function borderPoint(from: Box2, toward: { x: number; y: number }, pad = 0) {
-  const dx = toward.x - from.x, dy = toward.y - from.y
-  if (!dx && !dy) return { x: from.x, y: from.y }
-  const scale = Math.min((from.w / 2 + pad) / Math.abs(dx || 1e-9), (from.h / 2 + pad) / Math.abs(dy || 1e-9))
-  return { x: from.x + dx * scale, y: from.y + dy * scale }
 }
 type EdgeData = { state: TruthState; offset: number; dimmed: boolean; count: number; spoke: boolean; onPick: (id: string) => void; onEdit: (id: string) => void }
 const FloatingEdge = memo(function FloatingEdge({ id, source, target, label, selected, data }: EdgeProps<Edge<EdgeData>>) {
   const s = useInternalNode(source), t = useInternalNode(target)
   const showLabel = useStore(store => store.transform[2] >= 0.55)
   if (!s || !t || !data) return null
-  const a = boxOf(s), b = boxOf(t)
-  const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2
-  const len = Math.hypot(b.x - a.x, b.y - a.y) || 1
-  const cx = mx + (-(b.y - a.y) / len) * data.offset * 2, cy = my + ((b.x - a.x) / len) * data.offset * 2
-  const start = borderPoint(a, data.offset ? { x: cx, y: cy } : b)
-  const end = borderPoint(b, data.offset ? { x: cx, y: cy } : a, 3)
-  const path = data.offset ? `M ${start.x} ${start.y} Q ${cx} ${cy} ${end.x} ${end.y}` : `M ${start.x} ${start.y} L ${end.x} ${end.y}`
-  const lx = data.offset ? 0.25 * start.x + 0.5 * cx + 0.25 * end.x : (start.x + end.x) / 2
-  const ly = data.offset ? 0.25 * start.y + 0.5 * cy + 0.25 * end.y : (start.y + end.y) / 2
-  const width = data.count > 1 ? Math.min(1.5 + Math.log10(data.count) * 1.6, 5) : undefined
+  const { path, label: { x: lx, y: ly } } = edgeGeometry(boxOf(s), boxOf(t), data.offset)
+  const width = data.count > 1 ? edgeWidth(data.count) : undefined
   return <>
     <BaseEdge id={id} path={path} interactionWidth={16} markerEnd={`url(#fg-arrow-${selected ? 'selected' : data.state})`} style={width ? { strokeWidth: width } : undefined}
       className={`fg-edge ${data.state}${selected ? ' selected' : ''}${data.dimmed ? ' dimmed' : ''}${data.spoke ? ' spoke' : ''}`} />
@@ -167,7 +155,7 @@ function sameV(a: VNode, b: VNode) {
 
 function ArrowDefs() {
   return <svg className="fg-defs" aria-hidden="true"><defs>
-    {(['supported', 'disputed', 'refuted', 'unknown', 'selected'] as const).map(state => <marker key={state} id={`fg-arrow-${state}`} viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    {(['supported', 'disputed', 'refuted', 'unknown', 'selected'] as const).map(state => <marker key={state} id={`fg-arrow-${state}`} viewBox="0 0 10 10" refX="9" refY="5" markerUnits="userSpaceOnUse" markerWidth="10" markerHeight="10" orient="auto-start-reverse">
       <path d="M 0 0 L 10 5 L 0 10 z" className={`fg-arrow ${state}`} />
     </marker>)}
   </defs></svg>
@@ -177,7 +165,11 @@ function Canvas(props: Props) {
   const { entities, facts, groups, selection, search, onSelect, onCommand, entityTypes, request, lens } = props
   const flow = useReactFlow<Node<AnyData>>()
   const [nodes, setNodes, onNodesChange] = useNodesState<Node<AnyData>>([])
-  const [popover, setPopover] = useState<'palette' | 'layers' | 'suggest' | null>(null)
+  const [popover, setPopover] = useState<'palette' | 'layers' | 'suggest' | 'export' | null>(null)
+  const [exportSettings, setExportSettingsState] = useState<ExportSettings>(() => { try { return { ...defaultExport, ...JSON.parse(localStorage.getItem('factgraph:export') ?? '{}') } } catch { return defaultExport } })
+  const setExportSettings = (next: ExportSettings) => { setExportSettingsState(next); try { localStorage.setItem('factgraph:export', JSON.stringify(next)) } catch { /* private mode */ } }
+  const [exporting, setExporting] = useState(false)
+  const shellRef = useRef<HTMLDivElement>(null)
   const [typeEdit, setTypeEdit] = useState<EntityType | null>(null)
   const [typeSearch, setTypeSearch] = useState('')
   const [draft, setDraft] = useState<Draft | null>(null)
@@ -293,16 +285,7 @@ function Canvas(props: Props) {
   }
   const edgeCallbacks = useMemo(() => ({ onPick: (id: string) => pickEdge.current(id), onEdit: (id: string) => editEdge.current(id) }), [])
   const edges = useMemo<Edge<EdgeData>[]>(() => {
-    const pairs = new Map<string, VEdge[]>()
-    for (const edge of view.edges) {
-      const key = edge.source < edge.target ? `${edge.source}|${edge.target}` : `${edge.target}|${edge.source}`
-      const list = pairs.get(key); if (list) list.push(edge); else pairs.set(key, [edge])
-    }
-    const offsets = new Map<string, number>()
-    for (const list of pairs.values()) list.forEach((edge, index) => {
-      const raw = list.length > 1 ? (index - (list.length - 1) / 2) * 34 : 0
-      offsets.set(edge.id, edge.source < edge.target ? raw : -raw)
-    })
+    const offsets = edgeOffsets(view.edges)
     return view.edges.map(edge => {
       const selected = selectedEdgeIds.has(edge.id) || (!!edge.activityId && selection?.kind === 'fact' && selection.id === edge.activityId)
       const incident = !focusIds || (selectedNodeId ? edge.source === selectedNodeId || edge.target === selectedNodeId || (focusIds.has(edge.source) && focusIds.has(edge.target) && (edge.source.startsWith('act:') || edge.target.startsWith('act:'))) : selected)
@@ -332,10 +315,12 @@ function Canvas(props: Props) {
   }
   useEffect(() => {
     if (!request) return
+    props.onRequestDone()
     if (request.type === 'focus' && request.id) focusOn(request.id)
     else if (request.type === 'fit') void flow.fitView({ padding: 0.2, maxZoom: 1.1, duration: 400 })
     else if (request.type === 'arrange') void align()
     else if (request.type === 'arrange-layers') void align('RIGHT', true)
+    else if (request.type === 'export') void runExport({ ...exportSettings, format: request.kind === 'svg' ? 'svg' : 'png', area: 'all' }, 'download')
     else if (request.type === 'place') setDraft({ position: center(), kind: request.kind || 'Device', name: '', predicate: '' })
   }, [request?.n])
   useEffect(() => {
@@ -420,6 +405,44 @@ function Canvas(props: Props) {
       if (byLayer && !lens.showLanes) props.onLensChange({ ...lens, showLanes: true })
     } catch (e) { setError(String(e)) } finally { setBusy(false) }
   }
+  /** Render the current canvas state (filters, layers, groups, activities) to a standalone SVG, optionally rasterised to PNG. */
+  const runExport = async (settings: ExportSettings, mode: 'download' | 'copy') => {
+    setExporting(true); setError('')
+    try {
+      await prepareIconMarkup()
+      const flowNodes = flow.getNodes()
+      const sizes = new Map(flowNodes.filter(n => n.measured?.width && n.measured?.height).map(n => [n.id, { width: n.measured!.width!, height: n.measured!.height! }]))
+      let area = null, only = null
+      if (settings.area === 'visible' && shellRef.current) {
+        const rect = shellRef.current.getBoundingClientRect()
+        const a = flow.screenToFlowPosition({ x: rect.left, y: rect.top }), b = flow.screenToFlowPosition({ x: rect.right, y: rect.bottom })
+        area = { x: a.x, y: a.y, width: b.x - a.x, height: b.y - a.y }
+      }
+      if (settings.area === 'selection') {
+        only = new Set(flowNodes.filter(n => n.selected).map(n => n.id))
+        if (selectedNodeId) only.add(selectedNodeId)
+        if (!only.size) throw new Error('Select nodes first (click, or Shift + drag) to export a selection.')
+        // Activities between selected participants come along so their spokes stay intact.
+        for (const edge of view.edges) if (edge.activityId && (only.has(edge.source) || only.has(edge.target))) only.add(edge.source.startsWith('act:') ? edge.source : edge.target)
+      }
+      const theme = settings.theme === 'current' ? props.theme : settings.theme
+      const result = buildGraphSvg({ nodes: view.nodes, edges: view.edges, entityTypes, theme, sizes, area, only, legend: settings.legend,
+        transparent: settings.transparent, measure: browserMeasure, icon: iconMarkup,
+        title: settings.title ? props.boardName : undefined,
+        subtitle: settings.title ? [props.filterSummary, `exported ${new Date().toLocaleString('en-GB')}`].filter(Boolean).join(' · ') : undefined })
+      if (!result.nodeCount) throw new Error('Nothing to export in this area.')
+      if (settings.format === 'svg') {
+        if (mode === 'copy') { await navigator.clipboard.writeText(result.svg); props.onNotice('SVG markup copied') }
+        else { downloadBlob(new Blob([result.svg], { type: 'image/svg+xml;charset=utf-8' }), exportFilename(props.boardName, 'svg')); props.onNotice(`SVG exported · ${result.nodeCount} nodes`) }
+      } else {
+        const { blob, scale } = await svgToPng(result.svg, result.width, result.height, settings.scale)
+        const note = scale < settings.scale - 0.01 ? ` · reduced to ${scale.toFixed(2)}× (browser size limit; use SVG for full detail)` : ''
+        if (mode === 'copy') { await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]); props.onNotice(`PNG copied to clipboard${note}`) }
+        else { downloadBlob(blob, exportFilename(props.boardName, 'png')); props.onNotice(`PNG exported · ${Math.round(result.width * scale)}×${Math.round(result.height * scale)} px${note}`) }
+      }
+      setPopover(null)
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)) } finally { setExporting(false) }
+  }
   const moveDrafts = (moved: Node<AnyData>[]): ActionDraft[] => moved.filter(n => n.type !== 'frame').map(n => {
     const position = grid ? snapPosition(n.position) : n.position
     if (n.type === 'group') return { type: 'group.update', payload: { id: n.id.slice(6), ...position } }
@@ -440,7 +463,7 @@ function Canvas(props: Props) {
   const containerGroup = menuEntity ? groups.find(g => g.rule?.container_id === menuEntity.id) : undefined
   const nameOf = (id?: string) => entities.find(e => e.id === id)?.name ?? 'New entity'
   const hiddenLayers = lens.layers ? LAYERS.length - lens.layers.size : 0
-  return <div className={`graph-shell flow-shell${far ? ' zoom-far' : ''}${focusIds ? ' has-focus' : ''}`} onDragOver={e => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy' }} onDrop={e => {
+  return <div ref={shellRef} className={`graph-shell flow-shell${far ? ' zoom-far' : ''}${focusIds ? ' has-focus' : ''}`} onDragOver={e => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy' }} onDrop={e => {
     e.preventDefault(); const kind = e.dataTransfer.getData('application/factgraph-kind'); if (kind) { setDraft({ position: flow.screenToFlowPosition({ x: e.clientX, y: e.clientY }), kind, name: '', predicate: '' }); setPopover(null) }
   }}>
     <ArrowDefs />
@@ -487,7 +510,27 @@ function Canvas(props: Props) {
       <button className={`icon-only${focusMode ? ' active' : ''}`} aria-pressed={focusMode} onClick={() => toggle('focus', !focusMode, setFocusMode)} title="Focus: highlight neighbours of the selection"><Crosshair size={15} /></button>
       <button className={`icon-only${grid ? ' active' : ''}`} aria-pressed={grid} onClick={() => toggle('snap', !grid, setGrid)} title="Snap to grid"><Grid3x3 size={15} /></button>
       <button className={`icon-only${minimap ? ' active' : ''}`} aria-pressed={minimap} onClick={() => { setMinimapPref(!minimap); savePref('minimap', !minimap) }} title="Minimap"><MapIcon size={15} /></button>
+      <span className="tool-sep" />
+      <button className={`icon-only${popover === 'export' ? ' active' : ''}`} onClick={() => setPopover(popover === 'export' ? null : 'export')} title="Export as PNG or SVG" aria-label="Export image"><ImageDown size={15} /></button>
     </div>
+    {popover === 'export' && <div className="export-popover popover" role="dialog" aria-label="Export image">
+      <div className="popover-head"><strong>Export image</strong><button className="icon-button" aria-label="Close export" onClick={() => setPopover(null)}><X size={15} /></button></div>
+      <div className="segmented full" role="group" aria-label="Format">{(['png', 'svg'] as const).map(f => <button key={f} className={exportSettings.format === f ? 'active' : ''} aria-pressed={exportSettings.format === f} onClick={() => setExportSettings({ ...exportSettings, format: f })}>{f.toUpperCase()}</button>)}</div>
+      <p className="hint">{exportSettings.format === 'svg' ? 'Vector file for reports and slides; text stays editable in Illustrator, Inkscape, Word or PowerPoint.' : 'Image for chats, tickets and documents.'} The export shows what the canvas shows: filters, hidden layers, groups and activities.</p>
+      <label>Area<select aria-label="Export area" value={exportSettings.area} onChange={e => setExportSettings({ ...exportSettings, area: e.target.value as ExportSettings['area'] })}>
+        <option value="all">Whole graph</option><option value="visible">Visible area</option><option value="selection">Selection</option></select></label>
+      <div className="field-grid">
+        <label>Theme<select aria-label="Export theme" value={exportSettings.theme} onChange={e => setExportSettings({ ...exportSettings, theme: e.target.value as ExportSettings['theme'] })}><option value="current">Current</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
+        {exportSettings.format === 'png' && <label>Resolution<select aria-label="Export resolution" value={exportSettings.scale} onChange={e => setExportSettings({ ...exportSettings, scale: Number(e.target.value) })}><option value={1}>1×</option><option value={2}>2× (sharp)</option><option value={3}>3× (print)</option></select></label>}
+      </div>
+      <label className="check"><input type="checkbox" checked={exportSettings.title} onChange={e => setExportSettings({ ...exportSettings, title: e.target.checked })} /> Title, filters and date</label>
+      <label className="check"><input type="checkbox" checked={exportSettings.legend} onChange={e => setExportSettings({ ...exportSettings, legend: e.target.checked })} /> Status legend and counts</label>
+      <label className="check"><input type="checkbox" checked={exportSettings.transparent} onChange={e => setExportSettings({ ...exportSettings, transparent: e.target.checked })} /> Transparent background</label>
+      <div className="composer-actions">
+        <button className="secondary-button small" disabled={exporting} onClick={() => void runExport(exportSettings, 'copy')}><ClipboardCopy size={14} /> Copy</button>
+        <button className="primary-button" disabled={exporting} onClick={() => void runExport(exportSettings, 'download')}><Download size={14} /> {exporting ? 'Rendering…' : `Download ${exportSettings.format.toUpperCase()}`}</button>
+      </div>
+    </div>}
     {popover === 'palette' && <div className="entity-palette popover">
       <div className="popover-head"><strong>Add entity</strong><button className="icon-button" aria-label="Close palette" onClick={() => setPopover(null)}><X size={15} /></button></div>
       <label className="input-with-icon"><Search size={14} /><input autoFocus placeholder="Find or create a type…" value={typeSearch} onChange={e => setTypeSearch(e.target.value)} /></label>

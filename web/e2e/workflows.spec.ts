@@ -1,6 +1,7 @@
 import {test, expect, type Page, type APIRequestContext} from '@playwright/test'
 import {randomUUID} from 'node:crypto'
 import {spawn} from 'node:child_process'
+import {readFileSync} from 'node:fs'
 const base='http://127.0.0.1:18088'
 function mcp(token:string,tool:string,args:object):Promise<any> {
   return new Promise((resolve,reject)=>{
@@ -349,4 +350,45 @@ test('activities, groups, layers and perspectives across REST, MCP and the canva
   await call('DELETE',`/groups/${group}`)
   await expect(page.locator('.group-node')).toHaveCount(0)
   expect((await graph()).entities).toHaveLength(16)
+})
+
+test('export: PNG and SVG downloads, clipboard-free API export via REST and MCP',async({page,request})=>{
+  const {id,token,call}=await setup(page,request)
+  const a=(await call('POST','/entities',{name:'Attacker & Co <x>',kind:'Threat Actor',x:0,y:0})).id
+  const b=(await call('POST','/entities',{name:'kv-prod',kind:'Key Vault',x:420,y:0})).id
+  await call('POST','/relations',{subject_id:a,predicate:'listed secrets of',object_id:b})
+  await expect(page.locator('.entity-node')).toHaveCount(2)
+  await page.getByRole('button',{name:'Export image'}).click()
+  const panel=page.getByRole('dialog',{name:'Export image'})
+  await panel.getByLabel('Export resolution').selectOption('2')
+  const [png]=await Promise.all([page.waitForEvent('download'),panel.getByRole('button',{name:'Download PNG'}).click()])
+  expect(png.suggestedFilename()).toMatch(/^factgraph-.*\.png$/)
+  const bytes=readFileSync(await png.path())
+  expect(bytes.subarray(1,4).toString()).toBe('PNG')
+  expect(bytes.readUInt32BE(16)).toBeGreaterThan(900)
+  await expect(page.getByText(/PNG exported/)).toBeVisible()
+  await page.getByRole('button',{name:'Export image'}).click()
+  await panel.getByRole('button',{name:'SVG'}).click()
+  await panel.getByLabel('Export theme').selectOption('dark')
+  const [svg]=await Promise.all([page.waitForEvent('download'),panel.getByRole('button',{name:'Download SVG'}).click()])
+  const text=readFileSync(await svg.path(),'utf8')
+  expect(text).toContain('Attacker &amp; Co &lt;x&gt;')
+  expect(text).toContain('listed secrets of')
+  expect(text).toContain('<g fill="none" stroke=')
+  expect(await page.evaluate(t=>new DOMParser().parseFromString(t,'image/svg+xml').getElementsByTagName('parsererror').length,text)).toBe(0)
+  // Selection without selected nodes explains itself instead of producing an empty file.
+  await page.getByRole('button',{name:'Export image'}).click()
+  await panel.getByLabel('Export area').selectOption('selection')
+  await panel.getByRole('button',{name:'Download SVG'}).click()
+  await expect(page.getByRole('alert')).toContainText('Select nodes first')
+  await panel.getByLabel('Export area').selectOption('all')
+  // Agents: SVG via REST, PNG via MCP.
+  const restSvg=await call('POST','/export',{format:'svg',theme:'light',title:'Report figure'})
+  expect(restSvg).toMatchObject({format:'svg',mime:'image/svg+xml',node_count:2})
+  expect(restSvg.content).toContain('Report figure')
+  const mcpPng=await mcp(token,'rest_export_image',{board_id:id,body:{format:'png',scale:1}})
+  expect(mcpPng.format).toBe('png')
+  expect(Buffer.from(mcpPng.content,'base64').subarray(1,4).toString()).toBe('PNG')
+  const bad=await request.post(`${base}/api/boards/${id}/export`,{headers:{'X-FactGraph-Token':token},data:{format:'gif'}})
+  expect(bad.status()).toBe(422)
 })

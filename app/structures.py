@@ -98,6 +98,17 @@ class PerspectiveInput(StrictModel):
     show_lanes: bool = Field(default=False, description="Draw layer swimlanes behind the graph.")
 
 
+class ExportInput(StrictModel):
+    format: Literal["svg", "png"] = Field(default="svg", description="svg = vector (editable text, best for reports); png = raster image returned as base64.")
+    theme: Literal["light", "dark"] = Field(default="light", description="Light suits documents and print; dark matches the dark canvas.")
+    scale: float = Field(default=2, ge=0.5, le=4, description="PNG pixel density; 2 is sharp on screens, 3 for print. Reduced automatically for very large graphs.")
+    perspective_id: str | None = Field(default=None, description="Render a saved perspective (visible layers, activity display, lanes). Omit for all layers.")
+    collapse_activities: bool = Field(default=False, description="Draw activities as simple edges instead of event nodes.")
+    title: str | None = Field(default=None, description="Heading above the graph; defaults to the board name. Empty string omits it.")
+    legend: bool = Field(default=True, description="Status legend with relationship counts below the graph.")
+    transparent: bool = False
+
+
 class PerspectivePatch(StrictModel):
     name: str | None = Field(default=None, min_length=1, max_length=80)
     layers: list[Layer] | None = None
@@ -261,6 +272,15 @@ def register_structures(app, core):
         """Remove a group (ungroup). All member entities, relationships and evidence stay unchanged."""
         await group_record(board_id, group_id)
         return {'board_id': board_id, 'id': group_id, 'accepted_actions': await apply(board_id, [action('group.delete', {'id': group_id})])}
+
+    @app.post('/api/boards/{board_id}/export')
+    async def export_image(board_id: str, body: ExportInput):
+        """Render the board graph as an image for reports: a standalone SVG (vector, content is the SVG text) or PNG (content is base64).
+
+        Groups are shown as stored (collapsed or expanded); use perspective_id to hide layers. The browser holding the board renders it, so it
+        looks like the canvas. Save with: jq -r .content > graph.svg, or for PNG: jq -r .content | base64 -d > graph.png."""
+        result = await command(board_id, 'export', options=body.model_dump())
+        return {'board_id': board_id, **result['export']}
 
     async def view_record(board_id, view_id):
         graph = await read_graph(board_id)

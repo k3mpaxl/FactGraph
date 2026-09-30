@@ -78,6 +78,21 @@ Jeder Typ gehört zu einer Ebene: Identity & access, Network, Endpoint, Workload
 
 Eine Gruppe bündelt viele Entitäten zu einem Knoten, z. B. 699 von 700 Repositories. Mitglieder sind explizit (Mehrfachauswahl → `G`) oder per Regel (Typ und/oder Textmuster); neue passende Entitäten kommen automatisch hinzu. **Take out** (Kontextmenü oder Inspector) hält einzelne Entitäten sichtbar außerhalb der Gruppe. Kanten zur Gruppe werden gebündelt und zeigen die Anzahl (`cloned ×699`), der Statusbalken zeigt die Prüfstatus der gebündelten Beziehungen. **Groups** in der Canvas-Leiste schlägt Gruppen aus Entitäten gleichen Typs mit identischen Verbindungen vor und nennt die Ausreißer, die sich unterscheiden. Gruppen und Perspektiven ändern nur die Ansicht, nie Aussagen oder Belege. REST/MCP: `/groups` (`rest_create_group`, vereinfacht `group_entities`), `/perspectives`, `GET /api/layers`.
 
+### Export als PNG/SVG (ab 0.4.2)
+
+Die Schaltfläche **Export image** (Bild-Symbol in der Canvas-Leiste), das Board-Menü und die Command-Palette exportieren den Graphen so, wie er gerade zu sehen ist: mit Filtern, ausgeblendeten Ebenen, Gruppen, Ereignissen und Bahnen.
+
+- **SVG** ist eine eigenständige Vektordatei ohne externe Schriften oder Stylesheets; Texte bleiben in Illustrator, Inkscape, Word oder PowerPoint editierbar.
+- **PNG** in 1×, 2× oder 3× Auflösung. Sehr große Graphen werden automatisch auf die Größengrenzen des Browsers reduziert (Hinweis im Toast); SVG hat keine Grenze.
+- Bereich: ganzer Graph, sichtbarer Ausschnitt oder Auswahl. Theme hell/dunkel unabhängig vom aktuellen Theme, optional transparenter Hintergrund, Titel mit Filtern und Datum, Status-Legende mit Zählern. **Copy** legt das Bild direkt in die Zwischenablage.
+- Agents: `POST /api/boards/{id}/export` bzw. MCP `rest_export_image` mit `format` (`svg`/`png`), `theme`, `scale`, `perspective_id`, `title`. Die Antwort enthält `content` (SVG-Text bzw. PNG als Base64):
+
+```bash
+curl -s -X POST "http://127.0.0.1:8080/api/boards/BOARD_UUID/export" \
+  -H "X-FactGraph-Token: TOKEN" -H "Content-Type: application/json" \
+  -d '{"format":"png","theme":"light","scale":2}' | jq -r .content | base64 -d > graph.png
+```
+
 ### Synchronisation und Konflikte
 
 Alle Änderungen sind Aktionen mit logischer Uhr; jeder Browser sortiert sie gleich (Uhr, Akteur, ID), daher ergibt jede Ankunftsreihenfolge denselben Graphen. Gleichzeitige Änderungen desselben Feldes entscheidet diese Reihenfolge deterministisch. Wird eine Entität zusammengeführt, während ein anderer Browser (auch offline) noch mit der alten ID arbeitet, landen dessen neue Beziehungen, Activity-Rollen, Kennungen und Gruppenänderungen beim Ziel der Zusammenführung statt verloren zu gehen. Gruppenmitglieder lassen sich inkrementell ändern (`add_members`, `exclude` …), damit gleichzeitige Änderungen zweier Analysten beide erhalten bleiben. Quellen und Belege prüfen `expected_revision` und melden Konflikte mit HTTP 409.
@@ -231,13 +246,13 @@ Weitere Schritte der lateralen Bewegung können aus anderen Logdateien, manuell,
 Das Repository enthält zwei GitHub-Actions:
 
 - `CI` führt die Python-Tests aus, baut das Frontend und prüft das Docker-Image bei Pushes und Pull Requests.
-- `Publish Docker image` veröffentlicht bei einem Versionstag wie `v0.4.1` oder über **Run workflow** nach Docker Hub.
+- `Publish Docker image` veröffentlicht bei einem Versionstag wie `v0.4.2` oder über **Run workflow** nach Docker Hub.
 
 Dafür im GitHub-Repository die Actions-Secrets `DOCKERHUB_USERNAME` und `DOCKERHUB_TOKEN` anlegen. Der Token sollte ein Docker-Hub-Access-Token mit Schreibrecht für das Image `factgraph` sein. Nach dem Push eines Tags:
 
 ```bash
-git tag v0.4.1
-git push origin v0.4.1
+git tag v0.4.2
+git push origin v0.4.2
 ```
 
 Das Image ist danach als `DOCKERHUB_USERNAME/factgraph:latest` und mit Versions-/Commit-Tags verfügbar. Für eine LAN-Freigabe beim Start des Compose-Stacks:

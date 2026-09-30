@@ -246,3 +246,107 @@ test('navigation: command palette jumps to an entity, explorer and inspector nav
   await expect(page.getByRole('complementary',{name:'Entity explorer'}).getByRole('button',{name:/Jump host/})).toBeVisible()
   await expect(page.locator('.entity-node.dimmed')).toHaveCount(1)
 })
+
+test('sync: offline edits and a concurrent merge converge in both browsers without losing the offline relationship',async({page,browser,request})=>{
+  const {id,call,graph}=await setup(page,request)
+  const second=await browser.newContext();const peer=await second.newPage()
+  // Proxy the peer's relay socket so the test can cut the connection like a network loss.
+  let offline=false;const sockets:any[]=[]
+  await peer.routeWebSocket(/\/ws\/boards\//,ws=>{if(offline){ws.close();return}sockets.push(ws);ws.connectToServer()})
+  await peer.goto(`/boards/${id}`)
+  await expect(page.getByText('2 online',{exact:true})).toBeVisible()
+  const dup=(await call('POST','/entities',{name:'alice (dup)',kind:'User',x:0,y:0})).id
+  const keep=(await call('POST','/entities',{name:'alice',kind:'User',x:0,y:200})).id
+  const vault=(await call('POST','/entities',{name:'kv-prod',kind:'Key Vault',x:400,y:100})).id
+  await expect(peer.locator('.entity-node')).toHaveCount(3)
+  // Peer goes offline and links the duplicate; meanwhile the first analyst merges the duplicate away.
+  offline=true;for(const ws of sockets) await ws.close()
+  await expect(peer.getByText('Offline',{exact:true})).toBeVisible({timeout:15000})
+  await expect(page.getByText('1 online',{exact:true})).toBeVisible()
+  await peer.keyboard.press('ControlOrMeta+k')
+  await peer.getByPlaceholder(/Search entities/).fill('alice (dup)')
+  await peer.getByPlaceholder(/Search entities/).press('Enter')
+  await peer.getByRole('complementary',{name:'Inspector'}).getByRole('button',{name:'Connect'}).click()
+  const dialog=peer.getByRole('dialog',{name:'New relationship'})
+  await dialog.getByRole('button',{name:'Existing node'}).click()
+  await dialog.locator('select[name=object_id]').selectOption(vault)
+  await dialog.getByLabel('Relationship / predicate').fill('read secrets of')
+  await dialog.getByRole('button',{name:/Save/}).click()
+  await expect(dialog).not.toBeVisible()
+  await call('POST',`/entities/${dup}/merge`,{target_id:keep})
+  await call('PATCH',`/entities/${keep}`,{name:'alice@corp'})
+  expect((await graph()).entities).toHaveLength(2)
+  offline=false
+  await expect(page.getByText('2 online',{exact:true})).toBeVisible({timeout:15000})
+  const peerToken=await peer.evaluate(id=>sessionStorage.getItem(`factgraph:sessionToken:${id}`)!,id)
+  const peerGraph=async()=>(await (await request.get(`${base}/api/boards/${id}/graph`,{headers:{'X-FactGraph-Token':peerToken}})).json())
+  await expect.poll(async()=>(await graph()).facts.length).toBe(1)
+  const mine=await graph()
+  expect(mine.facts[0].subject_id).toBe(keep)
+  expect(mine.facts[0].object_id).toBe(vault)
+  expect(mine.entities.map((e:any)=>e.id).sort()).toEqual([keep,vault].sort())
+  await expect.poll(async()=>{const p=await peerGraph();return JSON.stringify([p.entities,p.facts,p.groups])}).toBe(JSON.stringify([mine.entities,mine.facts,mine.groups]))
+  // Simultaneous renames from both browsers settle on the same winner everywhere.
+  await Promise.all([call('PATCH',`/entities/${vault}`,{name:'kv-A'}),request.fetch(`${base}/api/boards/${id}/entities/${vault}`,{method:'PATCH',data:{name:'kv-B'},headers:{'X-FactGraph-Token':peerToken}})])
+  await expect.poll(async()=>(await peerGraph()).entities.find((e:any)=>e.id===vault).name).toBe((await graph()).entities.find((e:any)=>e.id===vault).name)
+  await second.close()
+})
+
+test('activities, groups, layers and perspectives across REST, MCP and the canvas',async({page,request})=>{
+  const {id,token,call,graph}=await setup(page,request)
+  const atk=(await call('POST','/entities',{name:'Attacker',kind:'Threat Actor',x:0,y:0})).id
+  const ip=(await call('POST','/entities',{name:'203.0.113.7',kind:'IP',x:0,y:200})).id
+  const sp=(await mcp(token,'rest_create_entity',{board_id:id,body:{name:'sp-deploy',kind:'Service Principal',x:300,y:0}})).id
+  const kv=(await call('POST','/entities',{name:'kv-prod',kind:'Key Vault',x:600,y:100})).id
+  const created=await mcp(token,'add_activity',{board_id:id,operation:'listed secrets',participants:[{entity_id:atk,role:'actor'},{entity_id:ip,role:'source'},{entity_id:sp,role:'identity'},{entity_id:kv,role:'target'}],technique:'T1555.006',valid_from:'2026-09-28T10:42:00Z',observation:'SecretList by sp-deploy from 203.0.113.7',locator:'CorrelationId=abc'})
+  const activity=(await call('GET',`/activities/${created.id}`))
+  expect(activity.participants).toHaveLength(4)
+  expect(activity.assertions[0].review_status).toBe('unconfirmed')
+  expect((await call('GET',`/activities?entity_id=${sp}`)).total).toBe(1)
+  await expect(page.locator('.activity-node')).toHaveCount(1)
+  await expect(page.locator('.react-flow__edge')).toHaveCount(4)
+  await call('PATCH',`/activities/${created.id}`,{participants:[{entity_id:atk,role:'actor'},{entity_id:sp,role:'identity'},{entity_id:kv,role:'target'}]})
+  await expect(page.locator('.react-flow__edge')).toHaveCount(3)
+  // Multi-column import: one activity per operation + participant set, one evidence per row, idempotent.
+  const rows=[1,2,3].map(i=>({CallerIPAddress:'203.0.113.7',AppId:'sp-deploy',ResourceId:'kv-prod',OperationName:i<3?'SecretGet':'SecretList',TimeGenerated:`2026-09-28T11:0${i}:00Z`}))
+  const roles=[{field:'CallerIPAddress',role:'source',kind:'IP'},{field:'AppId',role:'identity',kind:'Service Principal'},{field:'ResourceId',role:'target',kind:'Key Vault'}]
+  const preview=await call('POST','/imports/activities',{rows,roles,operation_field:'OperationName',dry_run:true,title:'KV audit'})
+  expect(preview).toMatchObject({dry_run:true,activities:2,evidence:3})
+  await call('POST','/imports/activities',{rows,roles,operation_field:'OperationName',title:'KV audit'})
+  await call('POST','/imports/activities',{rows,roles,operation_field:'OperationName',title:'KV audit'})
+  const afterImport=await graph()
+  expect(afterImport.entities).toHaveLength(4)
+  expect(afterImport.facts.filter((f:any)=>f.participants)).toHaveLength(3)
+  // Group many repositories, keep one separate.
+  const repos=[] as string[]
+  for(let i=0;i<12;i++) repos.push((await call('POST','/entities',{name:`org/repo-${i}`,kind:'Repository',x:900,y:i*80})).id)
+  await call('POST','/actions',{actions:repos.map(r=>({type:'fact.add',payload:{id:randomUUID(),subject_id:sp,predicate:'cloned',object_id:r}}))})
+  const group=(await mcp(token,'rest_create_group',{board_id:id,body:{name:'Org repositories',rule:{kinds:['Repository']},excluded:[repos[11]]}})).id
+  expect((await call('GET',`/groups/${group}`)).member_ids).toHaveLength(11)
+  await page.getByRole('button',{name:'fit view'}).click()
+  await expect(page.locator('.group-node')).toHaveCount(1)
+  await expect(page.locator(`[data-id="${repos[11]}"]`)).toBeVisible()
+  await expect(page.locator('.edge-label',{hasText:'×11'})).toHaveCount(1)
+  await page.locator('.group-node').click()
+  const inspector=page.getByRole('complementary',{name:'Inspector'})
+  await expect(inspector.getByRole('heading',{name:'Org repositories'})).toBeVisible()
+  await inspector.getByRole('button',{name:'Put back'}).click()
+  await expect.poll(async()=>(await call('GET',`/groups/${group}`)).member_ids.length).toBe(12)
+  await inspector.getByRole('button',{name:'Expand'}).click()
+  await expect(page.locator('.frame-node.group')).toHaveCount(1)
+  await page.getByRole('button',{name:'Close',exact:true}).click()
+  // Layers: hide network, save a perspective.
+  await page.getByRole('button',{name:'Layers'}).click()
+  const layers=page.getByRole('dialog',{name:'Layers and perspectives'})
+  await layers.getByRole('checkbox',{name:/Network/}).uncheck()
+  await expect(page.locator(`[data-id="${ip}"]`)).toHaveCount(0)
+  await layers.getByLabel('Perspective name').fill('Without network')
+  await layers.getByRole('button',{name:'Save perspective'}).click()
+  await expect.poll(async()=>(await call('GET','/perspectives')).items[0]?.layers?.includes('network')).toBe(false)
+  expect((await request.get(`${base}/api/layers`)).ok()).toBeTruthy()
+  await call('PATCH',`/entities/${kv}`,{layer:'data'})
+  expect((await graph()).entities.find((e:any)=>e.id===kv).layer).toBe('data')
+  await call('DELETE',`/groups/${group}`)
+  await expect(page.locator('.group-node')).toHaveCount(0)
+  expect((await graph()).entities).toHaveLength(16)
+})

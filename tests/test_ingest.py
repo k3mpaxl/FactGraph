@@ -52,3 +52,33 @@ class IngestTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ActivityIngestTest(unittest.TestCase):
+    ROLES = [{"field": "CallerIPAddress", "role": "source", "kind": "IP"},
+             {"field": "AppId", "role": "identity", "kind": "Service Principal"},
+             {"field": "Resource", "role": "target", "kind": "Key Vault"}]
+
+    def test_rows_with_same_participants_share_one_activity_with_row_evidence(self):
+        from app.ingest import activity_rows_to_actions
+        board = str(uuid4())
+        rows = [{"CallerIPAddress": "1.2.3.4", "AppId": "sp-b", "Resource": "kv-c", "OperationName": "SecretList", "TimeGenerated": "2026-09-28T10:00:00Z"},
+                {"CallerIPAddress": "1.2.3.4", "AppId": "sp-b", "Resource": "kv-c", "OperationName": "SecretList", "TimeGenerated": "2026-09-28T10:05:00Z"},
+                {"CallerIPAddress": "1.2.3.4", "AppId": "sp-b", "Resource": "kv-c", "OperationName": "SecretGet", "TimeGenerated": "2026-09-28T10:06:00Z"},
+                {"CallerIPAddress": "", "AppId": "", "Resource": "kv-c", "OperationName": "SecretGet"}]
+        drafts, summary = activity_rows_to_actions(board, rows, title="KV audit", roles=self.ROLES, operation_field="OperationName")
+        again, _ = activity_rows_to_actions(board, rows, title="KV audit", roles=self.ROLES, operation_field="OperationName")
+        self.assertEqual([d["id"] for d in drafts], [d["id"] for d in again])
+        self.assertEqual(summary["activities"], 2)
+        self.assertEqual(summary["entities"], 3)
+        self.assertEqual(summary["evidence"], 3)
+        self.assertEqual(summary["skipped"], 1)
+        activity = next(d["payload"] for d in drafts if d["type"] == "fact.add")
+        self.assertEqual({p["role"] for p in activity["participants"]}, {"source", "identity", "target"})
+        evidence = [d["payload"] for d in drafts if d["type"] == "assertion.add"]
+        self.assertEqual(evidence[0]["valid_from"], "2026-09-28T10:00:00Z")
+
+    def test_missing_role_column_is_reported(self):
+        from app.ingest import activity_rows_to_actions
+        with self.assertRaisesRegex(ValueError, "fehlt"):
+            activity_rows_to_actions(str(uuid4()), [{"a": 1}], title="x", roles=self.ROLES)

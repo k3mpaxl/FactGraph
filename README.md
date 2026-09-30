@@ -55,7 +55,32 @@ Für große Graphen:
 | `E` / `T` | Explorer / Zeitfenster umschalten |
 | `Cmd/Ctrl+Z`, `Shift+Cmd/Ctrl+Z` | Undo / Redo |
 | `Entf` | Auswahl löschen |
+| `G` | Mehrfachauswahl gruppieren |
 | `?` | Alle Tastenkürzel |
+
+## Ereignisse, Ebenen und Gruppen (ab 0.4.1)
+
+### Ereignisse mit mehreren Beteiligten
+
+„Angreifer verwendet IP a.a.a.a und Service Principal B und listet Key Vault C auf“ ist **ein** Ereignis, keine drei Kanten. Eine **Activity** hat eine Operation (`listed secrets`), optional eine ATT&CK-Technik, einen Zeitraum und Beteiligte mit Rollen: `actor`, `identity`, `source`, `tool`, `via`, `target`, `other`. Belege hängen am ganzen Ereignis; Review, Status, Timeline und Zeitfenster funktionieren wie bei Beziehungen. Im Graph erscheint die Activity als Raute mit beschrifteten Speichen, in der Ebenen-Leiste lässt sie sich als einfache Kante darstellen.
+
+- UI: **Create → Activity…**, Command-Palette oder Log-Import im Modus **Activities · several roles** (Spalte → Rolle → Typ, z. B. `CallerIPAddress → source → IP`, `AppId → identity → Service Principal`, `ResourceId → target → Key Vault`). Zeilen mit gleicher Operation und gleichen Beteiligten ergeben eine Activity, jede Zeile ist ein eigener Beleg mit Zeitstempel.
+- REST/MCP: `POST /activities` (`rest_create_activity`, vereinfacht `add_activity`), `GET/PATCH/DELETE /activities/{id}`, `POST /imports/activities`. Belege über die bestehenden `/relations/{id}/evidence`-Endpunkte.
+- Die Zuordnung „IP gehört zum Angreifer“ ist eine eigene Aussage mit eigenem Beleg.
+
+### Ebenen
+
+Jeder Typ gehört zu einer Ebene: Identity & access, Network, Endpoint, Workload (Kubernetes), Cloud control plane, Data & storage, Code & CI, Other. Die Ebene wird aus dem Typ abgeleitet und lässt sich pro Typ (Typ-Editor) oder pro Entität (Inspector → Details) überschreiben. Die Schaltfläche **Layers** blendet Ebenen ein und aus (Verbindungen zu ausgeblendeten Ebenen zeigt ein Zähler am Knoten), zeichnet Bahnen und ordnet den Graphen **nach Ebenen** an. Kombinationen lassen sich als **Perspektive** speichern, werden mit dem Board synchronisiert und sind per `?lens=<id>` verlinkbar.
+
+**Inhalt einklappen**: Hat ein Device oder Cluster `contains`/`runs`/`hosts`-Beziehungen, klappt der Kontextmenüeintrag **Collapse contents** alles darin Enthaltene in den Knoten („12 inside“). Verbindungen der Inhalte laufen dann gebündelt über den Container.
+
+### Gruppen
+
+Eine Gruppe bündelt viele Entitäten zu einem Knoten, z. B. 699 von 700 Repositories. Mitglieder sind explizit (Mehrfachauswahl → `G`) oder per Regel (Typ und/oder Textmuster); neue passende Entitäten kommen automatisch hinzu. **Take out** (Kontextmenü oder Inspector) hält einzelne Entitäten sichtbar außerhalb der Gruppe. Kanten zur Gruppe werden gebündelt und zeigen die Anzahl (`cloned ×699`), der Statusbalken zeigt die Prüfstatus der gebündelten Beziehungen. **Groups** in der Canvas-Leiste schlägt Gruppen aus Entitäten gleichen Typs mit identischen Verbindungen vor und nennt die Ausreißer, die sich unterscheiden. Gruppen und Perspektiven ändern nur die Ansicht, nie Aussagen oder Belege. REST/MCP: `/groups` (`rest_create_group`, vereinfacht `group_entities`), `/perspectives`, `GET /api/layers`.
+
+### Synchronisation und Konflikte
+
+Alle Änderungen sind Aktionen mit logischer Uhr; jeder Browser sortiert sie gleich (Uhr, Akteur, ID), daher ergibt jede Ankunftsreihenfolge denselben Graphen. Gleichzeitige Änderungen desselben Feldes entscheidet diese Reihenfolge deterministisch. Wird eine Entität zusammengeführt, während ein anderer Browser (auch offline) noch mit der alten ID arbeitet, landen dessen neue Beziehungen, Activity-Rollen, Kennungen und Gruppenänderungen beim Ziel der Zusammenführung statt verloren zu gehen. Gruppenmitglieder lassen sich inkrementell ändern (`add_members`, `exclude` …), damit gleichzeitige Änderungen zweier Analysten beide erhalten bleiben. Quellen und Belege prüfen `expected_revision` und melden Konflikte mit HTTP 409.
 
 ## Untersuchung im Graphen
 
@@ -206,13 +231,13 @@ Weitere Schritte der lateralen Bewegung können aus anderen Logdateien, manuell,
 Das Repository enthält zwei GitHub-Actions:
 
 - `CI` führt die Python-Tests aus, baut das Frontend und prüft das Docker-Image bei Pushes und Pull Requests.
-- `Publish Docker image` veröffentlicht bei einem Versionstag wie `v0.4.0` oder über **Run workflow** nach Docker Hub.
+- `Publish Docker image` veröffentlicht bei einem Versionstag wie `v0.4.1` oder über **Run workflow** nach Docker Hub.
 
 Dafür im GitHub-Repository die Actions-Secrets `DOCKERHUB_USERNAME` und `DOCKERHUB_TOKEN` anlegen. Der Token sollte ein Docker-Hub-Access-Token mit Schreibrecht für das Image `factgraph` sein. Nach dem Push eines Tags:
 
 ```bash
-git tag v0.4.0
-git push origin v0.4.0
+git tag v0.4.1
+git push origin v0.4.1
 ```
 
 Das Image ist danach als `DOCKERHUB_USERNAME/factgraph:latest` und mit Versions-/Commit-Tags verfügbar. Für eine LAN-Freigabe beim Start des Compose-Stacks:

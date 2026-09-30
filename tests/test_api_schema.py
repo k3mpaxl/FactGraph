@@ -24,6 +24,9 @@ class RestPatchSchemaTest(unittest.TestCase):
             "/api/boards/{board_id}/types/{type_id}",
             "/api/boards/{board_id}/relations/{relation_id}",
             "/api/boards/{board_id}/relations/{relation_id}/evidence/{evidence_id}",
+            "/api/boards/{board_id}/activities/{activity_id}",
+            "/api/boards/{board_id}/groups/{group_id}",
+            "/api/boards/{board_id}/perspectives/{perspective_id}",
         })
 
     def test_delete_routes_cover_board_records(self):
@@ -38,6 +41,9 @@ class RestPatchSchemaTest(unittest.TestCase):
             "/api/boards/{board_id}/types/{type_id}",
             "/api/boards/{board_id}/relations/{relation_id}",
             "/api/boards/{board_id}/relations/{relation_id}/evidence/{evidence_id}",
+            "/api/boards/{board_id}/activities/{activity_id}",
+            "/api/boards/{board_id}/groups/{group_id}",
+            "/api/boards/{board_id}/perspectives/{perspective_id}",
         })
 
 

@@ -27,22 +27,34 @@ from app.ingest import action, entity_actions, parse_rows, relation_actions, row
 
 
 WEB_DIR = Path(__file__).resolve().parents[1] / "web" / "dist"
-MCP_INSTRUCTIONS = """You are working with FactGraph, an evidence-first investigation graph.
+MCP_INSTRUCTIONS = """FactGraph is an evidence-first investigation graph. Analysts and agents build it together in one board.
 
-Core rules:
-- Model investigation objects as entities (nodes). Use one entity per person, account, host, device, service principal, file, IP, secret, or other concrete object.
-- Relationships are directed claims between entities. Keep predicates specific and do not infer a relationship that is not supported by evidence.
-- Every important claim should have evidence. Prefer primary evidence such as access logs, query results, repository files, or first-party telemetry. Treat secondary sources as context, never as proof of an event.
-- Preserve the source URI, query, excerpt, evidence stance, confidence, and evidence period. Use refutes when evidence contradicts a claim; do not silently overwrite uncertainty.
-- New evidence is always unconfirmed. Never self-confirm research. Ask the analyst to check the original record. Confirmation is revision-bound and editing a claim or its source invalidates it. Use primary source classification, a concrete locator and original results, not a query alone.
-- Prefer canonical REST-equivalent tools with a typed body; PATCH body preserves explicit null. Legacy tools accept a patch object.
-- Evidence periods describe when the observed activity was valid, not when the graph record was created.
-- Use board_graph before editing when IDs or existing relationships are unknown. For large imports use REST /api/boards/{board_id}/imports/* or /actions; MCP is intended for focused edits.
-- The browser board must be open because FactGraph stores durable data in browser IndexedDB and the server only relays actions. Use the board's session token for REST and MCP (`X-FactGraph-Token` header; `session_token` is also accepted by tools); it binds the API action to that browser session.
+Connection
+- Every tool works on one board_id and needs the board open in a browser (data lives in that browser's IndexedDB; the server only relays). Pass the board's session token as session_token or X-FactGraph-Token. HTTP 409 means no browser holds the board open; ask the analyst to open the board URL.
+- There is no board listing. Ask the analyst for the board ID and token (board menu → API/MCP → Copy session token).
+
+Workflow
+1. Read first: rest_get_graph (or rest_list_entities with q=…) and reuse existing entity IDs. Never create a second entity for the same object; use rest_merge_entity for duplicates.
+2. Entities are concrete objects: one IP, account, service principal, device, file, repository, Key Vault, bucket, pod. Use a clear kind (IP, User, Service Principal, Key Vault, Repository, AKS Cluster, S3 Bucket, Threat Actor …). Set layer only if the automatic one is wrong.
+3. Two participants → relationship: rest_create_relation (subject → predicate → object, specific verb such as "reads", "has role on").
+   Three or more participants in one observed event → activity: rest_create_activity with operation and role-tagged participants
+   (actor, identity, source, tool, via, target, other). Example: attacker used IP a.a.a.a and service principal B and listed Key Vault C →
+   operation "listed secrets", participants actor=attacker, source=IP, identity=SP B, target=Key Vault C.
+   Attribution ("IP belongs to the attacker") is a separate claim with its own evidence, not part of the activity.
+4. Evidence: register the origin with rest_create_source (source_kind=primary for logs, telemetry, repository files; put the original rows into excerpt and the query into query). Attach evidence to a relationship or activity with rest_create_evidence (observation = what the record shows, locator = event ID/CorrelationId/row, valid_from/valid_to = when the activity happened, stance supports|refutes).
+   A query without results is not proof. Secondary sources are context only.
+5. New evidence is always unconfirmed. Never confirm your own research; the analyst reviews against the original record. A relationship stays "unknown" until confirmed evidence exists; supporting and refuting evidence may coexist ("disputed"). Do not overwrite uncertainty; add refuting evidence instead.
+6. Bulk data: rest_import_kql / rest_import_activity for two-column rows, rest_import_activities for rows with several participant columns (roles), always dry_run first. Imports are idempotent: repeating them does not duplicate records. MCP is best for focused edits; very large imports go through REST.
+7. Keep large graphs readable: rest_create_group bundles many similar entities (explicit members, or a rule by kinds/name match, or a container's contents) into one collapsed node; use excluded to keep the anomalous ones visible on their own. Groups and perspectives (rest_create_perspective: visible layers) change only the view, never claims or evidence.
+
+Editing and concurrency
+- PATCH-style tools change only the fields you pass; explicit null clears nullable fields. Pass expected_revision for sources and evidence to avoid overwriting concurrent edits (HTTP 409 on conflict: re-read and retry).
+- Every change is an action with channel (UI/REST/MCP), actor and batch; rest_board_history shows them, rest_undo_board undoes the session's last batch.
+- Content changes of a relationship, activity, evidence or source reset affected reviews.
 """
-mcp = FastMCP("FactGraph Browser Boards", version="0.4.0", instructions=MCP_INSTRUCTIONS)
+mcp = FastMCP("FactGraph Browser Boards", version="0.4.1", instructions=MCP_INSTRUCTIONS)
 mcp_app = mcp.http_app(path="/")
-app = FastAPI(title="FactGraph API", version="0.4.0", lifespan=mcp_app.lifespan)
+app = FastAPI(title="FactGraph API", version="0.4.1", lifespan=mcp_app.lifespan)
 
 
 @dataclass
@@ -185,7 +197,7 @@ async def import_rows(board_id: str, data: RowsInput) -> dict:
     entity_index = {(item["kind"].casefold(), item["name"].casefold()): item["id"]
                     for item in index["entities"]}
     fact_index = {(item["subject_id"], item["predicate"].casefold(), item["object_id"]): item["id"]
-                  for item in index["facts"] if item.get("valid_from") is None and item.get("valid_to") is None}
+                  for item in index["facts"] if item.get("valid_from") is None and item.get("valid_to") is None and not item.get("activity")}
     try:
         drafts, summary = rows_to_actions(board_id, data.rows, title=data.title,
             query=data.query, subject_field=data.subject_field,
@@ -229,6 +241,8 @@ async def create_entity(board_id: str, body: EntityInput):
     except ValueError as error:
         raise HTTPException(422, str(error)) from error
     drafts[0]["payload"]["pinned"] = body.pinned
+    if body.layer:
+        drafts[0]["payload"]["layer"] = body.layer
     if body.color:
         drafts[0]["payload"]["color"] = body.color
     if body.x is not None or body.y is not None:
@@ -314,7 +328,7 @@ async def create_relation(board_id: str, body: RelationInput):
         raise HTTPException(422, "Quell- oder Zielentität existiert im Board nicht")
     if body.source_id and body.source_id not in {source["id"] for source in index["sources"]}:
         raise HTTPException(422, "Quelle existiert im Board nicht")
-    existing = next((f for f in index['facts'] if f['subject_id'] == body.subject_id and f['object_id'] == body.object_id and f['predicate'].strip().casefold() == body.predicate.strip().casefold() and f.get('valid_from') == body.valid_from and f.get('valid_to') == body.valid_to), None)
+    existing = next((f for f in index['facts'] if not f.get('activity') and f['subject_id'] == body.subject_id and f['object_id'] == body.object_id and f['predicate'].strip().casefold() == body.predicate.strip().casefold() and f.get('valid_from') == body.valid_from and f.get('valid_to') == body.valid_to), None)
     if existing:
         relation_id = existing['id']
         drafts = [d for d in drafts if d['type'] != 'fact.add']
@@ -436,7 +450,7 @@ async def import_file(board_id: str, file: UploadFile = File(...),
                       subject_field: str = Form(""), object_field: str = Form(""),
                       predicate: str = Form("accessed"), predicate_field: str = Form(""),
                       subject_kind: str = Form("IP"),
-                      object_kind: str = Form("Datei")):
+                      object_kind: str = Form("Datei"), roles: str = Form("")):
     content = await file.read(20_000_001)
     if len(content) > 20_000_000:
         raise HTTPException(413, "Datei größer als 20 MB")
@@ -444,10 +458,24 @@ async def import_file(board_id: str, file: UploadFile = File(...),
         rows = parse_rows(content, file.filename or "")
     except (UnicodeError, ValueError, csv.Error) as error:
         raise HTTPException(422, str(error)) from error
+    if roles.strip():
+        from app.structures import ActivityRowsInput
+        from pydantic import ValidationError
+        import json
+        try:
+            body = ActivityRowsInput(rows=rows, title=title, query=query, dry_run=dry_run, roles=json.loads(roles),
+                                     operation=predicate or "performed", operation_field=predicate_field or None)
+        except (ValueError, ValidationError) as error:
+            raise HTTPException(422, str(error)) from error
+        return await import_activity_rows(board_id, body)
     return await import_rows(board_id, RowsInput(rows=rows, title=title, query=query, dry_run=dry_run,
         subject_field=subject_field or None, object_field=object_field or None,
         predicate=predicate, predicate_field=predicate_field or None,
         subject_kind=subject_kind, object_kind=object_kind))
+
+
+async def import_activity_rows(board_id: str, body):
+    return await globals()["import_activity_rows_impl"](board_id, body)
 
 
 async def run_mcp_session(session_token: str | None, operation):
@@ -465,15 +493,15 @@ async def run_mcp_session(session_token: str | None, operation):
 
 @mcp.tool
 async def board_graph(board_id: str, session_token: str | None = None) -> dict:
-    """Read the current graph from an open browser board using its session token."""
+    """Read the whole board (entities, relationships, activities, sources, evidence, groups, perspectives). Call first to reuse existing IDs."""
     return await run_mcp_session(session_token, lambda: get_graph(board_id))
 
 
 @mcp.tool
-async def add_entity(board_id: str, name: str, kind: str = "Sonstiges",
+async def add_entity(board_id: str, name: str, kind: str = "Other",
                      description: str = "", color: str | None = None,
                      session_token: str | None = None) -> dict:
-    """Create one entity on an open board. Use REST /actions for large batches."""
+    """Create one concrete entity (IP, user, service principal, device, Key Vault, repository …). Check existing entities with board_graph first to avoid duplicates. Returns its id."""
     return await run_mcp_session(session_token, lambda: create_entity(board_id, EntityInput(name=name, kind=kind, description=description, color=color)))
 
 
@@ -508,7 +536,7 @@ async def mcp_delete_entity(board_id: str, entity_id: str,
 @mcp.tool
 async def add_source(board_id: str, title: str, uri: str = "", excerpt: str = "",
                      session_token: str | None = None) -> dict:
-    """Create an evidence source, such as a repository path, log export or query."""
+    """Register an evidence source (log export, KQL results, repository file). Put original rows into excerpt. Use rest_create_source to set source_kind=primary and the query."""
     return await run_mcp_session(session_token, lambda: create_source(board_id, SourceInput(title=title, uri=uri, excerpt=excerpt)))
 
 
@@ -536,7 +564,7 @@ async def link_entities(board_id: str, subject_id: str, predicate: str,
                         object_id: str, note: str = "", source_id: str | None = None,
                         valid_from: str | None = None, valid_to: str | None = None,
                         session_token: str | None = None) -> dict:
-    """Create a directed relationship and optional supporting evidence on an open board."""
+    """Create a directed claim subject → predicate → object; note/source_id add a first unconfirmed evidence item. For events with three or more participants use add_activity."""
     return await run_mcp_session(session_token, lambda: create_relation(board_id, RelationInput(subject_id=subject_id,
         predicate=predicate, object_id=object_id, note=note, source_id=source_id, valid_from=valid_from, valid_to=valid_to))
     )
@@ -560,7 +588,7 @@ async def mcp_update_relationship(board_id: str, relation_id: str,
 @mcp.tool(name="delete_relationship")
 async def mcp_delete_relationship(board_id: str, relation_id: str,
                                   session_token: str | None = None) -> dict:
-    """Delete a relationship and all evidence attached to it."""
+    """Delete a relationship (or activity) and all evidence attached to it. Entities stay on the board."""
     return await run_mcp_session(session_token, lambda: delete_relation(board_id, relation_id))
 
 
@@ -569,7 +597,7 @@ async def add_evidence(board_id: str, relation_id: str, note: str,
                        source_id: str | None = None, stance: str = "supports",
                        confidence: float = 1, valid_from: str | None = None, valid_to: str | None = None,
                        session_token: str | None = None) -> dict:
-    """Attach a supporting or refuting statement to an existing relation."""
+    """Attach a supporting or refuting observation to a relationship or activity (relation_id). New evidence is always unconfirmed."""
     return await run_mcp_session(session_token, lambda: create_evidence(board_id, relation_id, EvidenceInput(note=note,
         source_id=source_id, stance=stance, confidence=confidence, valid_from=valid_from, valid_to=valid_to))
     )
@@ -598,6 +626,37 @@ async def mcp_delete_evidence(board_id: str, relation_id: str, evidence_id: str,
 
 
 @mcp.tool
+async def add_activity(board_id: str, operation: str, participants: list[dict], technique: str = "",
+                       valid_from: str | None = None, valid_to: str | None = None, source_id: str | None = None,
+                       observation: str = "", locator: str = "", session_token: str | None = None) -> dict:
+    """Record one observed event with several participants, e.g. attacker used IP a.a.a.a and service principal B and listed Key Vault C.
+
+    participants: [{"entity_id": "...", "role": "actor|identity|source|tool|via|target|other"}, ...] (at least two different entities).
+    Optional source_id/observation/locator create the first unconfirmed evidence. Same as rest_create_activity."""
+    from app.structures import ActivityInput
+    create = core_routes()["create_activity"]
+    return await run_mcp_session(session_token, lambda: create(board_id, ActivityInput(operation=operation, participants=participants,
+        technique=technique, valid_from=valid_from, valid_to=valid_to, source_id=source_id, observation=observation, locator=locator)))
+
+
+@mcp.tool
+async def group_entities(board_id: str, name: str, members: list[str] | None = None, kinds: list[str] | None = None,
+                         match: str = "", excluded: list[str] | None = None, session_token: str | None = None) -> dict:
+    """Bundle many similar entities into one collapsed node to keep large graphs readable, e.g. 699 repositories with the same access pattern.
+
+    Pass members (entity IDs) or a rule via kinds/match; excluded keeps single entities visible on their own. Same as rest_create_group."""
+    from app.structures import GroupInput
+    create = core_routes()["create_group"]
+    rule = {"kinds": kinds or [], "match": match} if kinds or match else None
+    return await run_mcp_session(session_token, lambda: create(board_id, GroupInput(name=name, members=members or [], rule=rule, excluded=excluded or [])))
+
+
+def core_routes() -> dict:
+    from fastapi.routing import APIRoute as _Route
+    return {route.endpoint.__name__: route.endpoint for route in app.routes if isinstance(route, _Route)}
+
+
+@mcp.tool
 async def factgraph_guidelines() -> dict:
     """Return the evidence-first modeling rules for this FactGraph server."""
     return {"rules": MCP_INSTRUCTIONS.strip().splitlines()}
@@ -608,11 +667,9 @@ async def add_kql_evidence(board_id: str, query: str, rows: list[dict],
                            title: str = "KQL-Abfrage", subject_field: str = "IPAddress",
                            object_field: str = "FilePath", predicate: str = "accessed",
                            session_token: str | None = None) -> dict:
-    """Add already exported KQL result rows as evidence. This tool does not execute KQL.
+    """Add up to 100 already exported KQL result rows as subject → predicate → object evidence (default IPAddress → accessed → FilePath). FactGraph never executes KQL.
 
-    Each row links its IP to its file; the query is retained as the evidence source.
-    For thousands of rows, use REST /imports/kql instead.
-    """
+    For rows with several participant columns use rest_import_activities; for thousands of rows use REST /imports/kql."""
     if len(rows) > 100:
         raise ValueError("MCP-Import ist auf 100 Zeilen begrenzt; bitte REST verwenden")
     return await run_mcp_session(session_token, lambda: import_rows(board_id, RowsInput(rows=rows, query=query, title=title,

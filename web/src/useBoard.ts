@@ -214,8 +214,8 @@ export function useBoard(boardId: string) {
                 const snapshot = project(boardId, actionsRef.current).data
                 send({ type: 'api-result', requestId, ok: true, index: {
                   entities: snapshot.entities.map(({ id, kind, name }) => ({ id, kind, name })),
-                  facts: snapshot.facts.map(({ id, subject_id, predicate, object_id, valid_from, valid_to }) =>
-                    ({ id, subject_id, predicate, object_id, valid_from, valid_to })),
+                  facts: snapshot.facts.map(({ id, subject_id, predicate, object_id, valid_from, valid_to, participants }) =>
+                    ({ id, subject_id, predicate, object_id, valid_from, valid_to, activity: !!participants?.length })),
                   sources: snapshot.sources.map(({ id }) => ({ id })),
                 } })
               } else if (message.operation === 'apply' && Array.isArray(message.drafts) &&

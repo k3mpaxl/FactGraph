@@ -567,3 +567,103 @@ footer.pager { justify-content: center; margin-top: 16px }
   .activity-meta { display: none }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important } }
+
+/* Groups, activities, layers (0.4.1) ------------------------------------------ */
+.hidden-handle { opacity: 0 !important; pointer-events: none !important; width: 1px !important; height: 1px !important; min-width: 0 !important; min-height: 0 !important; border: 0 !important }
+.node-chips { position: absolute; left: 10px; bottom: -10px; display: flex; gap: 4px }
+.node-chip { display: inline-flex; align-items: center; gap: 3px; height: 18px; padding: 0 6px; border-radius: 999px; font-size: 10.5px; font-weight: 600; background: var(--surface); color: var(--text-2); border: 1px solid var(--border-strong); box-shadow: var(--shadow-sm); white-space: nowrap }
+button.node-chip:hover { color: var(--accent); border-color: var(--accent) }
+.muted-chip { color: var(--text-3) }
+.group-node { position: relative; width: 250px; border-radius: 12px; background: var(--node-bg); border: 1px solid color-mix(in srgb, var(--entity-color) 45%, var(--border)); box-shadow: var(--shadow); transition: opacity .2s, border-color .12s, box-shadow .12s }
+.group-stack { position: absolute; inset: 0; transform: translate(5px, 5px); border-radius: 12px; border: 1px solid var(--border); background: var(--surface-2); z-index: -1 }
+.group-stack::after { content: ''; position: absolute; inset: 0; transform: translate(5px, 5px); border-radius: 12px; border: 1px solid var(--border); background: var(--surface-3); z-index: -1 }
+.group-body { display: flex; align-items: center; gap: 10px; padding: 10px 10px 10px 10px }
+.group-node .node-icon { background: color-mix(in srgb, var(--entity-color) 18%, transparent); color: var(--entity-color) }
+.group-node .node-copy { flex: 1 }
+.group-node.selected { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft), var(--shadow) }
+.group-node.match { border-color: var(--warn); box-shadow: 0 0 0 3px var(--warn-soft) }
+.group-node.dimmed, .activity-node.dimmed { opacity: .28 }
+.state-bar { display: flex; height: 3px; margin: 0 10px 8px; border-radius: 3px; overflow: hidden; gap: 1px }
+.state-bar i { display: block; background: var(--neutral) }
+.state-bar i.supported { background: var(--ok) } .state-bar i.disputed { background: var(--warn) } .state-bar i.refuted { background: var(--bad) } .state-bar i.unknown { opacity: .5 }
+.activity-node { display: flex; flex-direction: column; align-items: center; gap: 4px; width: 28px; transition: opacity .2s }
+.activity-diamond { width: 28px; height: 28px; display: grid; place-items: center; transform: rotate(45deg); border-radius: 7px; background: var(--node-bg); border: 1.5px solid var(--neutral); color: var(--text-2); box-shadow: var(--shadow-sm) }
+.activity-diamond svg { transform: rotate(-45deg) }
+.activity-node.supported .activity-diamond { border-color: var(--ok); color: var(--ok) }
+.activity-node.disputed .activity-diamond { border-color: var(--warn); color: var(--warn) }
+.activity-node.refuted .activity-diamond { border-color: var(--bad); color: var(--bad) }
+.activity-node.unknown .activity-diamond { border-style: dashed }
+.activity-node.selected .activity-diamond { border-color: var(--accent); color: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft) }
+.activity-label { position: absolute; top: 34px; left: 50%; transform: translateX(-50%); display: flex; flex-direction: column; align-items: center; white-space: nowrap; pointer-events: none }
+.activity-label strong { font-size: 11px; font-weight: 650; color: var(--text); background: var(--canvas); padding: 0 4px; border-radius: 4px }
+.activity-label small { font-size: 10px; color: var(--text-3); font-variant-numeric: tabular-nums; background: var(--canvas); padding: 0 4px }
+.zoom-far .activity-label { display: none }
+.frame-node { border-radius: 16px; border: 1.5px dashed color-mix(in srgb, var(--accent) 40%, var(--border-strong)); background: color-mix(in srgb, var(--accent) 4%, transparent); pointer-events: none }
+.frame-node.lane { border: 0; border-radius: 20px; background: color-mix(in srgb, var(--text) 3.5%, transparent) }
+.frame-head { position: absolute; top: 6px; left: 10px; display: flex; align-items: center; gap: 6px; pointer-events: all; font-size: 11.5px; font-weight: 650; color: var(--accent); letter-spacing: .01em }
+.frame-node.lane .frame-head { color: var(--text-3); text-transform: uppercase; letter-spacing: .08em; font-size: 11px; top: 10px; left: 14px }
+.frame-head button { display: grid; place-items: center; width: 18px; height: 18px; border-radius: 5px; color: var(--accent); background: var(--accent-soft) }
+.react-flow__node-frame { pointer-events: none !important }
+.fg-edge.spoke { stroke-width: 1.2 }
+.edge-label.spoke { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; padding: 0 6px; line-height: 15px; background: var(--canvas); border-color: transparent; box-shadow: none; color: var(--text-3) }
+.edge-label b { margin-left: 5px; font-weight: 700; color: var(--accent) }
+.tool-badge { min-width: 16px; height: 16px; padding: 0 4px; border-radius: 999px; background: var(--accent); color: var(--accent-text); font-size: 10px; font-weight: 700; display: inline-grid; place-items: center }
+.layers-popover, .suggest-popover { position: absolute; top: 58px; left: 12px; z-index: 12; width: 320px; max-width: calc(100% - 24px); max-height: calc(100% - 80px); overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 8px; animation: pop .14s var(--ease) }
+.suggest-popover { width: 380px }
+.layer-list { display: flex; flex-direction: column; gap: 1px }
+.layer-row { flex-direction: row; align-items: center; gap: 8px; padding: 5px 6px; border-radius: 6px; font-weight: 500; color: var(--text); cursor: pointer }
+.layer-row:hover { background: var(--surface-2) }
+.layer-name { flex: 1 }
+.layer-row .only { visibility: hidden; font-size: 11px }
+.layer-row:hover .only { visibility: visible }
+.popover-sub { font-size: 10.5px; font-weight: 600; letter-spacing: .07em; text-transform: uppercase; color: var(--text-3) }
+.secondary-button.full { width: 100% }
+.perspective-row { display: flex; align-items: center; gap: 4px; border-radius: 6px }
+.perspective-row > button:first-child { flex: 1; display: flex; justify-content: space-between; gap: 8px; padding: 6px 8px; border-radius: 6px; text-align: left; font-weight: 550 }
+.perspective-row > button:first-child:hover { background: var(--surface-2) }
+.perspective-row small { color: var(--text-3); font-weight: 400 }
+.perspective-row.active > button:first-child { background: var(--accent-soft); color: var(--accent) }
+.inline-form { display: flex; gap: 4px; align-items: center }
+.inline-form input { height: 30px }
+.suggest-list { display: flex; flex-direction: column; gap: 6px }
+.suggest-item { display: flex; align-items: flex-start; gap: 10px; padding: 10px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface) }
+.suggest-item > div { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px }
+.suggest-item strong { font-size: 13px }
+.suggest-item small { color: var(--text-3); font-size: 11.5px }
+.outlier-link { align-self: flex-start; text-align: left; font-size: 11.5px; font-weight: 600; color: var(--warn); padding: 2px 0 }
+.outlier-link:hover { text-decoration: underline }
+.role-badge { flex: none; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; padding: 2px 6px; border-radius: 4px; background: var(--neutral-soft); color: var(--text-2); min-width: 58px; text-align: center }
+.role-badge.actor { background: var(--bad-soft); color: var(--bad) }
+.role-badge.identity { background: var(--accent-soft); color: var(--accent) }
+.role-badge.source { background: var(--warn-soft); color: var(--warn) }
+.role-badge.target { background: var(--ok-soft); color: var(--ok) }
+.participant-list { display: flex; flex-direction: column; gap: 2px }
+.participant-row { display: flex; align-items: center; gap: 8px; padding: 3px 0 }
+.relation-target.left { text-align: left }
+.participant-add, .participant-edit-row, .role-map-row { display: grid; grid-template-columns: 110px 1fr auto; gap: 6px; align-items: center }
+.role-map-row { grid-template-columns: 1fr 100px 1fr auto }
+.participant-add select, .participant-edit-row select, .role-map-row input, .role-map-row select { height: 30px }
+.field-label { font-size: 12px; font-weight: 550; color: var(--text-2) }
+.segmented.full { display: flex } .segmented.full button { flex: 1; justify-content: center }
+.member-list { display: flex; flex-direction: column; max-height: 360px; overflow-y: auto; margin: 0 -6px }
+.member-row { display: flex; align-items: center; gap: 8px; padding: 2px 6px; border-radius: 6px }
+.member-row:hover { background: var(--surface-2) }
+.member-name { flex: 1; min-width: 0; text-align: left; font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 3px 0 }
+.member-name:hover { color: var(--accent) }
+.member-kind { font-size: 11px; color: var(--text-3); font-variant-numeric: tabular-nums }
+.membership { display: flex; align-items: center; gap: 8px; padding: 8px 10px; margin-bottom: 12px; border-radius: var(--radius); background: var(--accent-soft); font-size: 12.5px; color: var(--text-2) }
+.membership > span { flex: 1 }
+.membership svg { color: var(--accent); flex: none }
+button.link { color: var(--accent); font-weight: 600 }
+button.link:hover { text-decoration: underline }
+.group-avatar { background: var(--accent-soft); color: var(--accent) }
+.activity-avatar { background: var(--neutral-soft); color: var(--text-2) }
+.activity-avatar.supported { background: var(--ok-soft); color: var(--ok) } .activity-avatar.refuted { background: var(--bad-soft); color: var(--bad) } .activity-avatar.disputed { background: var(--warn-soft); color: var(--warn) }
+.inline-select { height: 26px !important; padding: 0 6px !important; font-size: 12px !important }
+.inspector-note.plain { border: 0; padding: 0 0 12px }
+.explorer-section-label { padding: 8px 8px 4px; font-size: 10.5px; font-weight: 600; letter-spacing: .07em; text-transform: uppercase; color: var(--text-3) }
+.explorer-item.group-item { padding-left: 10px; color: var(--text) }
+.explorer-item.group-item svg { color: var(--accent); flex: none }
+.title-icon { vertical-align: -2px; color: var(--accent) }
+.timeline-body strong svg { vertical-align: -1px; color: var(--accent) }
+.field-stack { display: flex; flex-direction: column; gap: 5px }

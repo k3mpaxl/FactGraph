@@ -163,3 +163,81 @@ def rows_to_actions(board_id: str, rows: list[dict], *, title: str,
                     "relations": len(seen_facts), "evidence": assertions,
                     "source_id": source_id, "subject_field": subject_field,
                     "object_field": object_field}
+
+
+def activity_rows_to_actions(board_id: str, rows: list[dict], *, title: str, roles: list[dict],
+                             query: str = "", operation: str = "performed", operation_field: str | None = None,
+                             existing_entities: dict[tuple[str, str], str] | None = None,
+                             existing_facts: set[str] | None = None,
+                             existing_sources: set[str] | None = None) -> tuple[list[dict], dict]:
+    """Each row becomes evidence for one activity whose participants come from several columns.
+
+    Rows with the same operation and the same participants share one activity; the row keeps its
+    own timestamp as the evidence period, so the timeline still shows every single occurrence.
+    """
+    if not rows:
+        raise ValueError("Die Datei enthält keine Ergebniszeilen")
+    if len(rows) > 50_000:
+        raise ValueError("Maximal 50.000 Zeilen pro Import")
+    if len(roles) < 2:
+        raise ValueError("Mindestens zwei Spalten mit Rollen angeben")
+    keys = set().union(*(row.keys() for row in rows))
+    for mapping in roles:
+        if mapping["field"] not in keys:
+            raise ValueError(f"Spalte {mapping['field']!r} fehlt. Vorhanden: {', '.join(sorted(keys))}")
+    if operation_field and operation_field not in keys:
+        raise ValueError(f"Spalte {operation_field!r} fehlt. Vorhanden: {', '.join(sorted(keys))}")
+    canonical_rows = json.dumps(rows, sort_keys=True, ensure_ascii=False, default=str)
+    digest = hashlib.sha256((title + "\n" + query + "\n" + json.dumps(roles, sort_keys=True) + "\n" + canonical_rows).encode()).hexdigest()
+    source_id = _stable(board_id, "import", digest)
+    now = datetime.now(timezone.utc).isoformat()
+    drafts: list[dict] = []
+    if source_id not in (existing_sources or set()):
+        drafts.append(action("source.add", {"id": source_id, "title": title, "uri": f"import://{digest[:16]}",
+            "excerpt": canonical_rows, "query": query, "source_kind": "primary", "created_at": now},
+            action_id=_stable(board_id, "source-action", source_id), author="Import"))
+    seen_entities: set[str] = set()
+    seen_activities: set[str] = set()
+    evidence = skipped = 0
+    for row_number, row in enumerate(rows, 1):
+        participants = []
+        for mapping in roles:
+            value = str(row.get(mapping["field"]) or "").strip()
+            if not value:
+                continue
+            kind = (mapping.get("kind") or "Other").strip() or "Other"
+            entity_id = (existing_entities or {}).get((kind.casefold(), value.casefold())) or _stable(board_id, "entity", kind, value.casefold())
+            if entity_id not in seen_entities:
+                seen_entities.add(entity_id)
+                if entity_id not in (existing_entities or {}).values():
+                    drafts.append(action("entity.add", {"id": entity_id, "name": value, "kind": kind, "description": ""},
+                        action_id=_stable(board_id, "entity-action", entity_id), author="Import"))
+            role = mapping["role"].strip().casefold()
+            if not any(p["entity_id"] == entity_id and p["role"] == role for p in participants):
+                participants.append({"entity_id": entity_id, "role": role})
+        row_operation = str(row.get(operation_field) or operation).strip() if operation_field else operation.strip()
+        if len({p["entity_id"] for p in participants}) < 2 or not row_operation:
+            skipped += 1
+            continue
+        key = "|".join(sorted(f"{p['role']}:{p['entity_id']}" for p in participants))
+        activity_id = _stable(board_id, "activity", row_operation.casefold(), key)
+        if activity_id not in seen_activities:
+            seen_activities.add(activity_id)
+            if activity_id not in (existing_facts or set()):
+                drafts.append(action("fact.add", {"id": activity_id, "predicate": row_operation, "participants": participants,
+                    "valid_from": None, "valid_to": None, "created_at": now},
+                    action_id=_stable(board_id, "activity-action", activity_id), author="Import"))
+        row_text = json.dumps(row, sort_keys=True, ensure_ascii=False, default=str)
+        assertion_id = _stable(board_id, "assertion", source_id, activity_id, row_text)
+        timestamp = next((str(row[k]) for k in ("valid_from", "StartTime", *TIME_FIELDS) if row.get(k)), None)
+        end = next((str(row[k]) for k in ("valid_to", "EndTime") if row.get(k)), None)
+        names = ", ".join(f"{m['role']} {row.get(m['field'])}" for m in roles if row.get(m["field"]))
+        drafts.append(action("assertion.add", {"id": assertion_id, "fact_id": activity_id, "stance": "supports", "confidence": 1,
+            "source_id": source_id, "note": row_text, "observation": f"{row_operation}: {names}",
+            "locator": str(row.get("CorrelationId") or row.get("EventId") or row.get("event_id") or f"result row {row_number}"),
+            "created_at": now, "valid_from": timestamp, "valid_to": end},
+            action_id=_stable(board_id, "assertion-action", assertion_id), author="Import"))
+        evidence += 1
+    return drafts, {"rows": len(rows), "skipped": skipped, "entities": len(seen_entities), "relations": len(seen_activities),
+                    "activities": len(seen_activities), "evidence": evidence, "source_id": source_id,
+                    "roles": [f"{m['field']} → {m['role']}" for m in roles]}

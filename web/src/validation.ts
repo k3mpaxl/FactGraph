@@ -1,4 +1,5 @@
-import type { ActionDraft } from './board'
+import { parseParticipants, type ActionDraft } from './board'
+import { LAYER_IDS } from './layers'
 import type { GraphData } from './types'
 
 /** Validate new local/API commands before committing; legacy log replay stays tolerant. */
@@ -9,6 +10,9 @@ export function validateDrafts(graph: GraphData, drafts: ActionDraft[]) {
   const facts = new Map(graph.facts.map(f => [f.id, f]))
   const evidence = new Map(graph.facts.flatMap(f => f.assertions).map(e => [e.id, {...e}]))
   const identifiers = new Set(graph.entities.flatMap(e => e.identifiers.map(i => i.id)))
+  const groups = new Set((graph.groups ?? []).map(g => g.id))
+  const views = new Set((graph.views ?? []).map(v => v.id))
+  const idList = (value: unknown) => Array.isArray(value) && value.every(v => typeof v === 'string')
   for (const { type, payload: p } of drafts) {
     const id = String(p.id ?? '')
     const require = (ok: unknown, message: string) => { if (!ok) throw new Error(message) }
@@ -22,6 +26,34 @@ export function validateDrafts(graph: GraphData, drafts: ActionDraft[]) {
     if ('confidence' in p) require(typeof p.confidence === 'number' && p.confidence >= 0 && p.confidence <= 1, 'Confidence must be between 0 and 1')
     if (type !== 'entity.merge' && 'source_id' in p && p.source_id !== null) require(sources.has(String(p.source_id)), 'Source does not exist on this board')
     if ('stance' in p) require(p.stance === 'supports' || p.stance === 'refutes', 'Invalid evidence stance')
+    if ('layer' in p && p.layer !== null && p.layer !== '') require(LAYER_IDS.includes(String(p.layer)), `Unknown layer; use one of ${LAYER_IDS.join(', ')}`)
+    if ('technique' in p && p.technique !== null) require(typeof p.technique === 'string', 'technique must be text')
+    if ('participants' in p) {
+      const participants = parseParticipants(p.participants)
+      require(participants, 'participants must be a list of {entity_id, role}')
+      require(new Set(participants!.map(x => x.entity_id)).size >= 2, 'An activity needs at least two different participants')
+      require(participants!.every(x => entities.has(x.entity_id)), 'Activity participant does not exist on this board')
+    }
+    if (type === 'fact.position') { require(facts.has(id), 'Relationship does not exist'); require([p.x, p.y].every(n => typeof n === 'number' && Number.isFinite(n) && Math.abs(n) <= 100000), 'Invalid position') }
+    if (type === 'group.add') {
+      require(id && String(p.name ?? '').trim(), 'Group needs ID and name'); require(!groups.has(id), 'Group ID already exists')
+      for (const key of ['members', 'excluded']) if (key in p) require(idList(p[key]), `${key} must be a list of entity IDs`)
+      require(((p.members as string[] | undefined) ?? []).every(m => entities.has(m)), 'Group member does not exist on this board')
+      groups.add(id)
+    }
+    if (type === 'group.update' || type === 'group.delete') require(groups.has(id), 'Group does not exist')
+    if (type === 'group.update') for (const key of ['members', 'excluded', 'add_members', 'remove_members', 'exclude', 'include']) if (key in p) require(idList(p[key]), `${key} must be a list of entity IDs`)
+    if ((type === 'group.add' || type === 'group.update') && 'rule' in p && p.rule !== null) {
+      const rule = p.rule as Record<string, unknown>
+      require(rule && typeof rule === 'object' && (!('kinds' in rule) || idList(rule.kinds)) && (!('match' in rule) || typeof rule.match === 'string'), 'Invalid group rule')
+      if (rule.container_id != null) require(entities.has(String(rule.container_id)), 'Container entity does not exist')
+    }
+    if ((type === 'group.add' || type === 'group.update') && ('x' in p || 'y' in p)) require([p.x, p.y].every(n => typeof n === 'number' && Number.isFinite(n) && Math.abs(n) <= 100000), 'Invalid group position')
+    if (type === 'group.delete') groups.delete(id)
+    if (type === 'view.add') { require(id && String(p.name ?? '').trim(), 'Perspective needs ID and name'); require(!views.has(id), 'Perspective ID already exists'); views.add(id) }
+    if (type === 'view.update' || type === 'view.delete') require(views.has(id), 'Perspective does not exist')
+    if ((type === 'view.add' || type === 'view.update') && 'layers' in p && p.layers !== null) require(idList(p.layers) && (p.layers as string[]).every(l => LAYER_IDS.includes(l)), 'Invalid perspective layers')
+    if (type === 'view.delete') views.delete(id)
     if ('color' in p && p.color !== null) require(/^#[\da-f]{6}$/i.test(String(p.color)), 'Invalid node color')
     if (type === 'type.add') { require(id && String(p.name ?? '').trim(), 'Type needs a name'); require(![...types.values()].some(t => t.name.toLowerCase() === String(p.name).toLowerCase()), 'Type already exists'); types.set(id,p as any) }
     if (type === 'type.update' || type === 'type.delete') require(types.has(id), 'Type does not exist')
@@ -41,10 +73,11 @@ export function validateDrafts(graph: GraphData, drafts: ActionDraft[]) {
     if (type === 'fact.add' || type === 'fact.update') {
       const current = facts.get(id)
       if (type === 'fact.update') require(current, 'Relationship does not exist')
-      require(entities.has(String(p.subject_id ?? current?.subject_id)) && entities.has(String(p.object_id ?? current?.object_id)), 'Relationship endpoints do not exist')
+      const derived = !current && !p.subject_id && Array.isArray(p.participants)
+      if (!derived) require(entities.has(String(p.subject_id ?? current?.subject_id)) && entities.has(String(p.object_id ?? current?.object_id)), 'Relationship endpoints do not exist')
       require(String(p.predicate ?? current?.predicate ?? '').trim(), 'Relationship needs a predicate')
       const updated = {...current,...p} as any
-      if(type === 'fact.update') require(![...facts.values()].some(f=>f.id!==id && f.subject_id===updated.subject_id && f.object_id===updated.object_id && f.predicate.toLowerCase()===updated.predicate.toLowerCase() && f.valid_from===updated.valid_from && f.valid_to===updated.valid_to), 'An identical relationship already exists; attach evidence there instead')
+      if(type === 'fact.update' && !updated.participants?.length) require(![...facts.values()].some(f=>f.id!==id && !f.participants?.length && f.subject_id===updated.subject_id && f.object_id===updated.object_id && f.predicate.toLowerCase()===updated.predicate.toLowerCase() && f.valid_from===updated.valid_from && f.valid_to===updated.valid_to), 'An identical relationship already exists; attach evidence there instead')
       facts.set(id, updated)
     }
     if (type === 'assertion.add') { require(facts.has(String(p.fact_id)) && id, 'Evidence needs a relationship'); require(!evidence.has(id), 'Evidence ID already exists'); evidence.set(id, { ...p, review_status: 'unconfirmed' } as any) }
@@ -52,6 +85,7 @@ export function validateDrafts(graph: GraphData, drafts: ActionDraft[]) {
     if (type === 'entity.delete') {
       entities.delete(id)
       for (const [fid,f] of facts) if(f.subject_id===id||f.object_id===id) {facts.delete(fid);for(const [eid,e] of evidence) if(e.fact_id===fid)evidence.delete(eid)}
+      for (const g of graph.groups ?? []) if (g.rule?.container_id === id) groups.delete(g.id)
     }
     if (type === 'fact.delete') {require(facts.has(id),'Relationship does not exist');facts.delete(id);for(const [eid,e] of evidence) if(e.fact_id===id)evidence.delete(eid)}
     if (type === 'identifier.delete') identifiers.delete(id)

@@ -9,6 +9,8 @@ export type Entity = {
   color?: string;
   position?: { x: number; y: number };
   pinned?: boolean;
+  /** Explicit layer override; otherwise the type's layer or an inferred one applies. */
+  layer?: string;
 }
 export type Source = {
   id: string; title: string; uri: string; excerpt: string; created_at: string;
@@ -28,6 +30,17 @@ export type Fact = {
   id: string; subject_id: string; predicate: string; object_id: string;
   valid_from: string | null; valid_to: string | null; created_at: string;
   assertions: Assertion[]; truth_state: TruthState;
+  /** Present for activities: one observed event with several role-tagged participants. */
+  participants?: Participant[]; technique?: string; position?: { x: number; y: number };
 }
-export type EntityType = { id: string; name: string; color: string; icon: string }
-export type GraphData = { entity_types?: EntityType[]; entities: Entity[]; facts: Fact[]; sources: Source[] }
+export type Participant = { entity_id: string; role: string }
+export type EntityType = { id: string; name: string; color: string; icon: string; layer?: string }
+export type GroupRule = { kinds?: string[]; match?: string; container_id?: string | null }
+/** A view structure: it bundles entities on the canvas and never changes claims or evidence. */
+export type Group = {
+  id: string; name: string; members: string[]; excluded: string[]; rule: GroupRule | null;
+  collapsed: boolean; color?: string; position?: { x: number; y: number }; created_at: string;
+  member_ids: string[];
+}
+export type Perspective = { id: string; name: string; layers: string[] | null; collapse_activities: boolean; show_lanes: boolean }
+export type GraphData = { entity_types?: EntityType[]; entities: Entity[]; facts: Fact[]; sources: Source[]; groups?: Group[]; views?: Perspective[] }

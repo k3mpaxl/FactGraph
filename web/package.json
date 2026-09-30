@@ -1,12 +1,12 @@
 {
   "name": "factgraph-web",
   "private": true,
-  "version": "0.4.0",
+  "version": "0.4.1",
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "tsc -b && vite build",
-    "test": "tsc src/board.ts src/timeline.ts src/validation.ts --outDir node_modules/.cache/factgraph-tests --module commonjs --target es2022 --skipLibCheck && node tests/timeline.cjs ./node_modules/.cache/factgraph-tests && node tests/review.cjs ./node_modules/.cache/factgraph-tests",
+    "test": "tsc src/board.ts src/timeline.ts src/validation.ts src/viewModel.ts --outDir node_modules/.cache/factgraph-tests --module commonjs --target es2022 --skipLibCheck && node tests/timeline.cjs ./node_modules/.cache/factgraph-tests && node tests/review.cjs ./node_modules/.cache/factgraph-tests && node tests/structures.cjs ./node_modules/.cache/factgraph-tests",
     "test:e2e": "npm run build && playwright test"
   },
   "dependencies": {

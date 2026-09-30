@@ -7,7 +7,8 @@ from uuid import uuid4
 from fastapi import HTTPException
 from fastapi.routing import APIRoute
 from pydantic import Field, ValidationError
-from app.contracts import StrictModel
+from app.contracts import LAYER_HELP, Layer, StrictModel
+from app.descriptions import describe_routes, tool_description
 from app.ingest import action
 
 
@@ -52,13 +53,15 @@ class TypeInput(StrictModel):
     id: str | None = None
     name: str = Field(min_length=1)
     color: str = Field(default='#8da9ce', pattern=r'^#[0-9a-fA-F]{6}$')
-    icon: str = 'Box'
+    icon: str = Field(default='Box', description='One of Box, User, Monitor, KeyRound, Cloud, FileText, Network, Layers.')
+    layer: Layer | None = Field(default=None, description=LAYER_HELP)
 
 
 class TypePatch(StrictModel):
     name: str | None = Field(default=None, min_length=1)
     color: str | None = Field(default=None, pattern=r'^#[0-9a-fA-F]{6}$')
     icon: str | None = None
+    layer: Layer | None = Field(default=None, description=LAYER_HELP + ' Explicit null returns to the inferred layer.')
 
 
 def register_extensions(app, mcp, core):
@@ -221,6 +224,12 @@ def register_extensions(app, mcp, core):
         return {'board_id': board_id, 'id': type_id, 'accepted_actions': await apply(board_id, [action('type.delete', {'id': type_id})])}
 
     collection_routes('types', 'entity_types')
+    collection_routes('groups', 'groups')
+    collection_routes('perspectives', 'views')
+
+    from app.structures import register_structures
+    register_structures(app, core)
+    describe_routes(app)
 
     # Generate thin typed MCP adapters from the same endpoint functions. The canonical
     # names are rest_<operation>; legacy tools remain aliases for existing clients.
@@ -257,5 +266,5 @@ def register_mcp_adapter(mcp, route, run_session):
     invoke.__annotations__['return'] = dict
     invoke.__signature__ = signature.replace(parameters=parameters, return_annotation=dict)
     invoke.__name__ = 'rest_' + endpoint.__name__
-    invoke.__doc__ = f"REST parity: {next(iter(route.methods))} {route.path}. Same request body and validation. Explicit null clears nullable PATCH fields. Board must be open."
+    invoke.__doc__ = tool_description(route)
     mcp.tool(invoke, name=invoke.__name__)

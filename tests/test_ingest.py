@@ -18,7 +18,7 @@ class IngestTest(unittest.TestCase):
         self.assertEqual(summary["relations"], 1)
         self.assertEqual(summary["evidence"], 2)
         self.assertEqual(sum(item["type"] == "assertion.add" for item in first), 2)
-        self.assertIn("AccessLogs", first[0]["payload"]["excerpt"])
+        self.assertIn("AccessLogs", first[0]["payload"]["query"])
         evidence = [item["payload"] for item in first if item["type"] == "assertion.add"]
         self.assertEqual([item["valid_from"] for item in evidence], [row["TimeGenerated"] for row in rows])
         self.assertNotEqual(evidence[0]["created_at"], evidence[0]["valid_from"])

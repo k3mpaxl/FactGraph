@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { type ActionDraft, type BoardAction, isAction, isDraft, project, sortActions } from './board'
+import { type ActionDraft, type BoardAction, isAction, isDraft, project, sortActions, undoneActions } from './board'
 import { listBoards, loadActions, saveActions, touchBoard, type BoardMeta } from './store'
+import { initialPosition } from './layout'
 import { uuid } from './uuid'
+import { validateDrafts } from './validation'
 
 export type Peer = { id: string; name: string }
 
@@ -24,7 +26,10 @@ function initialSessionToken(boardId: string) {
 }
 
 export function useBoard(boardId: string) {
-  const actor = useRef(uuid()).current
+  const actor = useRef((() => {
+    const key = `factgraph:actor:${boardId}`
+    try { const stored = sessionStorage.getItem(key); if(stored) return stored; const id=uuid(); sessionStorage.setItem(key,id); return id } catch { return uuid() }
+  })()).current
   const sessionToken = useRef(initialSessionToken(boardId)).current
   const [name, setNameState] = useState(() => initialName(actor))
   const nameRef = useRef(name)
@@ -39,6 +44,7 @@ export function useBoard(boardId: string) {
   const boardNameRef = useRef(`Board ${boardId.slice(0, 8)}`)
   const clockRef = useRef(0)
   const socketRef = useRef<WebSocket | null>(null)
+  const emissionQueue = useRef<Promise<unknown>>(Promise.resolve())
   const mergeQueue = useRef<Promise<unknown>>(Promise.resolve())
   const flushTimer = useRef<number | undefined>(undefined)
   const projection = useMemo(() => project(boardId, actions), [boardId, actions])
@@ -87,27 +93,55 @@ export function useBoard(boardId: string) {
     return work
   }, [boardId])
 
-  const emitMany = useCallback(async (drafts: ActionDraft[], deferRender = false) => {
-    const created = drafts.map(draft => ({
+  const emitMany = useCallback((drafts: ActionDraft[], deferRender = false): Promise<number> => {
+    const work = emissionQueue.current.then(async () => {
+    await mergeQueue.current
+    const freshDrafts = drafts.filter(draft => !draft.id || !actionIdsRef.current.has(draft.id))
+    const currentGraph = project(boardId, actionsRef.current).data
+    const occupied = currentGraph.entities.map(e=>e.position??{x:0,y:0})
+    let placementIndex=0
+    for(const draft of freshDrafts) if(draft.type==='entity.add' && draft.payload.x==null && draft.payload.y==null) {
+      let point: {x:number;y:number}
+      do {point=initialPosition(placementIndex++);point={x:point.x*1.5,y:point.y}} while(occupied.some(p=>Math.abs(p.x-point.x)<270&&Math.abs(p.y-point.y)<110))
+      draft.payload={...draft.payload,...point};occupied.push(point)
+    }
+    validateDrafts(currentGraph, freshDrafts)
+    const batchId = uuid()
+    const created = freshDrafts.map(draft => ({
       boardId, id: draft.id ?? uuid(), actor, author: draft.author ?? nameRef.current,
       clock: ++clockRef.current, at: draft.at ?? new Date().toISOString(),
-      type: draft.type, payload: draft.payload,
+      type: draft.type, payload: draft.payload, batch_id: draft.batch_id ?? batchId, channel: draft.channel ?? 'UI',
     } satisfies BoardAction))
     const accepted = await merge(created, deferRender)
     sendActions(created, undefined, deferRender)
     return accepted
+    })
+    emissionQueue.current = work.catch(() => undefined)
+    return work
   }, [actor, boardId, merge, sendActions])
 
   const emit = useCallback((type: ActionDraft['type'], payload: Record<string, unknown>) =>
     emitMany([{ type, payload }]), [emitMany])
 
   const undo = useCallback(async () => {
-    const alreadyUndone = new Set(actionsRef.current.filter(item => item.type === 'action.undo')
-      .map(item => item.payload.action_id).filter((id): id is string => typeof id === 'string'))
+    const alreadyUndone = undoneActions(actionsRef.current)
     const target = [...actionsRef.current].reverse().find(item =>
-      item.actor === actor && item.type !== 'action.undo' && !alreadyUndone.has(item.id))
+      item.actor === actor && !item.type.startsWith('action.') && !alreadyUndone.has(item.id))
     if (!target) return false
-    await emit('action.undo', { action_id: target.id })
+    const targets = actionsRef.current.filter(item => item.id === target.id || (target.batch_id && item.batch_id === target.batch_id))
+    const ids = new Set(targets.flatMap(item => [item.payload.id, item.payload.source_id, item.payload.target_id]).filter(Boolean))
+    if (actionsRef.current.some(item => item.actor !== actor && item.clock > target.clock && ids.has(item.payload.id) && !alreadyUndone.has(item.id)))
+      throw new Error('Another analyst changed these records. Review their changes before undoing.')
+    await emit('action.undo', { action_ids: targets.map(item => item.id) })
+    return true
+  }, [actor, emit])
+
+  const redo = useCallback(async () => {
+    const undone = undoneActions(actionsRef.current)
+    const target = [...actionsRef.current].reverse().find(item => item.actor === actor && item.type === 'action.undo' &&
+      (item.payload.action_ids as string[] ?? [item.payload.action_id]).some(id => undone.has(String(id))))
+    if (!target) return false
+    await emit('action.redo', target.payload)
     return true
   }, [actor, emit])
 
@@ -165,11 +199,16 @@ export function useBoard(boardId: string) {
             try {
               if (message.boardId !== undefined && message.boardId !== boardId) throw new Error('Falsches Zielboard')
               await mergeQueue.current
-              if (message.operation === 'snapshot') {
+              if (message.operation === 'history') {
+                send({ type: 'api-result', requestId, ok: true, actions: actionsRef.current })
+              } else if (message.operation === 'undo' || message.operation === 'redo') {
+                const changed = await (message.operation === 'undo' ? undo() : redo())
+                send({ type: 'api-result', requestId, ok: true, changed })
+              } else if (message.operation === 'snapshot') {
                 const snapshot = project(boardId, actionsRef.current)
                 send({ type: 'api-result', requestId, ok: true, graph: {
                   board_id: boardId, name: snapshot.name, ...snapshot.data,
-                  action_count: actionsRef.current.length,
+                  action_count: actionsRef.current.length, revision: actionsRef.current.at(-1)?.id ?? null,
                 } })
               } else if (message.operation === 'index') {
                 const snapshot = project(boardId, actionsRef.current).data
@@ -222,8 +261,8 @@ export function useBoard(boardId: string) {
       websocket?.close()
       socketRef.current = null
     }
-  }, [actor, boardId, emitMany, merge, send, sendActions, sessionToken])
+  }, [actor, boardId, emitMany, merge, send, sendActions, sessionToken, undo, redo])
 
   return { actor, name, setName, actions, boards, peers, ready, connected, storageError,
-    boardName: projection.name, data: projection.data, emit, emitMany, undo, importActions, sessionToken }
+    boardName: projection.name, data: projection.data, emit, emitMany, undo, redo, importActions, sessionToken }
 }

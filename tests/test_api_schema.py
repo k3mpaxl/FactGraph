@@ -16,8 +16,12 @@ class RestPatchSchemaTest(unittest.TestCase):
             if "PATCH" in getattr(route, "methods", set())
         }
         self.assertEqual(patch_routes, {
+            "/api/boards/{board_id}",
+            "/api/boards/{board_id}/entities/{entity_id}/position",
             "/api/boards/{board_id}/entities/{entity_id}",
             "/api/boards/{board_id}/sources/{source_id}",
+            "/api/boards/{board_id}/entities/{entity_id}/identifiers/{identifier_id}",
+            "/api/boards/{board_id}/types/{type_id}",
             "/api/boards/{board_id}/relations/{relation_id}",
             "/api/boards/{board_id}/relations/{relation_id}/evidence/{evidence_id}",
         })
@@ -30,6 +34,8 @@ class RestPatchSchemaTest(unittest.TestCase):
         self.assertEqual(delete_routes, {
             "/api/boards/{board_id}/entities/{entity_id}",
             "/api/boards/{board_id}/sources/{source_id}",
+            "/api/boards/{board_id}/entities/{entity_id}/identifiers/{identifier_id}",
+            "/api/boards/{board_id}/types/{type_id}",
             "/api/boards/{board_id}/relations/{relation_id}",
             "/api/boards/{board_id}/relations/{relation_id}/evidence/{evidence_id}",
         })

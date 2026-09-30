@@ -6,17 +6,19 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "tsc -b && vite build",
-    "test": "tsc src/board.ts src/timeline.ts --outDir node_modules/.cache/factgraph-tests --module commonjs --target es2022 --skipLibCheck && node tests/timeline.cjs ./node_modules/.cache/factgraph-tests"
+    "test": "tsc src/board.ts src/timeline.ts src/validation.ts --outDir node_modules/.cache/factgraph-tests --module commonjs --target es2022 --skipLibCheck && node tests/timeline.cjs ./node_modules/.cache/factgraph-tests && node tests/review.cjs ./node_modules/.cache/factgraph-tests",
+    "test:e2e": "npm run build && playwright test"
   },
   "dependencies": {
-    "cytoscape": "^3.30.4",
+    "@xyflow/react": "^12.12.0",
+    "elkjs": "^0.12.0",
     "idb": "^8.0.3",
     "lucide-react": "^0.468.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },
   "devDependencies": {
-    "@types/cytoscape": "^3.21.8",
+    "@playwright/test": "^1.63.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^4.7.0",

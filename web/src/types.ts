@@ -8,14 +8,20 @@ export type Entity = {
   created_at: string; identifiers: Identifier[];
   color?: string;
   position?: { x: number; y: number };
+  pinned?: boolean;
 }
 export type Source = {
   id: string; title: string; uri: string; excerpt: string; created_at: string;
+  source_kind?: 'primary' | 'secondary' | 'unknown'; query?: string; revision?: string;
 }
 export type Assertion = {
   id: string; fact_id: string; stance: 'supports' | 'refutes';
   confidence: number; source_id: string | null; note: string;
   valid_from: string | null; valid_to: string | null; created_at: string; retracted_at: string | null;
+  review_status?: 'confirmed' | 'unconfirmed'; revision?: string;
+  locator?: string; observation?: string; interpretation?: string;
+  reviewed_by?: string | null; reviewed_at?: string | null; review_note?: string;
+  reviewed_revision?: string | null; reviewed_source_revision?: string | null;
 }
 export type TruthState = 'supported' | 'disputed' | 'refuted' | 'unknown'
 export type Fact = {
@@ -23,4 +29,5 @@ export type Fact = {
   valid_from: string | null; valid_to: string | null; created_at: string;
   assertions: Assertion[]; truth_state: TruthState;
 }
-export type GraphData = { entities: Entity[]; facts: Fact[]; sources: Source[] }
+export type EntityType = { id: string; name: string; color: string; icon: string }
+export type GraphData = { entity_types?: EntityType[]; entities: Entity[]; facts: Fact[]; sources: Source[] }

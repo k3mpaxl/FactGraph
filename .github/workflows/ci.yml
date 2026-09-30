@@ -37,6 +37,21 @@ jobs:
         run: npm ci && npm test && npm run build
         working-directory: web
 
+      - name: Install browser for workflow tests
+        run: npx playwright install --with-deps chromium
+        working-directory: web
+
+      - name: Test analyst and agent workflows
+        run: npx playwright test
+        working-directory: web
+
+      - name: Upload browser diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-test-results
+          path: web/test-results
+
   docker-build:
     runs-on: ubuntu-latest
     needs: test-and-build

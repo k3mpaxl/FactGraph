@@ -115,13 +115,13 @@ def rows_to_actions(board_id: str, rows: list[dict], *, title: str,
     drafts = []
     if source_id not in (existing_sources or set()):
         drafts.append(action("source.add", {"id": source_id, "title": title,
-            "uri": f"import://{digest[:16]}", "excerpt": query or f"Importierte Ergebniszeilen: {len(rows)}",
+            "uri": f"import://{digest[:16]}", "excerpt": canonical_rows, "query": query, "source_kind": "primary",
             "created_at": now}, action_id=_stable(board_id, "source-action", source_id), author="Import"))
     seen_entities: set[str] = set()
     seen_facts: set[str] = set()
     assertions = 0
     skipped = 0
-    for row in rows:
+    for row_number, row in enumerate(rows, 1):
         subject = str(row.get(subject_field) or "").strip()
         object_name = str(row.get(object_field) or "").strip()
         if not subject or not object_name:
@@ -156,7 +156,7 @@ def rows_to_actions(board_id: str, rows: list[dict], *, title: str,
         end = next((str(row[key]) for key in ("valid_to", "EndTime") if row.get(key)), None)
         drafts.append(action("assertion.add", {"id": assertion_id, "fact_id": fact_id,
             "stance": "supports", "confidence": 1, "source_id": source_id,
-            "note": row_text, "created_at": now, "valid_from": timestamp, "valid_to": end},
+            "note": row_text, "observation": f"{subject} {row_predicate} {object_name}", "locator": str(row.get("EventId") or row.get("event_id") or f"result row {row_number}"), "created_at": now, "valid_from": timestamp, "valid_to": end},
             action_id=_stable(board_id, "assertion-action", assertion_id), author="Import"))
         assertions += 1
     return drafts, {"rows": len(rows), "skipped": skipped, "entities": len(seen_entities),

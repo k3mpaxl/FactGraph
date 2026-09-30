@@ -18,7 +18,10 @@ from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, Web
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastmcp import FastMCP
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
+from typing import Literal
+
+from app.contracts import (StrictModel, EntityInput, RelationInput, SourceInput, EvidenceInput, ActionInput, ActionBatch, RowsInput, EntityUpdate, EntityMergeInput, SourceUpdate, RelationUpdate, EvidenceUpdate)
 
 from app.ingest import action, entity_actions, parse_rows, relation_actions, rows_to_actions
 
@@ -31,6 +34,8 @@ Core rules:
 - Relationships are directed claims between entities. Keep predicates specific and do not infer a relationship that is not supported by evidence.
 - Every important claim should have evidence. Prefer primary evidence such as access logs, query results, repository files, or first-party telemetry. Treat secondary sources as context, never as proof of an event.
 - Preserve the source URI, query, excerpt, evidence stance, confidence, and evidence period. Use refutes when evidence contradicts a claim; do not silently overwrite uncertainty.
+- New evidence is always unconfirmed. Never self-confirm research. Ask the analyst to check the original record. Confirmation is revision-bound and editing a claim or its source invalidates it. Use primary source classification, a concrete locator and original results, not a query alone.
+- Prefer canonical REST-equivalent tools with a typed body; PATCH body preserves explicit null. Legacy tools accept a patch object.
 - Evidence periods describe when the observed activity was valid, not when the graph record was created.
 - Use board_graph before editing when IDs or existing relationships are unknown. For large imports use REST /api/boards/{board_id}/imports/* or /actions; MCP is intended for focused edits.
 - The browser board must be open because FactGraph stores durable data in browser IndexedDB and the server only relays actions. Use the board's session token for REST and MCP (`X-FactGraph-Token` header; `session_token` is also accepted by tools); it binds the API action to that browser session.
@@ -135,7 +140,8 @@ async def browser_command(board_id: str, operation: str, **values) -> dict:
                                         "boardId": board_id, "operation": operation, **values})
         result = await asyncio.wait_for(future, timeout=30)
         if not result.get("ok"):
-            raise HTTPException(422, str(result.get("error") or "Browser hat den Auftrag abgelehnt"))
+            error = str(result.get("error") or "Browser rejected the command")
+            raise HTTPException(409 if 'changed.' in error or 'revision' in error else 422, error)
         return result
     except asyncio.TimeoutError as error:
         raise HTTPException(504, "Browser hat den Auftrag nicht bestätigt") from error
@@ -148,78 +154,28 @@ async def browser_command(board_id: str, operation: str, **values) -> dict:
 async def apply_drafts(board_id: str, drafts: list[dict]) -> int:
     if len(drafts) > 200_000:
         raise HTTPException(413, "Zu viele Aktionen in einem Auftrag")
+    from uuid import uuid4
+    batch_id = str(uuid4())
     channel = request_channel.get()
-    drafts = [{**draft, "author": channel if draft.get("author") in (None, "API") else draft["author"]}
+    drafts = [{**draft, "batch_id": batch_id, "channel": channel, "author": channel if draft.get("author") in (None, "API") else draft["author"]}
               for draft in drafts]
     accepted = 0
     for offset in range(0, len(drafts), 200):
         chunk_number = offset // 200 + 1
         defer_render = offset + 200 < len(drafts) and chunk_number % 25 != 0
-        response = await browser_command(board_id, "apply", drafts=drafts[offset:offset + 200],
-                                         deferRender=defer_render)
+        try:
+            response = await browser_command(board_id, "apply", drafts=drafts[offset:offset + 200],
+                                             deferRender=defer_render)
+        except HTTPException as error:
+            if offset:
+                raise HTTPException(error.status_code, {
+                    "message": error.detail, "accepted_actions": accepted,
+                    "acknowledged_drafts": offset, "batch_id": batch_id,
+                    "retry": "Retry the same import or action IDs; already stored operations are deduplicated. The last chunk may have been saved before the connection failed.",
+                }) from error
+            raise
         accepted += int(response.get("accepted", 0))
     return accepted
-
-
-class EntityInput(BaseModel):
-    name: str = Field(min_length=1)
-    kind: str = "Sonstiges"
-    description: str = ""
-    color: str | None = Field(default=None, pattern=r"^#[0-9a-fA-F]{6}$")
-    id: str | None = None
-
-
-class RelationInput(BaseModel):
-    subject_id: str
-    predicate: str = Field(min_length=1)
-    object_id: str
-    source_id: str | None = None
-    note: str = ""
-    stance: str = "supports"
-    confidence: float = 1
-    valid_from: str | None = None
-    valid_to: str | None = None
-    id: str | None = None
-
-
-class SourceInput(BaseModel):
-    title: str = Field(min_length=1)
-    uri: str = ""
-    excerpt: str = ""
-    id: str | None = None
-
-
-class EvidenceInput(BaseModel):
-    valid_from: str | None = None
-    valid_to: str | None = None
-    stance: str = "supports"
-    confidence: float = Field(default=1, ge=0, le=1)
-    source_id: str | None = None
-    note: str = ""
-    id: str | None = None
-
-
-class ActionInput(BaseModel):
-    id: str | None = None
-    type: str
-    payload: dict
-    author: str = "API"
-
-
-class ActionBatch(BaseModel):
-    actions: list[ActionInput]
-
-
-class RowsInput(BaseModel):
-    rows: list[dict]
-    title: str = "Aktivitätslogs"
-    query: str = ""
-    subject_field: str | None = None
-    object_field: str | None = None
-    predicate: str = "accessed"
-    predicate_field: str | None = None
-    subject_kind: str = "IP"
-    object_kind: str = "Datei"
 
 
 async def import_rows(board_id: str, data: RowsInput) -> dict:
@@ -240,6 +196,8 @@ async def import_rows(board_id: str, data: RowsInput) -> dict:
             existing_sources={item["id"] for item in index["sources"]})
     except (ValueError, KeyError) as error:
         raise HTTPException(422, str(error)) from error
+    if data.dry_run:
+        return {**summary, "dry_run": True, "preview": drafts[:20], "action_count": len(drafts)}
     summary["accepted_actions"] = await apply_drafts(board_id, drafts)
     return summary
 
@@ -270,17 +228,15 @@ async def create_entity(board_id: str, body: EntityInput):
         entity_id, drafts = entity_actions(body.name, body.kind, body.description, body.id)
     except ValueError as error:
         raise HTTPException(422, str(error)) from error
+    drafts[0]["payload"]["pinned"] = body.pinned
     if body.color:
         drafts[0]["payload"]["color"] = body.color
+    if body.x is not None or body.y is not None:
+        if body.x is None or body.y is None:
+            raise HTTPException(422, "Both x and y are required")
+        drafts[0]["payload"].update(x=body.x, y=body.y)
     accepted = await apply_drafts(board_id, drafts)
     return {"board_id": str(UUID(board_id)), "id": entity_id, "accepted_actions": accepted}
-
-
-class EntityUpdate(BaseModel):
-    name: str | None = Field(default=None, min_length=1)
-    kind: str | None = Field(default=None, min_length=1)
-    description: str | None = None
-    color: str | None = Field(default=None, pattern=r"^#[0-9a-fA-F]{6}$")
 
 
 @app.patch("/api/boards/{board_id}/entities/{entity_id}")
@@ -295,10 +251,6 @@ async def update_entity(board_id: str, entity_id: str, body: EntityUpdate):
         raise HTTPException(422, "Name und Typ dürfen nicht leer sein")
     accepted = await apply_drafts(board_id, [action("entity.update", {"id": entity_id, **values})])
     return {"board_id": str(UUID(board_id)), "id": entity_id, "accepted_actions": accepted}
-
-
-class EntityMergeInput(BaseModel):
-    target_id: str
 
 
 @app.post("/api/boards/{board_id}/entities/{entity_id}/merge")
@@ -322,12 +274,6 @@ async def delete_entity(board_id: str, entity_id: str):
         raise HTTPException(404, "Entity does not exist on this board")
     accepted = await apply_drafts(board_id, [action("entity.delete", {"id": entity_id})])
     return {"id": entity_id, "accepted_actions": accepted}
-
-
-class SourceUpdate(BaseModel):
-    title: str | None = Field(default=None, min_length=1)
-    uri: str | None = None
-    excerpt: str | None = None
 
 
 @app.patch("/api/boards/{board_id}/sources/{source_id}")
@@ -368,16 +314,14 @@ async def create_relation(board_id: str, body: RelationInput):
         raise HTTPException(422, "Quell- oder Zielentität existiert im Board nicht")
     if body.source_id and body.source_id not in {source["id"] for source in index["sources"]}:
         raise HTTPException(422, "Quelle existiert im Board nicht")
+    existing = next((f for f in index['facts'] if f['subject_id'] == body.subject_id and f['object_id'] == body.object_id and f['predicate'].strip().casefold() == body.predicate.strip().casefold() and f.get('valid_from') == body.valid_from and f.get('valid_to') == body.valid_to), None)
+    if existing:
+        relation_id = existing['id']
+        drafts = [d for d in drafts if d['type'] != 'fact.add']
+        for draft in drafts:
+            draft['payload']['fact_id'] = relation_id
     accepted = await apply_drafts(board_id, drafts)
     return {"id": relation_id, "accepted_actions": accepted}
-
-
-class RelationUpdate(BaseModel):
-    subject_id: str | None = None
-    predicate: str | None = Field(default=None, min_length=1)
-    object_id: str | None = None
-    valid_from: str | None = None
-    valid_to: str | None = None
 
 
 @app.patch("/api/boards/{board_id}/relations/{relation_id}")
@@ -413,7 +357,7 @@ async def create_source(board_id: str, body: SourceInput):
     source_id = body.id or str(uuid4())
     accepted = await apply_drafts(board_id, [action("source.add", {
         "id": source_id, "title": body.title, "uri": body.uri,
-        "excerpt": body.excerpt})])
+        "excerpt": body.excerpt, "source_kind": body.source_kind, "query": body.query})])
     return {"id": source_id, "accepted_actions": accepted}
 
 
@@ -431,17 +375,8 @@ async def create_evidence(board_id: str, relation_id: str, body: EvidenceInput):
     accepted = await apply_drafts(board_id, [action("assertion.add", {
         "id": evidence_id, "fact_id": relation_id, "stance": body.stance,
         "confidence": body.confidence, "source_id": body.source_id,
-        "note": body.note, "valid_from": body.valid_from, "valid_to": body.valid_to})])
+        "note": body.note, "observation": body.observation, "locator": body.locator, "interpretation": body.interpretation, "valid_from": body.valid_from, "valid_to": body.valid_to})])
     return {"id": evidence_id, "accepted_actions": accepted}
-
-
-class EvidenceUpdate(BaseModel):
-    valid_from: str | None = None
-    valid_to: str | None = None
-    stance: str | None = None
-    confidence: float | None = Field(default=None, ge=0, le=1)
-    source_id: str | None = None
-    note: str | None = None
 
 
 @app.patch("/api/boards/{board_id}/relations/{relation_id}/evidence/{evidence_id}")
@@ -497,7 +432,7 @@ async def import_activity(board_id: str, body: RowsInput):
 
 @app.post("/api/boards/{board_id}/imports/file")
 async def import_file(board_id: str, file: UploadFile = File(...),
-                      title: str = Form("Aktivitätslogs"), query: str = Form(""),
+                      title: str = Form("Aktivitätslogs"), query: str = Form(""), dry_run: bool = Form(False),
                       subject_field: str = Form(""), object_field: str = Form(""),
                       predicate: str = Form("accessed"), predicate_field: str = Form(""),
                       subject_kind: str = Form("IP"),
@@ -509,7 +444,7 @@ async def import_file(board_id: str, file: UploadFile = File(...),
         rows = parse_rows(content, file.filename or "")
     except (UnicodeError, ValueError, csv.Error) as error:
         raise HTTPException(422, str(error)) from error
-    return await import_rows(board_id, RowsInput(rows=rows, title=title, query=query,
+    return await import_rows(board_id, RowsInput(rows=rows, title=title, query=query, dry_run=dry_run,
         subject_field=subject_field or None, object_field=object_field or None,
         predicate=predicate, predicate_field=predicate_field or None,
         subject_kind=subject_kind, object_kind=object_kind))
@@ -546,10 +481,12 @@ async def add_entity(board_id: str, name: str, kind: str = "Sonstiges",
 async def mcp_update_entity(board_id: str, entity_id: str,
                             name: str | None = None, kind: str | None = None,
                             description: str | None = None, color: str | None = None,
-                            session_token: str | None = None) -> dict:
+                            session_token: str | None = None, patch: dict | None = None) -> dict:
     """Patch an existing entity. Pass only fields that should change."""
     values = {key: value for key, value in {"name": name, "kind": kind,
              "description": description, "color": color}.items() if value is not None}
+    if patch is not None:
+        values.update(patch)
     return await run_mcp_session(session_token, lambda: update_entity(board_id, entity_id, EntityUpdate(**values)))
 
 
@@ -578,10 +515,12 @@ async def add_source(board_id: str, title: str, uri: str = "", excerpt: str = ""
 @mcp.tool(name="update_source")
 async def mcp_update_source(board_id: str, source_id: str, title: str | None = None,
                             uri: str | None = None, excerpt: str | None = None,
-                            session_token: str | None = None) -> dict:
+                            session_token: str | None = None, patch: dict | None = None) -> dict:
     """Patch an existing evidence source. Pass only fields that should change."""
     values = {key: value for key, value in {"title": title, "uri": uri,
              "excerpt": excerpt}.items() if value is not None}
+    if patch is not None:
+        values.update(patch)
     return await run_mcp_session(session_token, lambda: update_source(board_id, source_id, SourceUpdate(**values)))
 
 
@@ -608,11 +547,13 @@ async def mcp_update_relationship(board_id: str, relation_id: str,
                                   subject_id: str | None = None, predicate: str | None = None,
                                   object_id: str | None = None,
                                   valid_from: str | None = None, valid_to: str | None = None,
-                                  session_token: str | None = None) -> dict:
+                                  session_token: str | None = None, patch: dict | None = None) -> dict:
     """Patch a directed relationship. Pass only fields that should change."""
     values = {key: value for key, value in {"subject_id": subject_id, "predicate": predicate,
              "object_id": object_id, "valid_from": valid_from, "valid_to": valid_to}.items()
              if value is not None}
+    if patch is not None:
+        values.update(patch)
     return await run_mcp_session(session_token, lambda: update_relation(board_id, relation_id, RelationUpdate(**values)))
 
 
@@ -639,11 +580,13 @@ async def mcp_update_evidence(board_id: str, relation_id: str, evidence_id: str,
                               valid_from: str | None = None, valid_to: str | None = None,
                               stance: str | None = None, confidence: float | None = None,
                               source_id: str | None = None, note: str | None = None,
-                              session_token: str | None = None) -> dict:
+                              session_token: str | None = None, patch: dict | None = None) -> dict:
     """Patch evidence attached to a relationship. Pass only fields that should change."""
     values = {key: value for key, value in {"valid_from": valid_from, "valid_to": valid_to,
              "stance": stance, "confidence": confidence, "source_id": source_id,
              "note": note}.items() if value is not None}
+    if patch is not None:
+        values.update(patch)
     return await run_mcp_session(session_token, lambda: update_evidence(board_id, relation_id, evidence_id, EvidenceUpdate(**values)))
 
 
@@ -745,6 +688,9 @@ async def board_socket(websocket: WebSocket, board_id: str):
                     future.set_result({"ok": False, "error": "Browser-Verbindung unterbrochen"})
             await send_to_room(board_id, {"type": "peer-left", "id": actor})
 
+
+from app.extensions import register_extensions
+register_extensions(app, mcp, globals())
 
 app.mount("/mcp", mcp_app)
 

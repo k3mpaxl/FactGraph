@@ -1,3 +1,4 @@
+import { truth } from './board'
 import type { Assertion, Fact } from './types'
 
 function timestamp(value: unknown): string | null {
@@ -34,7 +35,7 @@ export function timelineEntries(facts: Fact[]) {
 export function timelineEvents(facts: Fact[]) {
   const groups = new Map<string, ReturnType<typeof timelineEntries>[number] & { assertions: Assertion[] }>()
   for (const entry of timelineEntries(facts)) {
-    const key = JSON.stringify([entry.fact.id, entry.from ?? '', entry.to ?? ''])
+    const key = JSON.stringify([entry.fact.id, entry.from ?? '', entry.to ?? '', entry.assertion.locator ?? ''])
     const group = groups.get(key)
     if (group) group.assertions.push(entry.assertion)
     else groups.set(key, { ...entry, assertions: [entry.assertion] })
@@ -75,4 +76,12 @@ export function periodLabel(from: string | null, to: string | null) {
   if (!from && !to) return 'Evidence time unknown'
   if (!from) return `Until ${format(to!)} UTC`
   return `${format(from)}${to && to !== from ? ` – ${format(to)}` : ''} UTC`
+}
+
+export function factsInWindow(facts: Fact[], from: string | null, to: string | null, includeUndated = true) {
+  if (!from && !to) return facts
+  return facts.map(fact => {
+    const assertions = fact.assertions.filter(assertion => factIntersects({...fact, assertions:[assertion]},from,to,includeUndated))
+    return {...fact, assertions, truth_state: truth(assertions)}
+  }).filter(fact => fact.assertions.length > 0)
 }

@@ -42,17 +42,20 @@ IP --accessed--> repo/.env --enthält--> Azure-Credential
 Azure-Credential --ermöglicht Zugriff auf--> Blob-Storage
 ```
 
-Im Graphen **+** für einen neuen Knoten wählen. Einen Knoten anklicken und **↗** oder **Von hier Kante erstellen** wählen; dabei kann der Zielknoten sofort angelegt oder ein vorhandener gewählt werden. Der Kantentext ist frei. Der Inspektor zeigt Quellen, Aussagen und Widersprüche.
+The canvas uses React Flow with typed entity cards and visible connection handles:
 
-Knoten lassen sich ziehen. Beim Loslassen rasten sie auf einem 20er-Raster ein. Die Position wird als Board-Aktion im Browser gespeichert und über WebSocket an andere geöffnete Ansichten gesendet. Der Graph behält seine Positionen auch beim Hinzufügen von Knoten und Beziehungen; **Alles anzeigen** passt nur den Ausschnitt an. `Delete` oder `Backspace` löscht die ausgewählte Entität oder Beziehung nach Bestätigung, `Escape` schließt den Inspektor oder einen Dialog. Der Inspektor liegt bei Auswahl als Overlay über dem Graphen.
+- Drag a type from **Add entity** onto the canvas, or double-click empty space. Drag a node's right handle to another node, or onto empty space to create the next entity and relation together.
+- Double-click a title to rename. Right-click for type/color editing, merge, copy ID, pin, or delete. **Arrange** uses ELK; pinned nodes retain their positions. Multi-select with Shift, align, distribute, and move groups.
+- **Undo / Redo** treats an import or group movement as one action. Browser Back changes the active view. The header is 38 px high; board/import/export and integration actions live in compact menus.
+- The evidence window uses observation times, includes an explicit undated toggle, and steps through event boundaries. Confirmed evidence within the selected interval determines the visible relationship status.
 
-Die Oberfläche verwendet weiterhin Cytoscape als 2D-Graph-Renderer. Three.js wäre für eine 3D-Ansicht möglich, würde aber die Synchronisierung, Aktionen und Rasterpositionen nicht automatisch lösen. Ein Wechsel lohnt sich erst, wenn eine echte 3D-Darstellung oder eine eigene WebGL-Szene benötigt wird.
+### Evidence review
 
-Typen steuern die Darstellung: User/Personen erscheinen elliptisch, Devices rechteckig, AKS-Knoten hexagonal, Service Principals elliptisch, IPs und Prozesse als Rauten, Credentials/Secrets als Hexagone und Azure-Ressourcen als Oktagone. Farbe und Rand gehören jeweils zum Typ. Ein neuer Typ kann in der Entitätsmaske über **Eigener Typ…** angelegt werden; unbekannte Typen bekommen automatisch eine stabile Farbe und Form.
+New and legacy evidence starts **Unconfirmed**. Open **Evidence review** to inspect the claim, observation, event locator, original source/results, KQL query, interpretation, and history. The reader supports editing, confirmation/unconfirmation, retract/restore, and copying IDs/context for an agent. Original JSON results and the review queue are paginated.
 
-Bei großen Boards zeigt die Zeichnung einen begrenzten Ausschnitt; Suche und Knotenauswahl arbeiten auf dem vollständigen Datenbestand. Die Anzeige nennt sichtbare und gesamte Knoten/Kanten. Die frühere Pfadansicht bleibt vorerst ausgeblendet.
+Confirmation requires a **primary source**, source reference, stored results/excerpt, a concrete locator, observation and review note. Updating evidence, its claim, or its source invalidates confirmation. Revisions prevent stale evidence/source edits and reviews. Supports/Refutes describes the evidence direction; Confirmed/Unconfirmed describes its review. Only active confirmed evidence contributes to Supported/Refuted/Disputed.
 
-Graph, Zeitachse und synchronisierte Aktionen sind als Tabs organisiert.
+The shared session token does not prove that a reviewer is human. Agents are instructed to submit unconfirmed findings for analyst review; enforced human-only approval would require separate permissions.
 
 ## REST und MCP
 
@@ -221,3 +224,20 @@ Logimporte erkennen `TimeGenerated`, `timestamp`, `Timestamp`, `time`, `event_ti
 Entitäten lassen sich im Inspektor über **Edit** umbenennen sowie in Typ, Farbe und Beschreibung ändern oder über **Merge** zusammenführen. Evidence kann direkt im Beleg bearbeitet werden. Vollständige Board-, Entity-, Relationship-, Identifier- und Evidence-IDs lassen sich für Agent-Chats kopieren. **Undo** beziehungsweise `Ctrl/Cmd+Z` nimmt die letzte eigene Aktion über eine synchronisierte Undo-Aktion zurück.
 
 Die Oberfläche verwaltet Boards lokal über ihre UUID. In der Oberfläche kopiert **Copy** den Endpunkt des aktuellen Boards. Die REST-Aufrufe müssen an denselben Server gehen wie die Browser-Verbindung. Ohne geöffneten Browser liefert ein Schreibaufruf `409`; unbekannte API-Pfade liefern `404`. Es gibt bewusst keinen globalen Board-Listing-Endpunkt und kein MCP-Tool zum Auflisten von Boards.
+
+## Shared REST/MCP contracts and tests
+
+Every JSON REST operation has a canonical `rest_<operation_id>` MCP tool with the same typed parameters, validation and result. For example, `rest_update_evidence` takes `board_id`, `relation_id`, `evidence_id`, and a `body` patch. Explicit `null` clears nullable fields; omitted fields remain unchanged. Existing MCP names remain compatible. Multipart file upload is REST-specific; MCP uses the equivalent JSON row import.
+
+Both interfaces cover board-scoped reads, entity/relation/source/evidence CRUD, identifiers, custom types, positions, merge, evidence review/retract/restore, import preview, history, undo and redo. There is no global board listing. Source/evidence PATCH accepts `expected_revision`; review requires current evidence and source revisions. Activity records include UI/REST/MCP channel, actor and action group.
+
+```bash
+python3 -m unittest discover -s tests -v
+cd web
+npm ci
+npm test
+npx playwright install chromium
+npm run test:e2e
+```
+
+Browser tests use temporary board UUIDs on port 18088 and a real HTTP MCP client. They cover analyst/agent review, null patches, cross-board token isolation, two-browser synchronization, reload persistence, connection dragging, grouped undo/redo, mobile layout, import preview/deduplication, pinned layout, and 10,000 imported evidence rows. CI runs the same workflows.

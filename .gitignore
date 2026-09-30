@@ -7,3 +7,6 @@ web/dist/
 *.pyc
 *.tsbuildinfo
 .DS_Store
+
+web/test-results/
+web/playwright-report/

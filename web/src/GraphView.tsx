@@ -480,6 +480,8 @@ function Canvas(props: Props) {
       onEdgeClick={(_, edge) => pickEdge.current(edge.id)}
       onEdgeDoubleClick={(_, edge) => editEdge.current(edge.id)}
       onPaneClick={() => { onSelect(null); setMenu(null) }} onConnect={beginConnection}
+      // Right-drag pans the canvas; suppress the browser menu that would otherwise open on release.
+      onPaneContextMenu={event => event.preventDefault()} onEdgeContextMenu={event => event.preventDefault()}
       onConnectEnd={(event, state) => {
         if (state.isValid || !state.fromNode || state.fromHandle?.type !== 'source' || state.fromNode.type !== 'entity') return
         const target = event.target as HTMLElement
@@ -495,7 +497,7 @@ function Canvas(props: Props) {
         else if (n.type === 'group') { onSelect({ kind: 'group', id: n.id.slice(6) }); setMenu({ id: n.id.slice(6), kind: 'group', x: e.clientX, y: e.clientY }) }
       }}
       onDoubleClick={e => { if ((e.target as HTMLElement).classList.contains('react-flow__pane')) setDraft({ position: flow.screenToFlowPosition({ x: e.clientX, y: e.clientY }), kind: 'Device', name: '', predicate: '' }) }}
-      deleteKeyCode={null} selectionOnDrag panOnDrag={[1, 2]} panOnScroll zoomOnDoubleClick={false} selectionKeyCode="Shift" multiSelectionKeyCode="Shift"
+      deleteKeyCode={null} selectionOnDrag panOnDrag={[1, 2]} zoomOnScroll zoomOnPinch panActivationKeyCode="Space" zoomOnDoubleClick={false} selectionKeyCode="Shift" multiSelectionKeyCode="Shift"
       minZoom={0.05} maxZoom={2.5} snapToGrid={grid} snapGrid={[20, 20]} connectionRadius={40} colorMode={props.theme} onlyRenderVisibleElements proOptions={{ hideAttribution: true }}>
       <Background variant={BackgroundVariant.Dots} gap={20} size={1.2} />
       <Controls showInteractive={false} fitViewOptions={{ padding: 0.2, maxZoom: 1.1, duration: 300 }} position="bottom-left" />

@@ -392,3 +392,35 @@ test('export: PNG and SVG downloads, clipboard-free API export via REST and MCP'
   const bad=await request.post(`${base}/api/boards/${id}/export`,{headers:{'X-FactGraph-Token':token},data:{format:'gif'}})
   expect(bad.status()).toBe(422)
 })
+
+test('canvas navigation: wheel zooms, right-drag pans without a browser menu, left-drag still selects',async({page,request})=>{
+  const {call}=await setup(page,request)
+  await call('POST','/entities',{name:'A',kind:'Device',x:0,y:0})
+  await call('POST','/entities',{name:'B',kind:'Device',x:300,y:0})
+  await expect(page.locator('.entity-node')).toHaveCount(2)
+  const viewport=()=>page.locator('.react-flow__viewport').evaluate(el=>{const m=new DOMMatrix(getComputedStyle(el).transform);return {x:m.e,y:m.f,zoom:m.a}})
+  const pane=(await page.locator('.react-flow__pane').boundingBox())!
+  const center={x:pane.x+pane.width/2,y:pane.y+pane.height-120}
+  const before=await viewport()
+  await page.mouse.move(center.x,center.y)
+  await page.mouse.wheel(0,-400)
+  await expect.poll(async()=>(await viewport()).zoom).toBeGreaterThan(before.zoom)
+  const zoomed=await viewport()
+  let contextMenu=false
+  await page.exposeFunction('reportContextMenu',()=>{contextMenu=true})
+  await page.evaluate(()=>document.addEventListener('contextmenu',e=>{if(!e.defaultPrevented)(window as any).reportContextMenu()},{capture:false}))
+  await page.mouse.move(center.x,center.y);await page.mouse.down({button:'right'})
+  await page.mouse.move(center.x+180,center.y-90,{steps:8});await page.mouse.up({button:'right'})
+  await page.mouse.click(center.x+180,center.y-90,{button:'right'})
+  const panned=await viewport()
+  expect(panned.x-zoomed.x).toBeGreaterThan(150)
+  expect(panned.zoom).toBeCloseTo(zoomed.zoom,5)
+  expect(contextMenu).toBe(false)
+  await page.getByRole('button',{name:'fit view'}).click()
+  // Fit view animates; wait until the viewport is stable before drawing the selection box.
+  await expect.poll(async()=>{const a=await viewport();await page.waitForTimeout(120);const b=await viewport();return a.x===b.x&&a.zoom===b.zoom}).toBe(true)
+  const box=(await page.locator('.react-flow__pane').boundingBox())!
+  await page.mouse.move(box.x+20,box.y+80);await page.mouse.down()
+  await page.mouse.move(box.x+box.width-20,box.y+box.height-20,{steps:8});await page.mouse.up()
+  await expect(page.locator('.selection-tools')).toContainText('2 selected')
+})

@@ -55,6 +55,9 @@ Für große Graphen:
 | `E` / `T` | Explorer / Zeitfenster umschalten |
 | `Cmd/Ctrl+Z`, `Shift+Cmd/Ctrl+Z` | Undo / Redo |
 | `Entf` | Auswahl löschen |
+| Mausrad / Pinch | Zoomen |
+| Rechte Maustaste ziehen (oder `Leertaste` + ziehen) | Ansicht verschieben |
+| Linke Maustaste ziehen | Bereich auswählen |
 | `G` | Mehrfachauswahl gruppieren |
 | `?` | Alle Tastenkürzel |
 
@@ -246,13 +249,13 @@ Weitere Schritte der lateralen Bewegung können aus anderen Logdateien, manuell,
 Das Repository enthält zwei GitHub-Actions:
 
 - `CI` führt die Python-Tests aus, baut das Frontend und prüft das Docker-Image bei Pushes und Pull Requests.
-- `Publish Docker image` veröffentlicht bei einem Versionstag wie `v0.4.4` oder über **Run workflow** nach Docker Hub.
+- `Publish Docker image` veröffentlicht bei einem Versionstag wie `v0.4.5` oder über **Run workflow** nach Docker Hub.
 
 Dafür im GitHub-Repository die Actions-Secrets `DOCKERHUB_USERNAME` und `DOCKERHUB_TOKEN` anlegen. Der Token sollte ein Docker-Hub-Access-Token mit Schreibrecht für das Image `factgraph` sein. Nach dem Push eines Tags:
 
 ```bash
-git tag v0.4.4
-git push origin v0.4.4
+git tag v0.4.5
+git push origin v0.4.5
 ```
 
 Das Image ist danach als `DOCKERHUB_USERNAME/factgraph:latest` und mit Versions-/Commit-Tags verfügbar. Für eine LAN-Freigabe beim Start des Compose-Stacks:

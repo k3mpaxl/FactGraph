@@ -531,7 +531,7 @@ function ShortcutHelp({ onClose }: { onClose: () => void }) {
     ['Command palette / jump to entity', [mod, 'K']], ['Focus search', ['/']], ['New entity at centre', ['N']], ['Fit view / center selection', ['F']],
     ['Switch view', ['1', '–', '4']], ['Toggle explorer', ['E']], ['Toggle evidence window', ['T']], ['Undo / redo', [mod, 'Z', '·', '⇧', mod, 'Z']],
     ['Delete selection', ['⌫']], ['Close / deselect', ['Esc']], ['Multi-select', ['Shift', 'drag']], ['Rename node', ['double-click']],
-    ['Connect', ['drag right handle']], ['Pan', ['scroll / right-drag']],
+    ['Connect', ['drag right handle']], ['Zoom', ['mouse wheel / pinch']], ['Pan', ['right-drag', '·', 'Space', 'drag']], ['Select area', ['left-drag']],
   ]
   return <div className="modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) onClose() }}>
     <div className="modal narrow" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts">

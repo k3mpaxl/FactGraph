@@ -8,7 +8,8 @@ from fastapi import HTTPException
 from fastapi.routing import APIRoute
 from pydantic import Field, ValidationError
 from app.contracts import LAYER_HELP, Layer, StrictModel
-from app.descriptions import describe_routes, tool_description
+from app.descriptions import describe_routes, purpose, tool_description
+from app.tool_profiles import AGENT_TOOLS, annotations_for, configured_profile, set_tool_profile
 from app.ingest import action
 
 
@@ -231,15 +232,28 @@ def register_extensions(app, mcp, core):
     register_structures(app, core)
     describe_routes(app)
 
-    # Generate thin typed MCP adapters from the same endpoint functions. The canonical
-    # names are rest_<operation>; legacy tools remain aliases for existing clients.
+    # Generate thin typed MCP adapters from the same endpoint functions: rest_<operation> for the full
+    # profile and short task names for the default agent profile. Only one profile is visible.
+    agent_names: set[str] = set()
+    full_names: set[str] = set()
     for route in list(app.routes):
         if not isinstance(route, APIRoute) or not route.path.startswith('/api/') or route.path.endswith('/imports/file'):
             continue
-        register_mcp_adapter(mcp, route, core['run_mcp_session'])
+        method = next(iter(route.methods))
+        name = route.endpoint.__name__
+        full_names.add(register_mcp_adapter(mcp, route, core['run_mcp_session'], annotations=annotations_for(method, name)))
+        if name in AGENT_TOOLS:
+            tool_name, purpose_text = AGENT_TOOLS[name]
+            agent_names.add(register_mcp_adapter(mcp, route, core['run_mcp_session'], name=tool_name,
+                description=purpose_text or purpose(route), annotations=annotations_for(method, name)))
+    missing = set(AGENT_TOOLS) - {r.endpoint.__name__ for r in app.routes if isinstance(r, APIRoute)}
+    if missing:
+        raise RuntimeError(f'Agent tool profile references unknown REST operations: {missing}')
+    core['MCP_TOOL_PROFILE'] = set_tool_profile(mcp, configured_profile(), agent_names, full_names)
+    core['MCP_TOOL_NAMES'] = {'agent': agent_names, 'full': full_names}
 
 
-def register_mcp_adapter(mcp, route, run_session):
+def register_mcp_adapter(mcp, route, run_session, *, name: str | None = None, description: str | None = None, annotations=None) -> str:
     endpoint = route.endpoint
     signature = inspect.signature(endpoint)
     hints = get_type_hints(endpoint)
@@ -265,6 +279,7 @@ def register_mcp_adapter(mcp, route, run_session):
     invoke.__annotations__ = {p.name: p.annotation for p in parameters}
     invoke.__annotations__['return'] = dict
     invoke.__signature__ = signature.replace(parameters=parameters, return_annotation=dict)
-    invoke.__name__ = 'rest_' + endpoint.__name__
-    invoke.__doc__ = tool_description(route)
-    mcp.tool(invoke, name=invoke.__name__)
+    invoke.__name__ = name or 'rest_' + endpoint.__name__
+    invoke.__doc__ = description or tool_description(route)
+    mcp.tool(invoke, name=invoke.__name__, annotations=annotations)
+    return invoke.__name__

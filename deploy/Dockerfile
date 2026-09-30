@@ -1,4 +1,5 @@
-FROM node:22-alpine AS frontend
+# The frontend bundle is platform independent: build it natively instead of under arm64 emulation.
+FROM --platform=$BUILDPLATFORM node:22-alpine AS frontend
 WORKDIR /build/web
 COPY web/package.json web/package-lock.json ./
 RUN npm ci

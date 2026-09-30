@@ -1,12 +1,21 @@
 import unittest
 from fastapi.routing import APIRoute
 from fastmcp import Client
-from app.main import app, mcp
+import json
+from app.main import app, mcp, set_mcp_tool_profile
+
 
 class ParityContracts(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        set_mcp_tool_profile('full')
+
+    async def asyncTearDown(self):
+        set_mcp_tool_profile('agent')
+
     async def test_every_rest_operation_has_typed_mcp_equivalent(self):
         async with Client(mcp) as client:
             tools = {t.name: t for t in await client.list_tools()}
+        self.assertTrue(all(name.startswith('rest_') for name in tools), 'full profile shows only rest_ tools')
         routes = [r for r in app.routes if isinstance(r, APIRoute) and r.path.startswith('/api/') and not r.path.endswith('/imports/file')]
         self.assertGreater(len(routes), 40)
         for route in routes:
@@ -40,23 +49,40 @@ class ParityContracts(unittest.IsolatedAsyncioTestCase):
 
 
 class AgentGuidance(unittest.IsolatedAsyncioTestCase):
-    async def test_every_tool_explains_its_purpose(self):
+    AGENT_TOOLS = {'get_graph', 'find_entities', 'create_entity', 'update_entity', 'merge_entities', 'delete_entity', 'add_identifier',
+                   'create_relation', 'update_relation', 'delete_relation', 'create_activity', 'update_activity', 'create_source', 'update_source',
+                   'add_evidence', 'update_evidence', 'review_evidence', 'retract_evidence', 'import_rows', 'import_activities',
+                   'create_group', 'update_group', 'export_image', 'undo'}
+
+    async def test_default_agent_profile_is_small_and_explained(self):
         async with Client(mcp) as client:
             tools = await client.list_tools()
-        names = {t.name for t in tools}
-        for required in ('rest_create_activity', 'rest_import_activities', 'rest_create_group', 'rest_update_group', 'rest_create_perspective',
-                         'rest_list_layers', 'rest_list_activities', 'rest_list_groups', 'add_activity', 'group_entities'):
-            self.assertIn(required, names)
+        self.assertEqual({t.name for t in tools}, self.AGENT_TOOLS)
+        # Tool definitions are loaded into every agent session; keep them lean.
+        size = sum(len(json.dumps(t.model_dump(exclude_none=True))) for t in tools)
+        self.assertLess(size // 4, 9000, f'agent tool definitions use about {size // 4} tokens')
+        for tool in tools:
+            self.assertGreater(len(tool.description or ''), 30, tool.name)
+            self.assertNotIn('REST equivalent', tool.description, tool.name)
+            self.assertIsNotNone(tool.annotations, tool.name)
+        by_name = {t.name: t for t in tools}
+        self.assertTrue(by_name['find_entities'].annotations.readOnlyHint)
+        self.assertTrue(by_name['delete_entity'].annotations.destructiveHint)
+        self.assertIn('role', json.dumps(by_name['create_activity'].input_schema))
+
+    async def test_full_profile_describes_every_tool(self):
+        set_mcp_tool_profile('full')
+        try:
+            async with Client(mcp) as client:
+                tools = await client.list_tools()
+        finally:
+            set_mcp_tool_profile('agent')
+        self.assertGreater(len(tools), 60)
         for tool in tools:
             purpose = (tool.description or '').split('\n\nREST equivalent')[0].strip()
             self.assertGreater(len(purpose), 30, tool.name)
-            self.assertNotIn('REST parity', purpose, tool.name)
-        activity = next(t for t in tools if t.name == 'rest_create_activity')
-        body = activity.input_schema['properties']['body']
-        body = activity.input_schema.get('$defs', {}).get(body.get('$ref', '').rsplit('/', 1)[-1], body)
-        self.assertIn('role', str(body['properties']['participants']))
 
     def test_instructions_cover_workflow(self):
         from app.main import MCP_INSTRUCTIONS
-        for phrase in ('rest_get_graph', 'rest_create_activity', 'unconfirmed', 'rest_create_group', 'dry_run', 'session_token', '409'):
+        for phrase in ('find_entities', 'create_activity', 'unconfirmed', 'review_evidence', 'review_note', 'create_group', 'dry_run', 'session_token', '409', 'FACTGRAPH_MCP_TOOLS'):
             self.assertIn(phrase, MCP_INSTRUCTIONS)

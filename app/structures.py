@@ -15,8 +15,7 @@ from pydantic import Field
 from app.contracts import LAYER_HELP, LAYERS, Layer, StrictModel, TIME_HELP
 from app.ingest import action, activity_rows_to_actions
 
-ROLE_HELP = ("Role of the participant in the event: actor (who acts, e.g. threat actor or user), identity (account or service principal used), "
-             "source (origin such as IP or device), tool (process or tool used), via (intermediate system), target (what was acted on), other.")
+ROLE_HELP = "actor, identity, source, tool, via, target or other (see server instructions)."
 
 
 class ParticipantInput(StrictModel):

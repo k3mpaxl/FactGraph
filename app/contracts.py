@@ -6,9 +6,7 @@ from pydantic import BaseModel, Field, ConfigDict, model_validator
 
 LAYERS = ("identity", "network", "endpoint", "workload", "cloud", "data", "code", "other")
 Layer = Literal["identity", "network", "endpoint", "workload", "cloud", "data", "code", "other"]
-LAYER_HELP = ("Investigation layer: identity (users, principals, credentials), network (IPs, domains), endpoint (devices, processes, local files), "
-              "workload (Kubernetes, containers), cloud (control plane, Key Vaults, subscriptions), data (buckets, blobs, databases), code (repositories, CI), other. "
-              "Omit to infer it from the entity type.")
+LAYER_HELP = "Investigation layer (see server instructions). Omit to infer it from the entity type."
 TIME_HELP = "ISO 8601 timestamp (UTC recommended) of the observed activity, not of the record creation."
 
 

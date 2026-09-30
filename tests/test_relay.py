@@ -113,7 +113,7 @@ class RelayTest(unittest.IsolatedAsyncioTestCase):
                 headers={"X-FactGraph-Token": token},
             )
             async with Client(transport) as client:
-                graph_task = asyncio.create_task(client.call_tool("board_graph", {"board_id": board}))
+                graph_task = asyncio.create_task(client.call_tool("get_graph", {"board_id": board}))
                 command = await receive(websocket)
                 self.assertEqual(command["operation"], "snapshot")
                 await websocket.send(json.dumps({
@@ -124,8 +124,8 @@ class RelayTest(unittest.IsolatedAsyncioTestCase):
                 graph = await graph_task
                 self.assertEqual(graph.data["board_id"], board)
 
-                entity_task = asyncio.create_task(client.call_tool("add_entity", {
-                    "board_id": board, "name": "MCP entity", "kind": "Test",
+                entity_task = asyncio.create_task(client.call_tool("create_entity", {
+                    "board_id": board, "body": {"name": "MCP entity", "kind": "Test"},
                 }))
                 command = await receive(websocket)
                 self.assertEqual(command["operation"], "apply")

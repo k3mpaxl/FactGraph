@@ -7,6 +7,9 @@ services:
     pull_policy: missing
     ports:
       - "${FACTGRAPH_BIND_IP:-127.0.0.1}:8080:8080"
+    environment:
+      # agent = compact MCP tool set (default), full = one rest_* tool per REST operation
+      FACTGRAPH_MCP_TOOLS: ${FACTGRAPH_MCP_TOOLS:-agent}
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/api/health', timeout=3).read()"]

@@ -27,10 +27,10 @@ test('analyst + agent: primary evidence, review, REST/MCP null patches, sync, de
   const second=await browser.newContext();const peer=await second.newPage();await peer.goto(`/boards/${id}`)
   await expect(page.getByText('2 online',{exact:true})).toBeVisible()
   const a=(await call('POST','/entities',{name:'Source device',kind:'Device',x:60,y:100})).id
-  const b=(await mcp(token,'rest_create_entity',{board_id:id,body:{name:'Repository file',kind:'File',x:550,y:100}})).id
-  const source=(await mcp(token,'rest_create_source',{board_id:id,body:{title:'Access logs',uri:'repo/log.json@abc123',source_kind:'primary',excerpt:'[{"EventId":"42","Action":"ReadFile"}]',query:'AccessLogs | where EventId == "42"'}})).id
+  const b=(await mcp(token,'create_entity',{board_id:id,body:{name:'Repository file',kind:'File',x:550,y:100}})).id
+  const source=(await mcp(token,'create_source',{board_id:id,body:{title:'Access logs',uri:'repo/log.json@abc123',source_kind:'primary',excerpt:'[{"EventId":"42","Action":"ReadFile"}]',query:'AccessLogs | where EventId == "42"'}})).id
   const relation=(await call('POST','/relations',{subject_id:a,object_id:b,predicate:'reads'})).id
-  const evidence=(await mcp(token,'rest_create_evidence',{board_id:id,relation_id:relation,body:{source_id:source,stance:'supports',observation:'Original record shows ReadFile by source device.',locator:'EventId=42',valid_from:'2026-09-28T10:00:00Z'}})).id
+  const evidence=(await mcp(token,'add_evidence',{board_id:id,relation_id:relation,body:{source_id:source,stance:'supports',observation:'Original record shows ReadFile by source device.',locator:'EventId=42',valid_from:'2026-09-28T10:00:00Z'}})).id
   await expect.poll(async()=> (await graph()).facts[0].assertions[0].review_status).toBe('unconfirmed')
   await page.getByRole('tab',{name:/Evidence review/}).click()
   await page.locator('.review-queue-item').click()
@@ -43,22 +43,22 @@ test('analyst + agent: primary evidence, review, REST/MCP null patches, sync, de
   await expect.poll(async()=> (await graph()).facts[0].assertions[0].review_status).toBe('unconfirmed')
   const stale=await request.post(`${base}/api/boards/${id}/relations/${relation}/evidence/${evidence}/review`,{headers:{'X-FactGraph-Token':token},data:{review_status:'confirmed',expected_revision:e.revision,expected_source_revision:confirmed.sources[0].revision,review_note:'stale'}})
   expect(stale.status()).toBe(409)
-  await mcp(token,'rest_update_evidence',{board_id:id,relation_id:relation,evidence_id:evidence,body:{valid_from:null}})
+  await mcp(token,'update_evidence',{board_id:id,relation_id:relation,evidence_id:evidence,body:{valid_from:null}})
   expect((await graph()).facts[0].assertions[0].valid_from).toBeNull()
-  await mcp(token,'update_evidence',{board_id:id,relation_id:relation,evidence_id:evidence,patch:{source_id:null}})
+  await mcp(token,'update_evidence',{board_id:id,relation_id:relation,evidence_id:evidence,body:{source_id:null}})
   expect((await graph()).facts[0].assertions[0].source_id).toBeNull()
   await call('PATCH',`/relations/${relation}/evidence/${evidence}`,{source_id:source,valid_from:'2026-09-28T10:00:00Z'})
   const current=await graph()
-  await mcp(token,'rest_review_evidence',{board_id:id,relation_id:relation,evidence_id:evidence,body:{review_status:'confirmed',expected_revision:current.facts[0].assertions[0].revision,expected_source_revision:current.sources[0].revision,review_note:'Analyst requested recheck'}})
+  await mcp(token,'review_evidence',{board_id:id,relation_id:relation,evidence_id:evidence,body:{review_status:'confirmed',expected_revision:current.facts[0].assertions[0].revision,expected_source_revision:current.sources[0].revision,review_note:'Analyst requested recheck'}})
   expect((await graph()).facts[0].truth_state).toBe('supported')
-  await mcp(token,'rest_retract_evidence',{board_id:id,relation_id:relation,evidence_id:evidence})
+  await mcp(token,'retract_evidence',{board_id:id,relation_id:relation,evidence_id:evidence})
   expect((await graph()).facts[0].truth_state).toBe('unknown')
-  await mcp(token,'rest_restore_evidence',{board_id:id,relation_id:relation,evidence_id:evidence})
+  await call('POST',`/relations/${relation}/evidence/${evidence}/restore`)
   expect((await graph()).facts[0].assertions[0].review_status).toBe('unconfirmed')
-  const ident=(await mcp(token,'rest_create_identifier',{board_id:id,entity_id:a,body:{scheme:'hostname',raw_value:'HOST-A.'}})).id
+  const ident=(await mcp(token,'add_identifier',{board_id:id,entity_id:a,body:{scheme:'hostname',raw_value:'HOST-A.'}})).id
   await call('PATCH',`/entities/${a}/identifiers/${ident}`,{raw_value:'HOST-B.'})
   expect((await graph()).entities.find((x:any)=>x.id===a).identifiers[0].normalized_value).toBe('host-b')
-  await mcp(token,'rest_delete_identifier',{board_id:id,entity_id:a,identifier_id:ident})
+  await call('DELETE',`/entities/${a}/identifiers/${ident}`)
   await call('PATCH',`/entities/${a}/position`,{x:160,y:240})
   const peerToken=await peer.evaluate(id=>sessionStorage.getItem(`factgraph:sessionToken:${id}`)!,id)
   await expect.poll(async()=>{const r=await request.get(`${base}/api/boards/${id}/graph`,{headers:{'X-FactGraph-Token':peerToken}});return (await r.json()).entities.find((e:any)=>e.id===a).position}).toEqual({x:160,y:240})
@@ -68,15 +68,15 @@ test('analyst + agent: primary evidence, review, REST/MCP null patches, sync, de
   await page.reload();await expect(page.getByText('2 online',{exact:true})).toBeVisible()
   expect((await graph()).facts[0].assertions[0].id).toBe(evidence)
   const wrong=await request.get(`${base}/api/boards/${randomUUID()}/graph`,{headers:{'X-FactGraph-Token':token}});expect(wrong.status()).toBe(403)
-  await mcp(token,'rest_delete_evidence',{board_id:id,relation_id:relation,evidence_id:evidence})
+  await call('DELETE',`/relations/${relation}/evidence/${evidence}`)
   expect((await graph()).facts[0].assertions).toHaveLength(0)
-  await mcp(token,'rest_undo_board',{board_id:id})
+  await mcp(token,'undo',{board_id:id})
   expect((await graph()).facts[0].assertions).toHaveLength(1)
-  await mcp(token,'rest_redo_board',{board_id:id})
+  await call('POST','/redo')
   expect((await graph()).facts[0].assertions).toHaveLength(0)
-  await mcp(token,'rest_delete_relation',{board_id:id,relation_id:relation})
-  await mcp(token,'rest_delete_source',{board_id:id,source_id:source})
-  await mcp(token,'rest_delete_entity',{board_id:id,entity_id:b})
+  await mcp(token,'delete_relation',{board_id:id,relation_id:relation})
+  await call('DELETE',`/sources/${source}`)
+  await mcp(token,'delete_entity',{board_id:id,entity_id:b})
   expect((await graph()).entities).toHaveLength(1)
   await second.close()
 })
@@ -297,9 +297,9 @@ test('activities, groups, layers and perspectives across REST, MCP and the canva
   const {id,token,call,graph}=await setup(page,request)
   const atk=(await call('POST','/entities',{name:'Attacker',kind:'Threat Actor',x:0,y:0})).id
   const ip=(await call('POST','/entities',{name:'203.0.113.7',kind:'IP',x:0,y:200})).id
-  const sp=(await mcp(token,'rest_create_entity',{board_id:id,body:{name:'sp-deploy',kind:'Service Principal',x:300,y:0}})).id
+  const sp=(await mcp(token,'create_entity',{board_id:id,body:{name:'sp-deploy',kind:'Service Principal',x:300,y:0}})).id
   const kv=(await call('POST','/entities',{name:'kv-prod',kind:'Key Vault',x:600,y:100})).id
-  const created=await mcp(token,'add_activity',{board_id:id,operation:'listed secrets',participants:[{entity_id:atk,role:'actor'},{entity_id:ip,role:'source'},{entity_id:sp,role:'identity'},{entity_id:kv,role:'target'}],technique:'T1555.006',valid_from:'2026-09-28T10:42:00Z',observation:'SecretList by sp-deploy from 203.0.113.7',locator:'CorrelationId=abc'})
+  const created=await mcp(token,'create_activity',{board_id:id,body:{operation:'listed secrets',participants:[{entity_id:atk,role:'actor'},{entity_id:ip,role:'source'},{entity_id:sp,role:'identity'},{entity_id:kv,role:'target'}],technique:'T1555.006',valid_from:'2026-09-28T10:42:00Z',observation:'SecretList by sp-deploy from 203.0.113.7',locator:'CorrelationId=abc'}})
   const activity=(await call('GET',`/activities/${created.id}`))
   expect(activity.participants).toHaveLength(4)
   expect(activity.assertions[0].review_status).toBe('unconfirmed')
@@ -322,15 +322,15 @@ test('activities, groups, layers and perspectives across REST, MCP and the canva
   const repos=[] as string[]
   for(let i=0;i<12;i++) repos.push((await call('POST','/entities',{name:`org/repo-${i}`,kind:'Repository',x:900,y:i*80})).id)
   await call('POST','/actions',{actions:repos.map(r=>({type:'fact.add',payload:{id:randomUUID(),subject_id:sp,predicate:'cloned',object_id:r}}))})
-  const group=(await mcp(token,'rest_create_group',{board_id:id,body:{name:'Org repositories',rule:{kinds:['Repository']},excluded:[repos[11]]}})).id
+  const group=(await mcp(token,'create_group',{board_id:id,body:{name:'Org repositories',rule:{kinds:['Repository']},excluded:[repos[11]]}})).id
   expect((await call('GET',`/groups/${group}`)).member_ids).toHaveLength(11)
   await page.getByRole('button',{name:'fit view'}).click()
   await expect(page.locator('.group-node')).toHaveCount(1)
   await expect(page.locator(`[data-id="${repos[11]}"]`)).toBeVisible()
-  await expect(page.locator('.edge-label',{hasText:'×11'})).toHaveCount(1)
   await page.locator('.group-node').click()
   const inspector=page.getByRole('complementary',{name:'Inspector'})
   await expect(inspector.getByRole('heading',{name:'Org repositories'})).toBeVisible()
+  await expect(inspector.getByText('×11')).toBeVisible()
   await inspector.getByRole('button',{name:'Put back'}).click()
   await expect.poll(async()=>(await call('GET',`/groups/${group}`)).member_ids.length).toBe(12)
   await inspector.getByRole('button',{name:'Expand'}).click()
@@ -386,7 +386,7 @@ test('export: PNG and SVG downloads, clipboard-free API export via REST and MCP'
   const restSvg=await call('POST','/export',{format:'svg',theme:'light',title:'Report figure'})
   expect(restSvg).toMatchObject({format:'svg',mime:'image/svg+xml',node_count:2})
   expect(restSvg.content).toContain('Report figure')
-  const mcpPng=await mcp(token,'rest_export_image',{board_id:id,body:{format:'png',scale:1}})
+  const mcpPng=await mcp(token,'export_image',{board_id:id,body:{format:'png',scale:1}})
   expect(mcpPng.format).toBe('png')
   expect(Buffer.from(mcpPng.content,'base64').subarray(1,4).toString()).toBe('PNG')
   const bad=await request.post(`${base}/api/boards/${id}/export`,{headers:{'X-FactGraph-Token':token},data:{format:'gif'}})

@@ -65,7 +65,7 @@ Für große Graphen:
 „Angreifer verwendet IP a.a.a.a und Service Principal B und listet Key Vault C auf“ ist **ein** Ereignis, keine drei Kanten. Eine **Activity** hat eine Operation (`listed secrets`), optional eine ATT&CK-Technik, einen Zeitraum und Beteiligte mit Rollen: `actor`, `identity`, `source`, `tool`, `via`, `target`, `other`. Belege hängen am ganzen Ereignis; Review, Status, Timeline und Zeitfenster funktionieren wie bei Beziehungen. Im Graph erscheint die Activity als Raute mit beschrifteten Speichen, in der Ebenen-Leiste lässt sie sich als einfache Kante darstellen.
 
 - UI: **Create → Activity…**, Command-Palette oder Log-Import im Modus **Activities · several roles** (Spalte → Rolle → Typ, z. B. `CallerIPAddress → source → IP`, `AppId → identity → Service Principal`, `ResourceId → target → Key Vault`). Zeilen mit gleicher Operation und gleichen Beteiligten ergeben eine Activity, jede Zeile ist ein eigener Beleg mit Zeitstempel.
-- REST/MCP: `POST /activities` (`rest_create_activity`, vereinfacht `add_activity`), `GET/PATCH/DELETE /activities/{id}`, `POST /imports/activities`. Belege über die bestehenden `/relations/{id}/evidence`-Endpunkte.
+- REST/MCP: `POST /activities` (MCP `create_activity`), `GET/PATCH/DELETE /activities/{id}`, `POST /imports/activities`. Belege über die bestehenden `/relations/{id}/evidence`-Endpunkte.
 - Die Zuordnung „IP gehört zum Angreifer“ ist eine eigene Aussage mit eigenem Beleg.
 
 ### Ebenen
@@ -76,7 +76,7 @@ Jeder Typ gehört zu einer Ebene: Identity & access, Network, Endpoint, Workload
 
 ### Gruppen
 
-Eine Gruppe bündelt viele Entitäten zu einem Knoten, z. B. 699 von 700 Repositories. Mitglieder sind explizit (Mehrfachauswahl → `G`) oder per Regel (Typ und/oder Textmuster); neue passende Entitäten kommen automatisch hinzu. **Take out** (Kontextmenü oder Inspector) hält einzelne Entitäten sichtbar außerhalb der Gruppe. Kanten zur Gruppe werden gebündelt und zeigen die Anzahl (`cloned ×699`), der Statusbalken zeigt die Prüfstatus der gebündelten Beziehungen. **Groups** in der Canvas-Leiste schlägt Gruppen aus Entitäten gleichen Typs mit identischen Verbindungen vor und nennt die Ausreißer, die sich unterscheiden. Gruppen und Perspektiven ändern nur die Ansicht, nie Aussagen oder Belege. REST/MCP: `/groups` (`rest_create_group`, vereinfacht `group_entities`), `/perspectives`, `GET /api/layers`.
+Eine Gruppe bündelt viele Entitäten zu einem Knoten, z. B. 699 von 700 Repositories. Mitglieder sind explizit (Mehrfachauswahl → `G`) oder per Regel (Typ und/oder Textmuster); neue passende Entitäten kommen automatisch hinzu. **Take out** (Kontextmenü oder Inspector) hält einzelne Entitäten sichtbar außerhalb der Gruppe. Kanten zur Gruppe werden gebündelt und zeigen die Anzahl (`cloned ×699`), der Statusbalken zeigt die Prüfstatus der gebündelten Beziehungen. **Groups** in der Canvas-Leiste schlägt Gruppen aus Entitäten gleichen Typs mit identischen Verbindungen vor und nennt die Ausreißer, die sich unterscheiden. Gruppen und Perspektiven ändern nur die Ansicht, nie Aussagen oder Belege. REST/MCP: `/groups` (MCP `create_group`, `update_group`), `/perspectives`, `GET /api/layers`.
 
 ### Export als PNG/SVG (ab 0.4.2)
 
@@ -85,7 +85,7 @@ Die Schaltfläche **Export image** (Bild-Symbol in der Canvas-Leiste), das Board
 - **SVG** ist eine eigenständige Vektordatei ohne externe Schriften oder Stylesheets; Texte bleiben in Illustrator, Inkscape, Word oder PowerPoint editierbar.
 - **PNG** in 1×, 2× oder 3× Auflösung. Sehr große Graphen werden automatisch auf die Größengrenzen des Browsers reduziert (Hinweis im Toast); SVG hat keine Grenze.
 - Bereich: ganzer Graph, sichtbarer Ausschnitt oder Auswahl. Theme hell/dunkel unabhängig vom aktuellen Theme, optional transparenter Hintergrund, Titel mit Filtern und Datum, Status-Legende mit Zählern. **Copy** legt das Bild direkt in die Zwischenablage.
-- Agents: `POST /api/boards/{id}/export` bzw. MCP `rest_export_image` mit `format` (`svg`/`png`), `theme`, `scale`, `perspective_id`, `title`. Die Antwort enthält `content` (SVG-Text bzw. PNG als Base64):
+- Agents: `POST /api/boards/{id}/export` bzw. MCP `export_image` mit `format` (`svg`/`png`), `theme`, `scale`, `perspective_id`, `title`. Die Antwort enthält `content` (SVG-Text bzw. PNG als Base64):
 
 ```bash
 curl -s -X POST "http://127.0.0.1:8080/api/boards/BOARD_UUID/export" \
@@ -127,24 +127,24 @@ The shared session token does not prove that a reviewer is human. Agents are ins
 
 Beim Öffnen eines Boards erzeugt der Browser ein zufälliges Sitzungs-Token. REST und MCP erwarten es im Header `X-FactGraph-Token`; MCP akzeptiert zusätzlich den Tool-Parameter `session_token`. Nur ein damit verbundenes Browser-Board darf Aktionen ausführen. Das Token ist eine lokale Sitzungskopplung, kein Benutzerkonto und kein Ersatz für einen vorgeschalteten Auth-Proxy.
 
-| Aufgabe | REST | MCP |
+Der MCP-Server zeigt standardmäßig ein **kompaktes Agent-Profil mit 24 Tools** (≈ 9.000 Tokens Tool-Definitionen statt ≈ 22.000). Weniger Tools bedeuten weniger Kontextverbrauch und bessere Tool-Wahl; VS Code/Copilot begrenzt zudem die Gesamtzahl der Tools.
+
+| Aufgabe | MCP-Tool (Agent-Profil) | REST |
 | --- | --- | --- |
-| Graph lesen | `GET /api/boards/{id}/graph` | `board_graph` |
-| Entität anlegen | `POST /api/boards/{id}/entities` | `add_entity` |
-| Entität ändern | `PATCH /api/boards/{id}/entities/{entity_id}` | `update_entity` |
-| Entitäten zusammenführen | `POST /api/boards/{id}/entities/{entity_id}/merge` | `merge_entities` |
-| Entität löschen | `DELETE /api/boards/{id}/entities/{entity_id}` | `delete_entity` |
-| Quelle anlegen | `POST /api/boards/{id}/sources` | `add_source` |
-| Quelle ändern | `PATCH /api/boards/{id}/sources/{source_id}` | `update_source` |
-| Quelle löschen | `DELETE /api/boards/{id}/sources/{source_id}` | `delete_source` |
-| Kante anlegen | `POST /api/boards/{id}/relations` | `link_entities` |
-| Kante ändern | `PATCH /api/boards/{id}/relations/{relation_id}` | `update_relationship` |
-| Kante löschen | `DELETE /api/boards/{id}/relations/{relation_id}` | `delete_relationship` |
-| Beleg hinzufügen | `POST /api/boards/{id}/relations/{relation_id}/evidence` | `add_evidence` |
-| Beleg ändern | `PATCH /api/boards/{id}/relations/{relation_id}/evidence/{evidence_id}` | `update_evidence` |
-| Beleg löschen | `DELETE /api/boards/{id}/relations/{relation_id}/evidence/{evidence_id}` | `delete_evidence` |
-| KQL-Ergebnisse importieren | `POST /api/boards/{id}/imports/kql` | `add_kql_evidence` (bis 100 Zeilen) |
-| Modellierungsregeln lesen | — | `factgraph_guidelines` |
+| Graph lesen / Entitäten suchen | `get_graph`, `find_entities` | `GET /graph`, `GET /entities?q=` |
+| Entitäten | `create_entity`, `update_entity`, `merge_entities`, `delete_entity`, `add_identifier` | `/entities…` |
+| Beziehungen | `create_relation`, `update_relation`, `delete_relation` | `/relations…` |
+| Ereignisse | `create_activity`, `update_activity` | `/activities…` |
+| Quellen und Belege | `create_source`, `update_source`, `add_evidence`, `update_evidence`, `review_evidence`, `retract_evidence` | `/sources…`, `/relations/{id}/evidence…` |
+| Importe | `import_rows`, `import_activities` | `/imports/activity`, `/imports/kql`, `/imports/activities` |
+| Übersicht und Export | `create_group`, `update_group`, `export_image` | `/groups…`, `/export` |
+| Rückgängig | `undo` | `/undo` |
+
+Pfade relativ zu `/api/boards/{id}`. Die REST-API bleibt vollständig (Typen, Perspektiven, Einzelabfragen, Historie, Redo, rohe Aktionen …). Mit `FACTGRAPH_MCP_TOOLS=full` zeigt der MCP-Server statt des Agent-Profils für jede REST-Operation ein Tool `rest_<operation>` (vollständige Parität, z. B. `rest_create_perspective`). Agents dürfen Belege mit `review_evidence` bestätigen, aber nur mit Primärquelle, konkreter Fundstelle, Beobachtung, aktueller Revision und einer Prüfnotiz, was verglichen wurde.
+
+> **Änderung in 0.4.3:** Die alten MCP-Namen (`board_graph`, `add_entity`, `link_entities`, `add_kql_evidence`, `factgraph_guidelines` …) entfallen. Agent-Konfigurationen verwenden die Namen oben bzw. `rest_*` im Profil `full`.
+
+Docker: `docker run -e FACTGRAPH_MCP_TOOLS=full -p 8080:8080 k3mpaxl/factgraph:latest`.
 
 Beispiel für eine Entität:
 
@@ -170,18 +170,18 @@ FastMCP ist unter `/mcp/` eingebunden. Ein lokaler Client kann sich so verbinden
 from fastmcp import Client
 
 async with Client("http://127.0.0.1:8080/mcp/") as client:
-    result = await client.call_tool("add_entity", {
+    result = await client.call_tool("create_entity", {
         "board_id": "BOARD_UUID", "session_token": "TOKEN_FROM_BOARD_UI",
-        "name": "Azure-Credential", "kind": "Credential"
+        "body": {"name": "Azure-Credential", "kind": "Credential"}
     })
 print(result.data)
 ```
 
-Der MCP-Server liefert zusätzlich verbindliche Arbeitsregeln: Nodes sollen konkrete Entities sein, gerichtete Beziehungen sollen nicht erfunden werden, wichtige Claims brauchen Evidence, primäre Quellen (Logs, KQL-Ergebnisse, Repository-Dateien und First-Party-Telemetrie) haben Vorrang und sekundäre Quellen dienen nur als Kontext. Unsicherheit, Widerspruch, Confidence und Evidence-Zeiträume werden erhalten. Diese Regeln stehen in den Server-Instructions und können mit `factgraph_guidelines` abgerufen werden.
+Der MCP-Server liefert zusätzlich verbindliche Arbeitsregeln: Nodes sollen konkrete Entities sein, gerichtete Beziehungen sollen nicht erfunden werden, wichtige Claims brauchen Evidence, primäre Quellen (Logs, KQL-Ergebnisse, Repository-Dateien und First-Party-Telemetrie) haben Vorrang und sekundäre Quellen dienen nur als Kontext. Unsicherheit, Widerspruch, Confidence und Evidence-Zeiträume werden erhalten. Diese Regeln stehen in den Server-Instructions (werden beim Verbinden automatisch übertragen) und über REST unter `GET /api/guidelines`.
 
 ### VS Code / GitHub Copilot
 
-Im Repository liegt bereits [.vscode/mcp.json](.vscode/mcp.json). VS Code öffnen, den Ordner `/Users/gregor/Projekte/FactGraph` laden und in der Command Palette **MCP: List Servers** aufrufen. Den Server `factgraph` starten; danach stehen Lese-, Create-, Update- und Evidence-Tools sowie `factgraph_guidelines` im Agent-Tools-Picker zur Verfügung. Alternativ **MCP: Open Workspace Folder Configuration** öffnen und diesen Eintrag einfügen:
+Im Repository liegt bereits [.vscode/mcp.json](.vscode/mcp.json). VS Code öffnen, den Ordner `/Users/gregor/Projekte/FactGraph` laden und in der Command Palette **MCP: List Servers** aufrufen. Den Server `factgraph` starten; danach stehen die 24 Agent-Tools im Agent-Tools-Picker zur Verfügung. Alternativ **MCP: Open Workspace Folder Configuration** öffnen und diesen Eintrag einfügen:
 
 ```json
 {
@@ -246,13 +246,13 @@ Weitere Schritte der lateralen Bewegung können aus anderen Logdateien, manuell,
 Das Repository enthält zwei GitHub-Actions:
 
 - `CI` führt die Python-Tests aus, baut das Frontend und prüft das Docker-Image bei Pushes und Pull Requests.
-- `Publish Docker image` veröffentlicht bei einem Versionstag wie `v0.4.2` oder über **Run workflow** nach Docker Hub.
+- `Publish Docker image` veröffentlicht bei einem Versionstag wie `v0.4.3` oder über **Run workflow** nach Docker Hub.
 
 Dafür im GitHub-Repository die Actions-Secrets `DOCKERHUB_USERNAME` und `DOCKERHUB_TOKEN` anlegen. Der Token sollte ein Docker-Hub-Access-Token mit Schreibrecht für das Image `factgraph` sein. Nach dem Push eines Tags:
 
 ```bash
-git tag v0.4.2
-git push origin v0.4.2
+git tag v0.4.3
+git push origin v0.4.3
 ```
 
 Das Image ist danach als `DOCKERHUB_USERNAME/factgraph:latest` und mit Versions-/Commit-Tags verfügbar. Für eine LAN-Freigabe beim Start des Compose-Stacks:
@@ -291,7 +291,7 @@ Die Oberfläche verwaltet Boards lokal über ihre UUID. In der Oberfläche kopie
 
 ## Shared REST/MCP contracts and tests
 
-Every JSON REST operation has a canonical `rest_<operation_id>` MCP tool with the same typed parameters, validation and result. For example, `rest_update_evidence` takes `board_id`, `relation_id`, `evidence_id`, and a `body` patch. Explicit `null` clears nullable fields; omitted fields remain unchanged. Existing MCP names remain compatible. Multipart file upload is REST-specific; MCP uses the equivalent JSON row import.
+With `FACTGRAPH_MCP_TOOLS=full`, every JSON REST operation has a `rest_<operation_id>` MCP tool with the same typed parameters, validation and result; the default agent profile exposes the 24 task tools listed above with the same bodies. For example, `update_evidence` takes `board_id`, `relation_id`, `evidence_id`, and a `body` patch. Explicit `null` clears nullable fields; omitted fields remain unchanged. Multipart file upload is REST-specific; MCP uses the equivalent JSON row import.
 
 Both interfaces cover board-scoped reads, entity/relation/source/evidence CRUD, identifiers, custom types, positions, merge, evidence review/retract/restore, import preview, history, undo and redo. There is no global board listing. Source/evidence PATCH accepts `expected_revision`; review requires current evidence and source revisions. Activity records include UI/REST/MCP channel, actor and action group.
 

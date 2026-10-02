@@ -195,6 +195,25 @@ function AssertionRow({ assertion, fact, data, onCopy, onOpen, onRetract }: { as
   </div>
 }
 
+const defaultColors = ['#ef4444', '#f97316', '#eab308', '#22c55e', '#14b8a6', '#3b82f6', '#8b5cf6', '#ec4899', '#64748b']
+
+/** Color choice with quick swatches: fixed defaults plus colors already used on this board, so related infrastructure can share one color. */
+function ColorField({ data, initial }: { data: GraphData; initial: string }) {
+  const [color, setColor] = useState(initial.toLowerCase())
+  const counts = new Map<string, number>()
+  for (const entity of data.entities) if (entity.color) { const c = entity.color.toLowerCase(); counts.set(c, (counts.get(c) ?? 0) + 1) }
+  const used = [...counts].filter(([c]) => !defaultColors.includes(c)).sort((a, b) => b[1] - a[1]).slice(0, 9).map(([c]) => c)
+  const swatch = (c: string, title: string) => <button key={c} type="button" className={`color-swatch${c === color ? ' active' : ''}`} style={{ '--swatch': c } as CSSProperties} title={title} aria-label={`Color ${c}`} aria-pressed={c === color} onClick={() => setColor(c)} />
+  return <div className="color-field"><span className="field-label">Node color</span>
+    <input type="hidden" name="color" value={color} />
+    <div className="color-swatches">
+      {defaultColors.map(c => swatch(c, c))}
+      <label className={`color-custom${defaultColors.includes(color) || used.includes(color) ? '' : ' active'}`} title={`Custom color · ${color}`} style={defaultColors.includes(color) || used.includes(color) ? undefined : { background: color }}><input type="color" aria-label="Custom color" value={/^#[0-9a-f]{6}$/.test(color) ? color : '#000000'} onChange={e => setColor(e.target.value.toLowerCase())} /></label>
+    </div>
+    {used.length > 0 && <><span className="color-used-label">In use on this board</span><div className="color-swatches">{used.map(c => swatch(c, `${c} · ${counts.get(c)} ${counts.get(c) === 1 ? 'entity' : 'entities'}`))}</div></>}
+  </div>
+}
+
 function Dialog({ kind, data, selection, editingAssertionId, relationTargetId, busy, error, onClose, onSubmit }: {
   kind: Exclude<DialogKind, null>; data: GraphData; selection: Selection; busy: boolean;
   editingAssertionId: string | null; relationTargetId: string | null;
@@ -253,7 +272,7 @@ function Dialog({ kind, data, selection, editingAssertionId, relationTargetId, b
       <div className="modal-header"><h2>{titles[kind]}</h2><button className="icon-button" onClick={onClose} aria-label="Close dialog"><X size={18} /></button></div>
       <form onSubmit={submit}>
         <div className="modal-body">
-          {(kind === 'entity' || kind === 'entity-edit') && <><label>Name<input name="name" defaultValue={editing?.name} autoFocus required placeholder="e.g. Web server 01" /></label><div className="field-grid"><label>Type<select aria-label="Type" name="kind" defaultValue={editing ? (kinds.includes(editing.kind) ? editing.kind : customKindValue) : kinds[0]} onChange={event => setCustomEntityKind(event.target.value === customKindValue)}>{kinds.map(value => <option key={value}>{value}</option>)}<option value={customKindValue}>Custom type…</option></select>{customEntityKind && <input name="custom_kind" defaultValue={editing?.kind} required autoFocus placeholder="e.g. SaaS application" />}</label><label>Node color<input name="color" className="color-input" type="color" defaultValue={editing?.color || entityVisual(editing?.kind || kinds[0]).border} /></label></div><label>Description <span className="optional">optional</span><textarea name="description" defaultValue={editing?.description} rows={3} placeholder="What is known about this entity?" /></label></>}
+          {(kind === 'entity' || kind === 'entity-edit') && <><label>Name<input name="name" defaultValue={editing?.name} autoFocus required placeholder="e.g. Web server 01" /></label><div className="field-grid"><label>Type<select aria-label="Type" name="kind" defaultValue={editing ? (kinds.includes(editing.kind) ? editing.kind : customKindValue) : kinds[0]} onChange={event => setCustomEntityKind(event.target.value === customKindValue)}>{kinds.map(value => <option key={value}>{value}</option>)}<option value={customKindValue}>Custom type…</option></select>{customEntityKind && <input name="custom_kind" defaultValue={editing?.kind} required autoFocus placeholder="e.g. SaaS application" />}</label></div><ColorField data={data} initial={editing?.color || entityVisual(editing?.kind || kinds[0]).border} /><label>Description <span className="optional">optional</span><textarea name="description" defaultValue={editing?.description} rows={3} placeholder="What is known about this entity?" /></label></>}
           {kind === 'entity-merge' && selection?.kind === 'entity' && <><div className="modal-context">Merge <strong>{nameOf(data, selection.id)}</strong> into another entity. Its identifiers, relationships and evidence are retained.</div><label>Keep entity<select name="target_id" required autoFocus defaultValue=""><option value="" disabled>Choose target entity</option>{data.entities.filter(item => item.id !== selection.id).map(item => <option key={item.id} value={item.id}>{item.name} · {item.kind}</option>)}</select></label><div className="form-warning">The selected source entity will disappear. Use Undo if you change your mind.</div></>}
           {kind === 'source' && <><label>Title<input name="title" autoFocus required placeholder="e.g. EDR export from Sep 27" /></label><label>URL or reference <span className="optional">optional</span><input name="uri" placeholder="https://… or file path" /></label><label>Source classification<select name="source_kind"><option value="unknown">Unclassified</option><option value="primary">Primary evidence</option><option value="secondary">Secondary context</option></select></label><label>KQL query <span className="optional">optional</span><textarea name="query" rows={2} className="mono" /></label><label>Original excerpt / results <span className="optional">optional</span><textarea name="excerpt" rows={4} className="mono" placeholder="Relevant passage from the source" /></label></>}
           {kind === 'identifier' && <><div className="modal-context">Entity: <strong>{selection?.kind === 'entity' ? nameOf(data, selection.id) : ''}</strong></div><div className="field-grid"><label>Scheme<select name="scheme">{schemes.map(value => <option key={value}>{value}</option>)}</select></label><label>Namespace <span className="optional">optional</span><input name="namespace" placeholder="e.g. prod" /></label></div><label>Value<input name="raw_value" autoFocus required placeholder="External identifier" /></label>{dateFields}{sourceSelect}{confidenceField}</>}
@@ -653,6 +672,43 @@ function WelcomeDialog({ current, onSave, onLearnMore }: { current: string; onSa
   </div>
 }
 
+const initials = (name: string) => name.trim().split(/\s+/).slice(0, 2).map(part => [...part][0] ?? '').join('').toUpperCase() || '?'
+const personHue = (id: string) => { let hash = 0; for (const c of id) hash = (hash * 31 + c.charCodeAt(0)) | 0; return Math.abs(hash) % 360 }
+function PersonAvatar({ id, name, self }: { id: string; name: string; self?: boolean }) {
+  return <span className={`person-avatar${self ? ' self' : ''}`} style={{ '--hue': personHue(id) } as CSSProperties} aria-hidden="true">{initials(name)}</span>
+}
+
+/** Who is on this board right now (browsers connected to the relay) and who changed it recently (including agents). */
+function PresenceMenu({ connected, self, peers, actions, onRename }: { connected: boolean; self: { id: string; name: string }; peers: { id: string; name: string }[]; actions: { author: string; at: string }[]; onRename: () => void }) {
+  const sorted = [...peers].sort((a, b) => a.name.localeCompare(b.name))
+  const online = new Set([self.name, ...peers.map(p => p.name)])
+  const recent = new Map<string, string>()
+  const since = Date.now() - 30 * 60_000
+  for (let i = actions.length - 1; i >= 0 && recent.size < 8; i--) {
+    const action = actions[i]
+    if (Date.parse(action.at) < since) break
+    if (action.author && !online.has(action.author) && !recent.has(action.author)) recent.set(action.author, action.at)
+  }
+  const ago = (at: string) => { const minutes = Math.max(0, Math.round((Date.now() - Date.parse(at)) / 60_000)); return minutes < 1 ? 'just now' : `${minutes} min ago` }
+  const shown = sorted.slice(0, 3)
+  const trigger = <>
+    <span className="connection-dot" />
+    {connected && <span className="avatar-stack">{shown.map(p => <PersonAvatar key={p.id} id={p.id} name={p.name} />)}{sorted.length > shown.length && <span className="person-avatar more">+{sorted.length - shown.length}</span>}</span>}
+    <span className="presence-text">{connected ? `${peers.length + 1} online` : 'Offline'}</span>
+  </>
+  return <Menu label={connected ? `${peers.length + 1} online` : 'Offline'} className={`presence-menu presence ${connected ? 'online' : 'offline'}`} trigger={trigger}>
+    <div className="menu-label">{connected ? 'On this board now' : 'Relay offline'}</div>
+    {!connected && <p className="menu-note">Changes stay in this browser and sync when the connection returns.</p>}
+    <div className="menu-scroll presence-list">
+      <button onClick={onRename} title="Change your display name"><PersonAvatar id={self.id} name={self.name} self /><span className="menu-board-name">{self.name}</span><small>you</small></button>
+      {connected && sorted.map(p => <div key={p.id} className="presence-row"><PersonAvatar id={p.id} name={p.name} /><span className="menu-board-name">{p.name}</span></div>)}
+      {connected && !sorted.length && <p className="menu-note">Nobody else is connected. Share the board link to work together.</p>}
+    </div>
+    {recent.size > 0 && <><div className="menu-sep" /><div className="menu-label">Recent changes by</div>
+      {[...recent].map(([name, at]) => <div key={name} className="presence-row muted"><PersonAvatar id={name} name={name} /><span className="menu-board-name">{name}</span><small>{ago(at)}</small></div>)}</>}
+  </Menu>
+}
+
 function Menu({ label, trigger, children, className = '', align = 'left' }: { label: string; trigger: ReactNode; children: ReactNode; className?: string; align?: 'left' | 'right' }) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
@@ -972,8 +1028,7 @@ export default function App() {
           <div className="menu-sep" />
           <button className="menu-footer" onClick={() => setShowHelp('data')}><HardDrive size={14} /><span>Stored only in this browser</span><small>v{__APP_VERSION__}</small></button>
         </Menu>
-        <span className={`presence ${board.connected ? 'online' : 'offline'}`} title={board.connected ? `Relay connected${board.peers.length ? ` · ${board.peers.map(p => p.name).join(', ')}` : ''}` : 'Relay offline: changes stay in this browser and sync when the connection returns.'}>
-          <span className="connection-dot" /><span className="presence-text">{board.connected ? `${board.peers.length + 1} online` : 'Offline'}</span></span>
+        <PresenceMenu connected={board.connected} self={{ id: board.actor, name: board.name }} peers={board.peers} actions={board.actions} onRename={renameSelf} />
       </div>
       <nav className="view-tabs" role="tablist" aria-label="Board views">
         {tabs.map(tab => <button key={tab.id} role="tab" aria-label={tab.label} aria-selected={activeTab === tab.id} className={activeTab === tab.id ? 'active' : ''} onClick={() => setActiveTab(tab.id)} title={tab.label}>

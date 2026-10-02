@@ -49,9 +49,9 @@ Workflow
 Editing: update tools change only the fields you pass; explicit null clears nullable fields. Pass expected_revision for sources and evidence; HTTP 409 means someone changed it — re-read and retry. undo reverts your session's last change batch. Content changes reset affected reviews.
 Tool profile: this server shows a compact agent tool set by default; with FACTGRAPH_MCP_TOOLS=full it exposes one rest_<operation> tool per REST endpoint instead.
 """
-mcp = FastMCP("FactGraph Browser Boards", version="0.4.6", instructions=MCP_INSTRUCTIONS)
+mcp = FastMCP("FactGraph Browser Boards", version="0.4.7", instructions=MCP_INSTRUCTIONS)
 mcp_app = mcp.http_app(path="/")
-app = FastAPI(title="FactGraph API", version="0.4.6", lifespan=mcp_app.lifespan)
+app = FastAPI(title="FactGraph API", version="0.4.7", lifespan=mcp_app.lifespan)
 
 
 @dataclass

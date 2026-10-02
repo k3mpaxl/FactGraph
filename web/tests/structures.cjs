@@ -2,7 +2,7 @@ const assert = require('node:assert/strict')
 const path = require('node:path').resolve(process.argv[2])
 const { project, sortActions } = require(path + '/board.js')
 const { validateDrafts } = require(path + '/validation.js')
-const { buildViewModel, groupSuggestions } = require(path + '/viewModel.js')
+const { buildViewModel, groupSuggestions, groupToggleDrafts, groupShiftDrafts } = require(path + '/viewModel.js')
 const { layerOf } = require(path + '/layers.js')
 
 let clock = 0
@@ -136,5 +136,16 @@ const view = (data, options = {}) => buildViewModel(data.entities, data.facts, d
   assert.equal(data.views.length, 0)
   assert.throws(() => validateDrafts(data, [{ type: 'entity.update', payload: { id: 'x', layer: 'moon' } }]), /Unknown layer/)
   assert.throws(() => validateDrafts(data, [{ type: 'group.add', payload: { id: 'g', name: 'G', members: ['missing'] } }]), /does not exist/)
+}
+// Groups keep their place: expanding moves members to the card, collapsing puts the card on the members.
+{
+  const entities = [{ id: 'a', position: { x: 0, y: 0 } }, { id: 'b', position: { x: 100, y: 200 } }, { id: 'c', position: { x: 900, y: 900 } }]
+  const group = { id: 'g', member_ids: ['a', 'b'], rule: null, collapsed: true, position: { x: 550, y: 300 } }
+  const expand = groupToggleDrafts(group, entities, false)
+  assert.deepEqual(expand.map(d => d.payload), [{ id: 'a', x: 500, y: 200 }, { id: 'b', x: 600, y: 400 }, { id: 'g', collapsed: false }])
+  assert.deepEqual(groupToggleDrafts({ ...group, position: { x: 50, y: 100 } }, entities, false).map(d => d.type), ['group.update'])
+  assert.deepEqual(groupToggleDrafts({ ...group, collapsed: false }, entities, true)[0].payload, { id: 'g', collapsed: true, x: 50, y: 100 })
+  assert.deepEqual(groupToggleDrafts({ ...group, rule: { container_id: 'c' } }, entities, false).map(d => d.type), ['group.update'])
+  assert.deepEqual(groupShiftDrafts(group, entities, 10, -5).map(d => d.payload), [{ id: 'a', x: 10, y: -5 }, { id: 'b', x: 110, y: 195 }])
 }
 console.log('Activities, layers, groups with exclusions, containers, suggestions and merge-safe sync convergence passed')

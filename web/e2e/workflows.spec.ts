@@ -26,6 +26,9 @@ test('analyst + agent: primary evidence, review, REST/MCP null patches, sync, de
   const {id,token,call,graph}=await setup(page,request)
   const second=await browser.newContext({storageState:'e2e/storage.json'});const peer=await second.newPage();await peer.goto(`/boards/${id}`)
   await expect(page.getByText('2 online',{exact:true})).toBeVisible()
+  await page.getByRole('button',{name:'2 online'}).click()
+  await expect(page.locator('.presence-list .presence-row')).toHaveText(/Test analyst/)
+  await page.keyboard.press('Escape')
   const a=(await call('POST','/entities',{name:'Source device',kind:'Device',x:60,y:100})).id
   const b=(await mcp(token,'create_entity',{board_id:id,body:{name:'Repository file',kind:'File',x:550,y:100}})).id
   const source=(await mcp(token,'create_source',{board_id:id,body:{title:'Access logs',uri:'repo/log.json@abc123',source_kind:'primary',excerpt:'[{"EventId":"42","Action":"ReadFile"}]',query:'AccessLogs | where EventId == "42"'}})).id
@@ -109,7 +112,8 @@ test('canvas: palette, connect handles, inline rename, edit color/type, grouped 
   await page.getByRole('button',{name:'Edit name, type & color'}).click()
   const dialog=page.getByRole('dialog',{name:'Edit entity'})
   await dialog.getByLabel('Type',{exact:true}).selectOption('User')
-  await dialog.getByLabel('Node color').fill('#cc44aa')
+  await dialog.getByLabel('Custom color').fill('#cc44aa')
+  await expect(dialog.getByRole('button',{name:'Color #3b82f6'})).toBeVisible()
   await dialog.getByRole('button',{name:/Save/}).click()
   expect((await graph()).entities.find((e:any)=>e.id===a)).toMatchObject({kind:'User',color:'#cc44aa'})
   const custom=(await call('POST','/types',{name:'Custom resource',color:'#abcdef'})).id
@@ -499,4 +503,37 @@ test('trackpad: two-finger scroll pans, pinch zooms, mouse wheel still zooms',as
   await page.waitForTimeout(400)
   await page.mouse.move(700,500);await page.mouse.wheel(0,300)
   await expect.poll(async()=>(await viewport()).zoom).toBeLessThan(pinched.zoom)
+})
+
+test('groups keep their place: drag collapsed card, expand, drag the expanded frame',async({page,request})=>{
+  const {call,graph}=await setup(page,request)
+  const members=[] as string[]
+  for(let i=0;i<3;i++) members.push((await call('POST','/entities',{name:`c2-node-${i}`,kind:'IP',x:0,y:i*100})).id)
+  const group=(await call('POST','/groups',{name:'C2 infrastructure',members,collapsed:true})).id
+  await page.getByRole('button',{name:'fit view'}).click()
+  const card=page.locator('.group-node')
+  await expect(card).toHaveCount(1)
+  const centre=(list:any[])=>({x:list.reduce((s,e)=>s+e.position.x,0)/list.length,y:list.reduce((s,e)=>s+e.position.y,0)/list.length})
+  const before=centre((await graph()).entities)
+  const box=(await card.boundingBox())!
+  await page.mouse.move(box.x+box.width/2,box.y+box.height/2);await page.mouse.down()
+  await page.mouse.move(box.x+box.width/2+120,box.y+box.height/2+60,{steps:8});await page.mouse.up()
+  await expect.poll(async()=>(await graph()).groups[0].position?.x??0).toBeGreaterThan(before.x+40)
+  await page.locator('.group-node').click({button:'right'})
+  await page.getByRole('button',{name:'Expand group'}).click()
+  await expect(page.locator('.frame-node.group')).toHaveCount(1)
+  const target=(await graph()).groups[0].position
+  await expect.poll(async()=>Math.round(centre((await graph()).entities).x-target.x)).toBe(0)
+  // Drag the expanded group by its header: all members move along.
+  const expanded=centre((await graph()).entities)
+  const head=(await page.locator('.frame-node.group .frame-head span').boundingBox())!
+  await page.mouse.move(head.x+head.width/2,head.y+head.height/2);await page.mouse.down()
+  await page.mouse.move(head.x+head.width/2+150,head.y+head.height/2,{steps:8});await page.mouse.up()
+  await expect.poll(async()=>centre((await graph()).entities).x-expanded.x).toBeGreaterThan(60)
+  const moved=(await graph()).entities.map((e:any)=>e.position.y-expanded.y)
+  expect(new Set(moved.map((y:number)=>Math.round(y))).size).toBe(3)
+  // Collapsing puts the card where the members are now.
+  await page.locator('.frame-node.group .frame-head button').click()
+  await expect.poll(async()=>Math.round((await graph()).groups[0].position.x-centre((await graph()).entities).x)).toBe(0)
+  expect(group).toBeTruthy()
 })

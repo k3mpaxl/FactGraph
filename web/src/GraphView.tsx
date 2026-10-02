@@ -18,7 +18,7 @@ const MIN_ZOOM = 0.05
 const MAX_ZOOM = 2.5
 import { entityVisual } from './entityVisual'
 import { LAYERS, layerOf } from './layers'
-import { buildViewModel, groupSuggestions, activityNodeId, groupNodeId, edgeGeometry, edgeOffsets, edgeWidth, NODE_H, NODE_W, type NodeBox, type VNode } from './viewModel'
+import { buildViewModel, groupShiftDrafts, groupToggleDrafts, groupSuggestions, activityNodeId, groupNodeId, edgeGeometry, edgeOffsets, edgeWidth, NODE_H, NODE_W, type NodeBox, type VNode } from './viewModel'
 import { uuid } from './uuid'
 
 export type Selection = { kind: 'entity' | 'fact' | 'group'; id: string } | null
@@ -242,7 +242,7 @@ function Canvas(props: Props) {
   handlers.current = {
     rename: (id, name) => { void run([{ type: 'entity.update', payload: { id, name } }]).catch(() => {}) },
     cancelSelect,
-    toggleGroup: (groupId, collapsed) => { void run([{ type: 'group.update', payload: { id: groupId, collapsed } }]).then(() => { if (!collapsed) pendingFocus.current = groupId }).catch(() => {}) },
+    toggleGroup: (groupId, collapsed) => { const group = groups.find(g => g.id === groupId); if (!group) return; void run(groupToggleDrafts(group, entities, collapsed)).then(() => { if (!collapsed) pendingFocus.current = groupId }).catch(() => {}) },
   }
 
   const typeByName = useMemo(() => new Map(entityTypes.map(t => [t.name, t])), [entityTypes])
@@ -311,7 +311,8 @@ function Canvas(props: Props) {
         const sameData = old && old.type === (v.kind === 'group' ? 'bundle' : v.kind) && Object.keys(data).every(k => k === 'v' ? sameV(old.data.v, v) : (old.data as Record<string, unknown>)[k] === (data as Record<string, unknown>)[k])
         if (old && sameData && old.selected === selected && old.position.x === base.position.x && old.position.y === base.position.y) return old
         return { ...base, type: v.kind === 'group' ? 'bundle' : v.kind, data: sameData ? old!.data : data,
-          draggable: v.kind === 'frame' ? false : v.kind === 'entity' ? !v.entity.pinned : true,
+          draggable: v.kind === 'frame' ? v.tone === 'group' : v.kind === 'entity' ? !v.entity.pinned : true,
+          ...(v.kind === 'frame' && v.tone === 'group' ? { dragHandle: '.frame-head' } : {}),
           selectable: v.kind !== 'frame', zIndex: v.kind === 'frame' ? -1 : undefined, ...(v.kind === 'frame' ? { width: v.width, height: v.height } : {}) } as Node<AnyData>
       })
     })
@@ -521,6 +522,28 @@ function Canvas(props: Props) {
       setPopover(null)
     } catch (e) { setError(e instanceof Error ? e.message : String(e)) } finally { setExporting(false) }
   }
+  // Dragging an expanded group's frame moves its members along; members follow live while dragging.
+  const frameDrag = useRef<{ id: string; start: XYPosition; members: Map<string, XYPosition> } | null>(null)
+  const frameGroup = (node: Node<AnyData>) => node.type === 'frame' ? groups.find(g => `frame:${g.id}` === node.id) : undefined
+  const startFrameDrag = (node: Node<AnyData>) => {
+    const group = frameGroup(node)
+    if (!group) { frameDrag.current = null; return }
+    const ids = new Set(group.member_ids)
+    frameDrag.current = { id: node.id, start: { ...node.position }, members: new Map(flow.getNodes().filter(n => ids.has(n.id)).map(n => [n.id, { ...n.position }])) }
+  }
+  const dragFrame = (node: Node<AnyData>) => {
+    const drag = frameDrag.current
+    if (!drag || drag.id !== node.id) return
+    const dx = node.position.x - drag.start.x, dy = node.position.y - drag.start.y
+    setNodes(current => current.map(n => { const p = drag.members.get(n.id); return p ? { ...n, position: { x: p.x + dx, y: p.y + dy } } : n }))
+  }
+  const frameDrafts = (moved: Node<AnyData>[]): ActionDraft[] => moved.flatMap(n => {
+    const group = frameGroup(n), drag = frameDrag.current
+    if (!group || !drag || drag.id !== n.id) return []
+    let dx = n.position.x - drag.start.x, dy = n.position.y - drag.start.y
+    if (grid) { const snapped = snapPosition({ x: dx, y: dy }); dx = snapped.x; dy = snapped.y }
+    return dx || dy ? groupShiftDrafts(group, entities, dx, dy) : []
+  })
   const moveDrafts = (moved: Node<AnyData>[]): ActionDraft[] => moved.filter(n => n.type !== 'frame').map(n => {
     const position = grid ? snapPosition(n.position) : n.position
     if (n.type === 'bundle') return { type: 'group.update', payload: { id: n.id.slice(6), ...position } }
@@ -565,7 +588,8 @@ function Canvas(props: Props) {
         setDraft({ source: state.fromNode.id, position: flow.screenToFlowPosition({ x: point.clientX, y: point.clientY }), kind: 'Device', name: '', predicate: '' })
       }}
       onReconnect={(edge, c) => { if (confirmedFacts.has(edge.id)) { setError('Confirmed relationships cannot be reconnected. Retract or unconfirm the evidence first, or create a new relationship.'); return } if (entities.some(e => e.id === c.source) && entities.some(e => e.id === c.target)) void run([{ type: 'fact.update', payload: { id: edge.id, subject_id: c.source, object_id: c.target } }]).catch(() => {}) }}
-      onNodeDragStop={(_, node, moved) => { void run(moveDrafts(moved.length ? moved : [node])).catch(() => {}) }}
+      onNodeDragStart={(_, node) => startFrameDrag(node)} onNodeDrag={(_, node) => dragFrame(node)}
+      onNodeDragStop={(_, node, moved) => { const all = moved.length ? moved : [node]; const drafts = [...frameDrafts(all), ...moveDrafts(all)]; frameDrag.current = null; if (drafts.length) void run(drafts).catch(() => {}) }}
       onNodeContextMenu={(e, n) => {
         e.preventDefault()
         if (n.type === 'entity') { onSelect({ kind: 'entity', id: n.id }); setMenu({ id: n.id, kind: 'entity', x: e.clientX, y: e.clientY }) }

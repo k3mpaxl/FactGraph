@@ -288,8 +288,8 @@ Die Browser-Tests laufen mit temporären Boards auf Port 18088 und einem echten 
 - **Publish Docker image** baut bei einem Versionstag (`v*.*.*`) oder per **Run workflow** das Image für `linux/amd64` und `linux/arm64` und veröffentlicht es als `latest` und mit Versionsnummer. Voraussetzung sind die Repository-Secrets `DOCKERHUB_USERNAME` und `DOCKERHUB_TOKEN` (Docker-Hub-Access-Token mit Schreibrecht).
 
 ```bash
-git tag v0.4.6
-git push origin v0.4.6
+git tag v0.4.7
+git push origin v0.4.7
 ```
 
 Ein manueller Multi-Arch-Build ist mit `./deploy/publish-multiarch.sh` möglich (`FACTGRAPH_IMAGE` und `FACTGRAPH_VERSION` überschreiben Namespace und Version).

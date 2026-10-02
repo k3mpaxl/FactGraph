@@ -241,3 +241,29 @@ export function edgeOffsets(edges: Pick<VEdge, 'id' | 'source' | 'target'>[]) {
   })
   return offsets
 }
+
+/**
+ * Actions for collapsing or expanding a group. The collapsed card and the expanded members share one place:
+ * expanding moves the members so their centre lands where the card was (it may have been dragged or arranged),
+ * collapsing puts the card at the members' centre.
+ */
+export function groupToggleDrafts(group: Group, entities: Entity[], collapsed: boolean) {
+  // Container contents have no card of their own, so there is no place to keep in sync.
+  if (group.rule?.container_id) return [{ type: 'group.update' as const, payload: { id: group.id, collapsed } }]
+  const members = new Set(group.member_ids)
+  const placed = entities.filter(e => members.has(e.id) && e.position)
+  const centre = centroid(placed.map(e => e.position!))
+  const round = (p: Point) => ({ x: Math.round(p.x), y: Math.round(p.y) })
+  if (collapsed) return [{ type: 'group.update' as const, payload: { id: group.id, collapsed, ...(placed.length ? round(centre) : {}) } }]
+  const dx = group.position && placed.length ? group.position.x - centre.x : 0
+  const dy = group.position && placed.length ? group.position.y - centre.y : 0
+  const moves = Math.hypot(dx, dy) < 1 ? [] : placed.map(e => ({ type: 'entity.position' as const, payload: { id: e.id, ...round({ x: e.position!.x + dx, y: e.position!.y + dy }) } }))
+  return [...moves, { type: 'group.update' as const, payload: { id: group.id, collapsed } }]
+}
+
+/** Moves all placed members of an expanded group by the given offset (dragging the group frame). */
+export function groupShiftDrafts(group: Group, entities: Entity[], dx: number, dy: number) {
+  const members = new Set(group.member_ids)
+  return entities.filter(e => members.has(e.id) && e.position)
+    .map(e => ({ type: 'entity.position' as const, payload: { id: e.id, x: Math.round(e.position!.x + dx), y: Math.round(e.position!.y + dy) } }))
+}

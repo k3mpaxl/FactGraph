@@ -3,6 +3,7 @@ import { ArrowLeft, ArrowRight, Boxes, ChevronDown, ChevronRight, CornerDownLeft
 import type { ActionDraft } from './board'
 import type { Fact, GraphData, Group, Participant } from './types'
 import { uuid } from './uuid'
+import { groupToggleDrafts } from './viewModel'
 
 export const ROLES = ['actor', 'identity', 'source', 'tool', 'via', 'target', 'other']
 export const roleHint: Record<string, string> = {
@@ -57,7 +58,7 @@ export function GroupInspector({ data, group, onCommand, onSelect, onFocus, onCl
       <div className="inspector-title"><span className="entity-avatar lg group-avatar"><Boxes size={18} /></span><div><h2>{group.name}</h2>
         <span className="kind-label">{group.member_ids.length} members · {container ? `inside ${container.name}` : group.rule ? 'rule-based' : 'manual'}{group.collapsed ? ' · collapsed' : ''}</span></div></div>
       <div className="inspector-actions">
-        <button className="primary-button small" onClick={() => { const expand = group.collapsed; void onCommand([{ type: 'group.update', payload: { id: group.id, collapsed: !expand } }]).then(() => onFocus(group.id)).catch(() => {}) }}>{group.collapsed ? 'Expand' : 'Collapse'}</button>
+        <button className="primary-button small" onClick={() => { const expand = group.collapsed; void onCommand(groupToggleDrafts(group, data.entities, !expand)).then(() => onFocus(group.id)).catch(() => {}) }}>{group.collapsed ? 'Expand' : 'Collapse'}</button>
         <button className="secondary-button small" onClick={() => { const name = window.prompt('Group name', group.name); if (name?.trim()) run([{ type: 'group.update', payload: { id: group.id, name: name.trim() } }]) }}><Pencil size={14} /> Rename</button>
         <button className="secondary-button small icon-only" title="Center in graph" aria-label="Center group" onClick={() => onFocus(group.id)}><Crosshair size={14} /></button>
       </div>

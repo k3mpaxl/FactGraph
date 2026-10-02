@@ -89,6 +89,15 @@ label { display: flex; flex-direction: column; gap: 5px; font-size: 12px; font-w
 input::placeholder, textarea::placeholder { color: var(--text-3) }
 input[type=file] { font-size: 12px; color: var(--text-2); padding: 8px; border: 1px dashed var(--border-strong); border-radius: var(--radius); background: var(--surface-2) }
 input[type=checkbox] { accent-color: var(--accent); margin: 0 }
+.color-field { display: grid; gap: 6px }
+.color-swatches { display: flex; flex-wrap: wrap; gap: 6px; align-items: center }
+.color-swatch, .color-custom { width: 24px; height: 24px; border-radius: 50%; border: 2px solid var(--surface); box-shadow: 0 0 0 1px var(--border-strong); cursor: pointer; flex-shrink: 0 }
+.color-swatch { background: var(--swatch); padding: 0 }
+.color-swatch:hover { transform: scale(1.1) }
+.color-swatch.active, .color-custom.active { box-shadow: 0 0 0 2px var(--text) }
+.color-custom { position: relative; overflow: hidden; background: conic-gradient(#ef4444, #eab308, #22c55e, #14b8a6, #3b82f6, #8b5cf6, #ec4899, #ef4444) }
+.color-custom input { position: absolute; inset: -4px; opacity: 0; cursor: pointer; width: calc(100% + 8px); height: calc(100% + 8px) }
+.color-used-label { font-size: 11px; color: var(--text-3) }
 .color-input { width: 100%; height: 34px; padding: 3px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); cursor: pointer }
 .field-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px }
 .check { flex-direction: row; align-items: center; gap: 6px; font-weight: 500; white-space: nowrap; cursor: pointer }
@@ -120,6 +129,19 @@ input[type=checkbox] { accent-color: var(--accent); margin: 0 }
 .connection-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--bad); flex: none }
 .presence.online .connection-dot { background: var(--ok); box-shadow: 0 0 0 3px var(--ok-soft) }
 .presence.offline { color: var(--bad) }
+.presence-menu .menu-trigger { display: inline-flex; align-items: center; gap: 6px; padding: 3px 6px; border-radius: 999px; color: inherit; font-size: 12px; cursor: pointer }
+.presence-menu .menu-trigger:hover, .presence-menu .menu-trigger.open { background: var(--surface-2, var(--accent-soft)) }
+.avatar-stack { display: inline-flex }
+.avatar-stack:empty { display: none }
+.avatar-stack .person-avatar { margin-left: -5px; box-shadow: 0 0 0 2px var(--surface) }
+.avatar-stack .person-avatar:first-child { margin-left: 0 }
+.person-avatar { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; flex: none; font-size: 9px; font-weight: 700; letter-spacing: .02em; color: #fff; background: hsl(var(--hue, 220) 55% 50%) }
+.person-avatar.self { outline: 2px solid var(--accent); outline-offset: 1px }
+.person-avatar.more { background: var(--text-3) }
+.presence-row { display: flex; align-items: center; gap: 8px; padding: 6px 10px; font-size: 13px; color: var(--text) }
+.presence-row.muted { color: var(--text-2) }
+.presence-row small, .presence-list button small { margin-left: auto; color: var(--text-3); font-size: 11px }
+.menu-note { margin: 4px 10px 8px; font-size: 12px; color: var(--text-3); max-width: 240px; white-space: normal }
 .view-tabs { display: flex; align-items: center; gap: 2px; padding: 2px; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius); flex: none }
 .view-tabs button { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px; border-radius: 6px; color: var(--text-2); font-weight: 550; white-space: nowrap; transition: background .12s, color .12s }
 .view-tabs button:hover { color: var(--text) }
@@ -605,6 +627,9 @@ button.node-chip:hover { color: var(--accent); border-color: var(--accent) }
 .frame-node.lane { border: 0; border-radius: 20px; background: color-mix(in srgb, var(--text) 3.5%, transparent) }
 .frame-head { position: absolute; top: 6px; left: 10px; display: flex; align-items: center; gap: 6px; pointer-events: all; font-size: 11.5px; font-weight: 650; color: var(--accent); letter-spacing: .01em }
 .frame-node.lane .frame-head { color: var(--text-3); text-transform: uppercase; letter-spacing: .08em; font-size: 11px; top: 10px; left: 14px }
+.frame-node.group .frame-head { cursor: grab; padding: 2px 8px 2px 2px; border-radius: 7px }
+.frame-node.group .frame-head:hover { background: var(--accent-soft) }
+.react-flow__node-frame.dragging .frame-head { cursor: grabbing }
 .frame-head button { display: grid; place-items: center; width: 18px; height: 18px; border-radius: 5px; color: var(--accent); background: var(--accent-soft) }
 .react-flow__node-frame { pointer-events: none !important }
 .fg-edge.spoke { stroke-width: 1.2 }

@@ -200,15 +200,18 @@ export function useBoard(boardId: string) {
     const connect = () => {
       if (cancelled) return
       const scheme = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-      websocket = new WebSocket(`${scheme}//${window.location.host}/ws/boards/${boardId}?actor=${actor}&name=${encodeURIComponent(nameRef.current)}&token=${encodeURIComponent(sessionToken)}`)
-      socketRef.current = websocket
-      websocket.onopen = () => {
+      // Identity and token go in the first message, not the URL, so they never appear in access logs.
+      const socket = new WebSocket(`${scheme}//${window.location.host}/ws/boards/${boardId}`)
+      websocket = socket
+      socketRef.current = socket
+      socket.onopen = () => {
         if (cancelled) return
+        socket.send(JSON.stringify({ type: 'hello', actor, name: nameRef.current, token: sessionToken }))
         setConnected(true)
         sendActions(actionsRef.current)
         send({ type: 'sync-request' })
       }
-      websocket.onmessage = event => {
+      socket.onmessage = event => {
         let message: Record<string, unknown>
         try { message = JSON.parse(event.data) as Record<string, unknown> } catch { return }
         if (message.type === 'welcome' && Array.isArray(message.peers)) {
@@ -262,7 +265,7 @@ export function useBoard(boardId: string) {
           })()
         }
       }
-      websocket.onclose = () => {
+      socket.onclose = () => {
         if (cancelled) return
         setConnected(false)
         setPeers([])

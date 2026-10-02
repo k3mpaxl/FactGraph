@@ -10,6 +10,8 @@ services:
     environment:
       # agent = compact MCP tool set (default), full = one rest_* tool per REST operation
       FACTGRAPH_MCP_TOOLS: ${FACTGRAPH_MCP_TOOLS:-agent}
+      # extra browser origins allowed to join the relay, comma-separated (pages served by FactGraph are always allowed)
+      FACTGRAPH_ALLOWED_ORIGINS: ${FACTGRAPH_ALLOWED_ORIGINS:-}
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/api/health', timeout=3).read()"]

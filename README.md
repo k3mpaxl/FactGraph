@@ -13,6 +13,7 @@ FactGraph is built for exactly that:
 - **Link sources that are not linked.** Every source keeps its original records. FactGraph puts their entities and events into one graph, so you can trace the path across tools: the IP from the EDR beacon is the same IP that signed in as the service principal and listed the vault's secrets.
 - **Follow the attack through time.** Every relationship and event carries the time span the evidence shows. The timeline and the evidence time window replay the attack step by step.
 - **Keep claims and proof apart.** A line in the graph is a claim. It becomes *supported* only when someone has checked confirmed primary evidence against the original record. Hypotheses stay visible as hypotheses.
+- **Ready when your own infrastructure is not.** During a large-scale compromise you cannot trust the ticket system, the wiki or the chat of the affected environment. FactGraph is a single stateless container: spin it up out-of-band in minutes (for example as an Azure Web App in a separate, clean subscription), use it with minimal resources, and delete it afterwards. There is no database to provision, secure or wipe.
 - **Agent-native.** Attackers already use AI to move faster. Defenders need tools that AI can accelerate too. In FactGraph, agents are first-class: they query logs, add entities, relationships and evidence through MCP or REST, and analysts see the results immediately in the same graph, review them against the source and confirm or refute them.
 
 The result is a shared, traceable picture of the incident instead of findings scattered across chats, tickets and spreadsheets.
@@ -69,7 +70,77 @@ Every board URL contains a UUID (`/boards/<uuid>`). The **board menu** (top left
 FACTGRAPH_BIND_IP=0.0.0.0 docker compose -f deploy/compose.yaml up -d
 ```
 
-> **Security:** there is no authentication. Anyone who can reach the server and knows a board link can read and change that board. Run FactGraph only on trusted networks or behind an authenticating proxy.
+> **Security:** there is no user login. Anyone who can reach the server *and* knows a board link can read and change that board. Restrict network access (see [Security by default](#security-by-default) and [Azure App Service](#deploying-on-azure-app-service)).
+
+### Configuration
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `FACTGRAPH_MCP_TOOLS` | `agent` | `agent` = compact MCP tool set, `full` = one `rest_*` tool per REST operation |
+| `FACTGRAPH_ALLOWED_ORIGINS` | *(empty)* | Extra browser origins allowed to join the relay, comma-separated (e.g. a dev server). Pages served by FactGraph itself are always allowed. |
+| `FACTGRAPH_BIND_IP` | `127.0.0.1` | Compose only: host interface the port is published on |
+
+## Security by default
+
+FactGraph is meant to be spun up during an incident, often in a hurry and sometimes while the regular infrastructure is compromised. The defaults are therefore as strict as possible without configuration:
+
+**Nothing at rest on the server**
+- The server keeps no board data, no history and no files, only the list of browsers currently connected. A seized or compromised server reveals no investigation content; when the incident is over, delete the container or the app.
+- The server makes no outbound connections and runs no queries. The UI loads nothing from third parties.
+
+**Access**
+- The board ID in the URL is a random UUID (122 bits) and acts as the board's access key. Treat a board link like a password and share it only through a trusted channel.
+- REST and MCP need the **session token** of a browser tab that has the board open. Tokens are random per tab, only valid while that tab is connected, accepted **only in the `X-FactGraph-Token` header** (never in URLs, so they do not end up in proxy or platform logs) and compared in constant time.
+- The WebSocket relay accepts browsers only from pages served by FactGraph itself (Origin check against cross-site WebSocket hijacking). Identity and token are sent in the first message, not in the connection URL.
+
+**Browser hardening (HTTP headers)**
+- `Content-Security-Policy`: only the app's own scripts, styles, images and connections; no third-party content, no inline scripts (the one tiny theme script is allowed by hash), no framing (`frame-ancestors 'none'`), no plugins.
+- `Referrer-Policy: no-referrer`: following a link in evidence never leaks the board URL to another site.
+- `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Cross-Origin-Opener-Policy` and `Cross-Origin-Resource-Policy: same-origin`, a restrictive `Permissions-Policy`.
+- `Strict-Transport-Security` when served over HTTPS (also behind a TLS-terminating proxy), `Cache-Control: no-store` for API responses.
+- The Swagger UI under `/docs` loads its assets from a CDN and is therefore exempt from the CSP; it contains no board data.
+
+**Container**
+- Runs as an unprivileged user (UID 10001) on a slim Python image.
+- No access log (request URLs contain board IDs) and no server banner.
+- Single port 8080, plain HTTP; TLS is terminated in front (Azure App Service, Caddy, nginx, Traefik, an ingress). The browser automatically uses `wss://` for the relay when the page is served over HTTPS.
+
+**What it does not do**
+- There is no user authentication. Anyone with network access and a board link has full access to that board, so restrict network access to the response team.
+- Board data lives in the analysts' browsers (IndexedDB). Use trusted devices, and remember that exported JSON files contain the full investigation.
+- A session token proves that a browser tab has the board open, not that a human reviewed something. Technically enforced human approval would require separate permissions.
+
+## Deploying on Azure App Service
+
+Azure App Service takes care of the certificate and TLS, scales down to a small plan and can be restricted to the responders' IP addresses. For a compromised environment, deploy into a **separate, clean subscription or tenant**, not into the affected one.
+
+```bash
+RG=rg-factgraph
+APP=factgraph-ir-$RANDOM            # becomes https://$APP.azurewebsites.net
+az group create -n $RG -l westeurope
+az appservice plan create -g $RG -n plan-factgraph --is-linux --sku B1
+az webapp create -g $RG -p plan-factgraph -n $APP --container-image-name docker.io/k3mpaxl/factgraph:latest
+az webapp config appsettings set -g $RG -n $APP --settings WEBSITES_PORT=8080
+az webapp config set -g $RG -n $APP --web-sockets-enabled true --always-on true \
+  --min-tls-version 1.2 --ftps-state Disabled --http20-enabled true
+az webapp update -g $RG -n $APP --https-only true
+```
+
+Restrict access to the response team (adding an allow rule denies everything else):
+
+```bash
+az webapp config access-restriction add -g $RG -n $APP --rule-name responders \
+  --action Allow --ip-address 198.51.100.0/24 --priority 100
+```
+
+Notes:
+
+- **Exactly one instance.** The relay keeps the list of connected browsers in memory; with several instances, analysts on different instances would not see each other. Do not scale out.
+- **Web sockets must be on**, otherwise the board stays offline. **Always On** prevents the app from idling and dropping connections.
+- Prefer a pinned version (`k3mpaxl/factgraph:0.4.9`) over `latest` during an incident, so a restart never changes the version.
+- App Service **HTTP logging** is off by default. If you enable it, it records request URLs, which contain board IDs.
+- **App Service Authentication** (Entra ID sign-in) can be put in front of the UI. Agents and scripts then also need an Entra token, and if the incident involves your own tenant, an identity provider you cannot trust is no protection. IP access restrictions are often the better choice there.
+- When the incident is closed: export the boards as JSON, then `az group delete -n $RG`. Nothing remains on the server side.
 
 ## Working in the graph
 
@@ -288,7 +359,6 @@ curl -s -X POST "http://127.0.0.1:8080/api/boards/$BOARD/export" \
 - Group membership changes are incremental, so concurrent edits by two analysts are both kept.
 - **Undo** (`Cmd/Ctrl+Z`) reverts your own last group of actions (an import counts as one group) and refuses if someone else has changed the same records in the meantime. The **Activity** view lists all actions with channel (UI, REST, MCP), author and time.
 - If no browser has the board open, a new device cannot restore it from the UUID alone; import a JSON export instead. Without an export, boards are lost when the browser data is cleared.
-- The session token does not prove that a human reviewed something. Technically enforced human approval would require separate permissions.
 
 ## Development and tests
 
@@ -315,8 +385,8 @@ cd web && npm run build && DOCS_SCREENSHOTS=1 npx playwright test e2e/docs-scree
 - **Publish Docker image** builds the image for `linux/amd64` and `linux/arm64` on a version tag (`v*.*.*`) or via **Run workflow**, and publishes it as `latest` and with the version number. It requires the repository secrets `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` (a Docker Hub access token with write permission).
 
 ```bash
-git tag v0.4.8
-git push origin v0.4.8
+git tag v0.4.9
+git push origin v0.4.9
 ```
 
 A manual multi-arch build is possible with `./deploy/publish-multiarch.sh` (`FACTGRAPH_IMAGE` and `FACTGRAPH_VERSION` override namespace and version).

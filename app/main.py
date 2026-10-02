@@ -9,9 +9,12 @@ from __future__ import annotations
 import asyncio
 import csv
 import contextvars
+import json
+import os
 import secrets
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlsplit
 from uuid import UUID
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
@@ -49,9 +52,9 @@ Workflow
 Editing: update tools change only the fields you pass; explicit null clears nullable fields. Pass expected_revision for sources and evidence; HTTP 409 means someone changed it — re-read and retry. undo reverts your session's last change batch. Content changes reset affected reviews.
 Tool profile: this server shows a compact agent tool set by default; with FACTGRAPH_MCP_TOOLS=full it exposes one rest_<operation> tool per REST endpoint instead.
 """
-mcp = FastMCP("FactGraph Browser Boards", version="0.4.8", instructions=MCP_INSTRUCTIONS)
+mcp = FastMCP("FactGraph Browser Boards", version="0.4.9", instructions=MCP_INSTRUCTIONS)
 mcp_app = mcp.http_app(path="/")
-app = FastAPI(title="FactGraph API", version="0.4.8", lifespan=mcp_app.lifespan)
+app = FastAPI(title="FactGraph API", version="0.4.9", lifespan=mcp_app.lifespan)
 
 
 @dataclass
@@ -69,19 +72,70 @@ request_token: contextvars.ContextVar[str | None] = contextvars.ContextVar("fact
 request_channel: contextvars.ContextVar[str] = contextvars.ContextVar("factgraph_request_channel", default="REST")
 
 
+def token_matches(expected: str | None, given: str) -> bool:
+    return bool(expected) and secrets.compare_digest(expected.encode(), given.encode())
+
+
+# The board UUID in the URL is the access key: never leak it via Referer, framing or third-party content.
+# Swagger UI (/docs) loads its assets from a CDN and keeps FastAPI's defaults.
+CSP = ("default-src 'self'; script-src 'self' 'sha256-{theme}'; style-src 'self' 'unsafe-inline'; "
+       "img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:; "
+       "object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
+SECURITY_HEADERS = {
+    "Referrer-Policy": "no-referrer",
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Cross-Origin-Opener-Policy": "same-origin",
+    "Cross-Origin-Resource-Policy": "same-origin",
+    "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
+}
+
+
+def inline_script_hash() -> str:
+    """CSP hash of the small theme script in index.html, so scripts need no 'unsafe-inline'."""
+    import base64
+    import hashlib
+    import re
+    try:
+        html = (WEB_DIR / "index.html").read_text(encoding="utf-8")
+    except OSError:
+        return ""
+    match = re.search(r"<script>(.*?)</script>", html, re.S)
+    return base64.b64encode(hashlib.sha256(match.group(1).encode()).digest()).decode() if match else ""
+
+
+CONTENT_SECURITY_POLICY = CSP.format(theme=inline_script_hash())
+
+
+async def security_headers(request: Request, call_next):
+    response = await call_next(request)
+    for name, value in SECURITY_HEADERS.items():
+        response.headers.setdefault(name, value)
+    path = request.url.path
+    if not (path.startswith("/docs") or path.startswith("/redoc")):
+        response.headers.setdefault("Content-Security-Policy", CONTENT_SECURITY_POLICY)
+    if path.startswith("/api/") or path.startswith("/mcp"):
+        response.headers.setdefault("Cache-Control", "no-store")
+    # Behind a TLS-terminating proxy (Azure App Service, Caddy, nginx) the original scheme arrives here.
+    if request.headers.get("x-forwarded-proto", request.url.scheme).split(",")[0].strip() == "https":
+        response.headers.setdefault("Strict-Transport-Security", "max-age=31536000")
+    return response
+
+
 @app.middleware("http")
 async def require_board_token(request: Request, call_next):
     """Bind every REST board request to a token from an open browser session."""
     path = request.url.path
     if path.startswith("/api/boards/"):
         board_id = path.removeprefix("/api/boards/").split("/", 1)[0]
-        token = request.headers.get("X-FactGraph-Token") or request.query_params.get("token")
+        # Header only: tokens in URLs end up in proxy and platform access logs.
+        token = request.headers.get("X-FactGraph-Token")
         if not token:
             return JSONResponse({"detail": "X-FactGraph-Token is required"}, status_code=401)
         if not valid_uuid(board_id):
             return await call_next(request)
         async with rooms_lock:
-            authorized = any(peer.session_token == token for peer in rooms.get(str(UUID(board_id)), {}).values())
+            authorized = any(token_matches(peer.session_token, token) for peer in rooms.get(str(UUID(board_id)), {}).values())
         if not authorized:
             return JSONResponse({"detail": "Token is not connected to this open board"}, status_code=403)
         token_context = request_token.set(token)
@@ -100,6 +154,21 @@ async def require_board_token(request: Request, call_next):
             request_token.reset(token_context)
             request_channel.reset(channel_context)
     return await call_next(request)
+
+
+app.middleware("http")(security_headers)
+
+
+def allowed_origin(websocket: WebSocket) -> bool:
+    """Browsers always send Origin; only pages served by this host may join the relay (no cross-site WebSocket hijacking).
+    Clients without Origin (scripts, tests) still need the board UUID. FACTGRAPH_ALLOWED_ORIGINS adds origins, e.g. a dev server."""
+    origin = websocket.headers.get("origin")
+    if not origin:
+        return True
+    hosts = {websocket.headers.get("host", "")}
+    hosts.update(h.strip() for h in websocket.headers.get("x-forwarded-host", "").split(",") if h.strip())
+    extra = {o.strip().rstrip("/") for o in os.environ.get("FACTGRAPH_ALLOWED_ORIGINS", "").split(",") if o.strip()}
+    return urlsplit(origin).netloc in hosts or origin.rstrip("/") in extra
 
 
 def valid_uuid(value: str) -> bool:
@@ -136,7 +205,7 @@ async def browser_command(board_id: str, operation: str, **values) -> dict:
         if not room:
             raise HTTPException(409, "Board offline: open the board URL in a browser first")
         if session_token:
-            matching = [(actor, peer) for actor, peer in room.items() if peer.session_token == session_token]
+            matching = [(actor, peer) for actor, peer in room.items() if token_matches(peer.session_token, session_token)]
             if not matching:
                 raise HTTPException(403, "Token is not connected to this open board")
             actor, peer = matching[0]
@@ -490,15 +559,24 @@ async def run_mcp_session(session_token: str | None, operation):
 
 @app.websocket("/ws/boards/{board_id}")
 async def board_socket(websocket: WebSocket, board_id: str):
-    actor = websocket.query_params.get("actor", "")
-    name = websocket.query_params.get("name", "Guest").strip()[:40] or "Guest"
-    session_token = websocket.query_params.get("token", "").strip() or None
-    if not valid_uuid(board_id) or not valid_uuid(actor):
+    if not valid_uuid(board_id) or not allowed_origin(websocket):
         await websocket.close(code=1008)
         return
+    await websocket.accept()
+    # Identity and token arrive in the first message, never in the URL, so they stay out of access logs.
+    try:
+        hello = json.loads(await asyncio.wait_for(websocket.receive_text(), timeout=10))
+    except (asyncio.TimeoutError, ValueError, WebSocketDisconnect, RuntimeError):
+        await websocket.close(code=1008)
+        return
+    actor = str(hello.get("actor", "")) if isinstance(hello, dict) and hello.get("type") == "hello" else ""
+    if not valid_uuid(actor):
+        await websocket.close(code=1008)
+        return
+    name = str(hello.get("name", "Guest")).strip()[:40] or "Guest"
+    session_token = str(hello.get("token", "")).strip()[:200] or None
 
     board_id = str(UUID(board_id))
-    await websocket.accept()
     async with rooms_lock:
         room = rooms.setdefault(board_id, {})
         previous = room.get(actor)

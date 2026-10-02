@@ -23,7 +23,7 @@ def entity_actions(name: str, kind: str = "Sonstiges", description: str = "",
                    entity_id: str | None = None) -> tuple[str, list[dict]]:
     name = name.strip()
     if not name:
-        raise ValueError("Der Entitätsname darf nicht leer sein")
+        raise ValueError("Entity name must not be empty")
     entity_id = entity_id or str(uuid4())
     return entity_id, [action("entity.add", {"id": entity_id, "name": name,
         "kind": kind.strip() or "Sonstiges", "description": description.strip()})]
@@ -34,11 +34,11 @@ def relation_actions(subject_id: str, predicate: str, object_id: str,
                      stance: str = "supports", confidence: float = 1,
                      valid_from: str | None = None, valid_to: str | None = None, relation_id: str | None = None) -> tuple[str, list[dict]]:
     if not subject_id or not object_id or subject_id == object_id:
-        raise ValueError("Die Beziehung braucht zwei verschiedene Entitäts-IDs")
+        raise ValueError("A relationship needs two different entity IDs")
     if not predicate.strip():
-        raise ValueError("Die Beziehung braucht einen Bezeichner")
+        raise ValueError("A relationship needs a predicate")
     if stance not in {"supports", "refutes"} or not 0 <= confidence <= 1:
-        raise ValueError("Ungültige Aussage oder Konfidenz")
+        raise ValueError("Invalid stance or confidence")
     relation_id = relation_id or str(uuid4())
     drafts = [action("fact.add", {"id": relation_id, "subject_id": subject_id,
         "predicate": predicate.strip(), "object_id": object_id,
@@ -68,7 +68,7 @@ def parse_rows(content: bytes, filename: str) -> list[dict]:
     else:
         rows = list(csv.DictReader(io.StringIO(text)))
     if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
-        raise ValueError("Erwartet wurde CSV, JSON-Array oder JSONL mit Objekt-Zeilen")
+        raise ValueError("Expected CSV, a JSON array or JSONL with object rows")
     return rows
 
 
@@ -76,12 +76,12 @@ def _field(rows: list[dict], explicit: str | None, candidates: tuple[str, ...], 
     keys = set().union(*(row.keys() for row in rows)) if rows else set()
     if explicit:
         if explicit not in keys:
-            raise ValueError(f"Spalte {explicit!r} fehlt. Vorhanden: {', '.join(sorted(keys))}")
+            raise ValueError(f"Column {explicit!r} is missing. Available: {', '.join(sorted(keys))}")
         return explicit
     for candidate in candidates:
         if candidate in keys:
             return candidate
-    raise ValueError(f"Keine {label}-Spalte erkannt. Vorhanden: {', '.join(sorted(keys))}")
+    raise ValueError(f"No {label} column detected. Available: {', '.join(sorted(keys))}")
 
 
 def _stable(board_id: str, *parts: str) -> str:
@@ -92,21 +92,21 @@ def rows_to_actions(board_id: str, rows: list[dict], *, title: str,
                     query: str = "", subject_field: str | None = None,
                     object_field: str | None = None, predicate: str = "accessed",
                     predicate_field: str | None = None,
-                    subject_kind: str = "IP", object_kind: str = "Datei",
+                    subject_kind: str = "IP", object_kind: str = "File",
                     existing_entities: dict[tuple[str, str], str] | None = None,
                     existing_facts: dict[tuple[str, str, str], str] | None = None,
                     existing_sources: set[str] | None = None) -> tuple[list[dict], dict]:
     if not rows:
-        raise ValueError("Die Datei enthält keine Ergebniszeilen")
+        raise ValueError("The file contains no result rows")
     if len(rows) > 50_000:
-        raise ValueError("Maximal 50.000 Zeilen pro Import")
-    subject_field = _field(rows, subject_field, SUBJECT_FIELDS, "Quell")
-    object_field = _field(rows, object_field, OBJECT_FIELDS, "Ziel")
+        raise ValueError("At most 50,000 rows per import")
+    subject_field = _field(rows, subject_field, SUBJECT_FIELDS, "source")
+    object_field = _field(rows, object_field, OBJECT_FIELDS, "target")
     if predicate_field:
-        predicate_field = _field(rows, predicate_field, (), "Beziehungs")
+        predicate_field = _field(rows, predicate_field, (), "predicate")
     predicate = predicate.strip()
     if not predicate:
-        raise ValueError("Der Kantenbezeichner darf nicht leer sein")
+        raise ValueError("The predicate must not be empty")
 
     canonical_rows = json.dumps(rows, sort_keys=True, ensure_ascii=False, default=str)
     digest = hashlib.sha256((title + "\n" + query + "\n" + canonical_rows).encode()).hexdigest()
@@ -176,17 +176,17 @@ def activity_rows_to_actions(board_id: str, rows: list[dict], *, title: str, rol
     own timestamp as the evidence period, so the timeline still shows every single occurrence.
     """
     if not rows:
-        raise ValueError("Die Datei enthält keine Ergebniszeilen")
+        raise ValueError("The file contains no result rows")
     if len(rows) > 50_000:
-        raise ValueError("Maximal 50.000 Zeilen pro Import")
+        raise ValueError("At most 50,000 rows per import")
     if len(roles) < 2:
-        raise ValueError("Mindestens zwei Spalten mit Rollen angeben")
+        raise ValueError("Map at least two columns to roles")
     keys = set().union(*(row.keys() for row in rows))
     for mapping in roles:
         if mapping["field"] not in keys:
-            raise ValueError(f"Spalte {mapping['field']!r} fehlt. Vorhanden: {', '.join(sorted(keys))}")
+            raise ValueError(f"Column {mapping['field']!r} is missing. Available: {', '.join(sorted(keys))}")
     if operation_field and operation_field not in keys:
-        raise ValueError(f"Spalte {operation_field!r} fehlt. Vorhanden: {', '.join(sorted(keys))}")
+        raise ValueError(f"Column {operation_field!r} is missing. Available: {', '.join(sorted(keys))}")
     canonical_rows = json.dumps(rows, sort_keys=True, ensure_ascii=False, default=str)
     digest = hashlib.sha256((title + "\n" + query + "\n" + json.dumps(roles, sort_keys=True) + "\n" + canonical_rows).encode()).hexdigest()
     source_id = _stable(board_id, "import", digest)

@@ -498,10 +498,10 @@ export function demoDrafts(): ActionDraft[] {
 }
 
 export function legacyDrafts(value: unknown): ActionDraft[] {
-  if (!value || typeof value !== 'object') throw new Error('Ungültige JSON-Datei')
+  if (!value || typeof value !== 'object') throw new Error('Invalid JSON file')
   const graph = value as Partial<GraphData>
   if (!Array.isArray(graph.entities) || !Array.isArray(graph.facts) || !Array.isArray(graph.sources))
-    throw new Error('Keine FactGraph-Exportdatei')
+    throw new Error('Not a FactGraph export file')
   const drafts: ActionDraft[] = (graph.entity_types ?? []).map(type => ({type: 'type.add', payload: {...type}, author: 'Import'}))
   for (const source of graph.sources) drafts.push({ type: 'source.add', payload: { ...source }, author: 'Import' })
   for (const entity of graph.entities) drafts.push({ type: 'entity.add', payload: {

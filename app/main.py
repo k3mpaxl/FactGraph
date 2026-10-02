@@ -126,7 +126,7 @@ async def browser_command(board_id: str, operation: str, **values) -> dict:
     from uuid import uuid4
 
     if not valid_uuid(board_id):
-        raise HTTPException(422, "Ungültige Board-UUID")
+        raise HTTPException(422, "Invalid board UUID")
     board_id = str(UUID(board_id))
     session_token = values.pop("session_token", None) or request_token.get()
     request_id = str(uuid4())
@@ -134,7 +134,7 @@ async def browser_command(board_id: str, operation: str, **values) -> dict:
     async with rooms_lock:
         room = rooms.get(board_id, {})
         if not room:
-            raise HTTPException(409, "Board offline: zuerst die Board-URL in einem Browser öffnen")
+            raise HTTPException(409, "Board offline: open the board URL in a browser first")
         if session_token:
             matching = [(actor, peer) for actor, peer in room.items() if peer.session_token == session_token]
             if not matching:
@@ -153,9 +153,9 @@ async def browser_command(board_id: str, operation: str, **values) -> dict:
             raise HTTPException(409 if 'changed.' in error or 'revision' in error else 422, error)
         return result
     except asyncio.TimeoutError as error:
-        raise HTTPException(504, "Browser hat den Auftrag nicht bestätigt") from error
+        raise HTTPException(504, "The browser did not confirm the request") from error
     except (RuntimeError, WebSocketDisconnect) as error:
-        raise HTTPException(503, "Browser-Verbindung unterbrochen") from error
+        raise HTTPException(503, "Browser connection lost") from error
     finally:
         pending.pop(request_id, None)
 
@@ -189,7 +189,7 @@ async def apply_drafts(board_id: str, drafts: list[dict]) -> int:
 
 async def import_rows(board_id: str, data: RowsInput) -> dict:
     if not valid_uuid(board_id):
-        raise HTTPException(422, "Ungültige Board-UUID")
+        raise HTTPException(422, "Invalid board UUID")
     index = (await browser_command(board_id, "index"))["index"]
     entity_index = {(item["kind"].casefold(), item["name"].casefold()): item["id"]
                     for item in index["entities"]}
@@ -219,7 +219,7 @@ def health():
 @app.get("/api/boards/{board_id}/status")
 async def board_status(board_id: str):
     if not valid_uuid(board_id):
-        raise HTTPException(422, "Ungültige Board-UUID")
+        raise HTTPException(422, "Invalid board UUID")
     async with rooms_lock:
         peers = len(rooms.get(str(UUID(board_id)), {}))
     return {"board_id": board_id, "online_browsers": peers,
@@ -254,12 +254,12 @@ async def create_entity(board_id: str, body: EntityInput):
 async def update_entity(board_id: str, entity_id: str, body: EntityUpdate):
     index = (await browser_command(board_id, "index"))["index"]
     if entity_id not in {entity["id"] for entity in index["entities"]}:
-        raise HTTPException(404, "Entität existiert im Board nicht")
+        raise HTTPException(404, "Entity does not exist on this board")
     values = body.model_dump(exclude_unset=True)
     if not values:
         raise HTTPException(422, "At least one entity field is required")
     if any(not isinstance(values[key], str) or not values[key].strip() for key in ("name", "kind") if key in values):
-        raise HTTPException(422, "Name und Typ dürfen nicht leer sein")
+        raise HTTPException(422, "Name and type must not be empty")
     accepted = await apply_drafts(board_id, [action("entity.update", {"id": entity_id, **values})])
     return {"board_id": str(UUID(board_id)), "id": entity_id, "accepted_actions": accepted}
 
@@ -322,9 +322,9 @@ async def create_relation(board_id: str, body: RelationInput):
     index = (await browser_command(board_id, "index"))["index"]
     ids = {entity["id"] for entity in index["entities"]}
     if body.subject_id not in ids or body.object_id not in ids:
-        raise HTTPException(422, "Quell- oder Zielentität existiert im Board nicht")
+        raise HTTPException(422, "Source or target entity does not exist on this board")
     if body.source_id and body.source_id not in {source["id"] for source in index["sources"]}:
-        raise HTTPException(422, "Quelle existiert im Board nicht")
+        raise HTTPException(422, "Source does not exist on this board")
     existing = next((f for f in index['facts'] if not f.get('activity') and f['subject_id'] == body.subject_id and f['object_id'] == body.object_id and f['predicate'].strip().casefold() == body.predicate.strip().casefold() and f.get('valid_from') == body.valid_from and f.get('valid_to') == body.valid_to), None)
     if existing:
         relation_id = existing['id']
@@ -377,11 +377,11 @@ async def create_evidence(board_id: str, relation_id: str, body: EvidenceInput):
     from uuid import uuid4
     index = (await browser_command(board_id, "index"))["index"]
     if relation_id not in {fact["id"] for fact in index["facts"]}:
-        raise HTTPException(422, "Beziehung existiert im Board nicht")
+        raise HTTPException(422, "Relationship does not exist on this board")
     if body.source_id and body.source_id not in {source["id"] for source in index["sources"]}:
-        raise HTTPException(422, "Quelle existiert im Board nicht")
+        raise HTTPException(422, "Source does not exist on this board")
     if body.stance not in {"supports", "refutes"}:
-        raise HTTPException(422, "Aussage muss supports oder refutes sein")
+        raise HTTPException(422, "Stance must be supports or refutes")
     evidence_id = body.id or str(uuid4())
     accepted = await apply_drafts(board_id, [action("assertion.add", {
         "id": evidence_id, "fact_id": relation_id, "stance": body.stance,
@@ -423,7 +423,7 @@ async def delete_evidence(board_id: str, relation_id: str, evidence_id: str):
 @app.post("/api/boards/{board_id}/actions")
 async def create_actions(board_id: str, body: ActionBatch):
     if len(body.actions) > 50_000:
-        raise HTTPException(413, "Maximal 50.000 Aktionen pro Anfrage")
+        raise HTTPException(413, "At most 50,000 actions per request")
     drafts = [action(item.type, item.payload, action_id=item.id,
                      author=item.author) for item in body.actions]
     return {"accepted_actions": await apply_drafts(board_id, drafts)}
@@ -432,7 +432,7 @@ async def create_actions(board_id: str, body: ActionBatch):
 @app.post("/api/boards/{board_id}/imports/kql")
 async def import_kql(board_id: str, body: RowsInput):
     if not body.query.strip():
-        raise HTTPException(422, "KQL-Text fehlt")
+        raise HTTPException(422, "KQL text is missing")
     return await import_rows(board_id, body)
 
 
@@ -443,14 +443,14 @@ async def import_activity(board_id: str, body: RowsInput):
 
 @app.post("/api/boards/{board_id}/imports/file")
 async def import_file(board_id: str, file: UploadFile = File(...),
-                      title: str = Form("Aktivitätslogs"), query: str = Form(""), dry_run: bool = Form(False),
+                      title: str = Form("Activity logs"), query: str = Form(""), dry_run: bool = Form(False),
                       subject_field: str = Form(""), object_field: str = Form(""),
                       predicate: str = Form("accessed"), predicate_field: str = Form(""),
                       subject_kind: str = Form("IP"),
-                      object_kind: str = Form("Datei"), roles: str = Form("")):
+                      object_kind: str = Form("File"), roles: str = Form("")):
     content = await file.read(20_000_001)
     if len(content) > 20_000_000:
-        raise HTTPException(413, "Datei größer als 20 MB")
+        raise HTTPException(413, "File is larger than 20 MB")
     try:
         rows = parse_rows(content, file.filename or "")
     except (UnicodeError, ValueError, csv.Error) as error:
@@ -491,7 +491,7 @@ async def run_mcp_session(session_token: str | None, operation):
 @app.websocket("/ws/boards/{board_id}")
 async def board_socket(websocket: WebSocket, board_id: str):
     actor = websocket.query_params.get("actor", "")
-    name = websocket.query_params.get("name", "Gast").strip()[:40] or "Gast"
+    name = websocket.query_params.get("name", "Guest").strip()[:40] or "Guest"
     session_token = websocket.query_params.get("token", "").strip() or None
     if not valid_uuid(board_id) or not valid_uuid(actor):
         await websocket.close(code=1008)
@@ -553,7 +553,7 @@ async def board_socket(websocket: WebSocket, board_id: str):
         if removed:
             for request_id, (writer, future) in list(pending.items()):
                 if writer is websocket and not future.done():
-                    future.set_result({"ok": False, "error": "Browser-Verbindung unterbrochen"})
+                    future.set_result({"ok": False, "error": "Browser connection lost"})
             await send_to_room(board_id, {"type": "peer-left", "id": actor})
 
 
@@ -571,7 +571,7 @@ if WEB_DIR.is_dir():
         if requested.is_file() and requested.is_relative_to(WEB_DIR.resolve()):
             return FileResponse(requested)
         if path == "api" or path.startswith("api/"):
-            raise HTTPException(404, "Unbekannter API-Endpunkt; siehe /docs")
+            raise HTTPException(404, "Unknown API endpoint; see /docs")
         return FileResponse(WEB_DIR / "index.html")
 
 

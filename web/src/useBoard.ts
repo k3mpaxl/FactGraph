@@ -228,7 +228,7 @@ export function useBoard(boardId: string) {
           const requestId = message.requestId
           void (async () => {
             try {
-              if (message.boardId !== undefined && message.boardId !== boardId) throw new Error('Falsches Zielboard')
+              if (message.boardId !== undefined && message.boardId !== boardId) throw new Error('Wrong target board')
               await mergeQueue.current
               if (message.operation === 'history') {
                 send({ type: 'api-result', requestId, ok: true, actions: actionsRef.current })
@@ -255,7 +255,7 @@ export function useBoard(boardId: string) {
                          message.drafts.length <= 200 && message.drafts.every(isDraft)) {
                 const accepted = await emitMany(message.drafts, message.deferRender === true)
                 send({ type: 'api-result', requestId, ok: true, accepted })
-              } else send({ type: 'api-result', requestId, ok: false, error: 'Ungültiger API-Auftrag' })
+              } else send({ type: 'api-result', requestId, ok: false, error: 'Invalid API request' })
             } catch (error) {
               send({ type: 'api-result', requestId, ok: false, error: String(error) })
             }
@@ -284,7 +284,7 @@ export function useBoard(boardId: string) {
         setReady(true)
         connect()
       } catch (error) {
-        if (!cancelled) setStorageError(`Browser-Speicher nicht verfügbar: ${String(error)}`)
+        if (!cancelled) setStorageError(`Browser storage unavailable: ${String(error)}`)
       }
     })()
     return () => {

@@ -35,7 +35,7 @@ class IngestTest(unittest.TestCase):
         board, ip_id, file_id, fact_id = (str(uuid4()) for _ in range(4))
         drafts, _ = rows_to_actions(board, [{"IPAddress": "10.0.0.8", "FilePath": "repo/.env"}],
             title="Access Logs", existing_entities={("ip", "10.0.0.8"): ip_id,
-            ("datei", "repo/.env"): file_id},
+            ("file", "repo/.env"): file_id},
             existing_facts={(ip_id, "accessed", file_id): fact_id})
         self.assertEqual([item["type"] for item in drafts], ["source.add", "assertion.add"])
         self.assertEqual(drafts[1]["payload"]["fact_id"], fact_id)
@@ -80,5 +80,5 @@ class ActivityIngestTest(unittest.TestCase):
 
     def test_missing_role_column_is_reported(self):
         from app.ingest import activity_rows_to_actions
-        with self.assertRaisesRegex(ValueError, "fehlt"):
+        with self.assertRaisesRegex(ValueError, "missing"):
             activity_rows_to_actions(str(uuid4()), [{"a": 1}], title="x", roles=self.ROLES)

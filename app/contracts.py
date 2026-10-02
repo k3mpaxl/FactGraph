@@ -89,14 +89,14 @@ class ActionBatch(StrictModel):
 class RowsInput(StrictModel):
     dry_run: bool = False
     rows: list[dict]
-    title: str = "Aktivitätslogs"
+    title: str = "Activity logs"
     query: str = ""
     subject_field: str | None = None
     object_field: str | None = None
     predicate: str = "accessed"
     predicate_field: str | None = None
     subject_kind: str = "IP"
-    object_kind: str = "Datei"
+    object_kind: str = "File"
 
 class EntityUpdate(StrictModel):
     pinned: bool | None = None

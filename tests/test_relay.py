@@ -39,7 +39,7 @@ class RelayTest(unittest.IsolatedAsyncioTestCase):
             except Exception:
                 time.sleep(0.05)
         cls.process.terminate()
-        raise RuntimeError("Test-Relay konnte nicht gestartet werden")
+        raise RuntimeError("Test relay could not be started")
 
     @classmethod
     def tearDownClass(cls):

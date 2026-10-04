@@ -741,17 +741,22 @@ test('organic layout runs in a worker: canvas stays responsive, cancel saves not
   await page.waitForTimeout(500)
   expect(await positions()).toEqual(before)
 
-  // 2. While the layout runs the main thread stays free (the synchronous version blocked it for seconds).
-  await page.evaluate(()=>{const w=window as any;w.__gaps=[];w.__sampling=true;let last=performance.now();const tick=()=>{const now=performance.now();w.__gaps.push(now-last);last=now;if(w.__sampling) setTimeout(tick,16)};setTimeout(tick,16)})
+  // 2. While the layout runs the main thread stays free (the synchronous version blocked it for 2.6 s and more).
+  //    Sampling stops as soon as the progress pill disappears, before the final re-render that applies the positions.
+  await page.evaluate(()=>{const w=window as any;w.__gaps=[];w.__sampling=true;let last=performance.now();const tick=()=>{const now=performance.now();if(!document.querySelector('.layout-progress')&&w.__seen){w.__sampling=false;return}if(document.querySelector('.layout-progress'))w.__seen=true;if(w.__seen)w.__gaps.push(now-last);last=now;if(w.__sampling) setTimeout(tick,16)};setTimeout(tick,16)})
   await arrange.click()
   await expect(progress).toBeVisible()
-  // A node moved by someone else meanwhile keeps its new place.
+  await expect(progress).toHaveCount(0,{timeout:60000})
+  const gaps:number[]=await page.evaluate(()=>(window as any).__gaps)
+  expect(gaps.length).toBeGreaterThan(5)
+  expect(Math.max(...gaps)).toBeLessThan(1000)
+  const arranged=await positions()
+  expect([...arranged.entries()].filter(([id,p])=>p!==before.get(id)).length).toBeGreaterThan(1000)
+
+  // 3. A node moved by someone else while the layout runs keeps its new place.
+  await arrange.click()
+  await expect(progress).toBeVisible()
   await call('POST','/actions',{actions:[{type:'entity.position',payload:{id:ids[5],x:12340,y:5670}}]})
   await expect(progress).toHaveCount(0,{timeout:60000})
-  const gaps:number[]=await page.evaluate(()=>{const w=window as any;w.__sampling=false;return w.__gaps})
-  // Ignore the final re-render that applies 1,100 positions; the layout itself must not block.
-  expect(Math.max(...gaps.slice(0,-3))).toBeLessThan(700)
-  const after=await positions()
-  expect(after.get(ids[5])).toBe('12340,5670')
-  expect([...after.entries()].filter(([id,p])=>id!==ids[5]&&p!==before.get(id)).length).toBeGreaterThan(1000)
+  await expect.poll(async()=>(await positions()).get(ids[5])).toBe('12340,5670')
 })

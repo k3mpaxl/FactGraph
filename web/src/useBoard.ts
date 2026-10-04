@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { type ActionDraft, type BoardAction, isAction, isDraft, project, sortActions, undoneActions } from './board'
 import { listBoards, loadActions, saveActions, touchBoard, type BoardMeta } from './store'
 import { placeNew } from './layout'
+import { actionChunks, messageParts, queryRecords } from './query'
 import { uuid } from './uuid'
 import { validateDrafts } from './validation'
 import { buildViewModel } from './viewModel'
@@ -95,11 +96,18 @@ export function useBoard(boardId: string, listener?: ChangeListener) {
   }, [])
 
   const sendActions = useCallback((items: BoardAction[], target?: string, deferRender = false) => {
-    for (let index = 0; index < items.length; index += 100)
-      send({ type: 'actions', actions: items.slice(index, index + 100),
-        deferRender: deferRender || index + 100 < items.length,
-        ...(target ? { target } : {}) })
+    // By count and by size: a few actions with large source excerpts must not form one message above the relay limit.
+    const chunks = actionChunks(items)
+    chunks.forEach((chunk, index) => send({ type: 'actions', actions: chunk,
+      deferRender: deferRender || index < chunks.length - 1,
+      ...(target ? { target } : {}) }))
   }, [send])
+  // Replies to REST/MCP commands; large ones go in parts that the server reassembles.
+  const reply = useCallback((requestId: string, payload: Record<string, unknown>) => {
+    const socket = socketRef.current
+    if (socket?.readyState !== WebSocket.OPEN) return
+    for (const part of messageParts(requestId, payload)) socket.send(part)
+  }, [])
 
   const merge = useCallback((incoming: unknown[], deferRender = false): Promise<number> => {
     const work = mergeQueue.current.then(async () => {
@@ -239,21 +247,28 @@ export function useBoard(boardId: string, listener?: ChangeListener) {
               if (message.boardId !== undefined && message.boardId !== boardId) throw new Error('Wrong target board')
               await mergeQueue.current
               if (message.operation === 'history') {
-                send({ type: 'api-result', requestId, ok: true, actions: actionsRef.current })
+                const all = actionsRef.current
+                const offset = Math.max(0, Number(message.offset ?? 0)), limit = message.limit === undefined ? all.length : Math.max(1, Number(message.limit))
+                reply(requestId, { ok: true, actions: all.slice(offset, offset + limit), total: all.length })
               } else if (message.operation === 'undo' || message.operation === 'redo') {
                 const changed = await (message.operation === 'undo' ? undo() : redo())
-                send({ type: 'api-result', requestId, ok: true, changed })
+                reply(requestId, { ok: true, changed })
               } else if (message.operation === 'export') {
-                send({ type: 'api-result', requestId, ok: true, export: await renderExport(projectCached(actionsRef.current), (message.options ?? {}) as Record<string, unknown>) })
+                reply(requestId, { ok: true, export: await renderExport(projectCached(actionsRef.current), (message.options ?? {}) as Record<string, unknown>) })
               } else if (message.operation === 'snapshot') {
                 const snapshot = projectCached(actionsRef.current)
-                send({ type: 'api-result', requestId, ok: true, graph: {
+                reply(requestId, { ok: true, graph: {
                   board_id: boardId, name: snapshot.name, ...snapshot.data,
                   action_count: actionsRef.current.length, revision: actionsRef.current.at(-1)?.id ?? null,
                 } })
+              } else if (message.operation === 'query') {
+                const result = queryRecords(projectCached(actionsRef.current).data, { collection: String(message.collection ?? ''),
+                  q: typeof message.q === 'string' ? message.q : '', offset: Number(message.offset ?? 0), limit: Number(message.limit ?? 100),
+                  id: typeof message.id === 'string' ? message.id : undefined })
+                reply(requestId, { ok: true, ...result, revision: actionsRef.current.at(-1)?.id ?? null })
               } else if (message.operation === 'index') {
                 const snapshot = projectCached(actionsRef.current).data
-                send({ type: 'api-result', requestId, ok: true, index: {
+                reply(requestId, { ok: true, index: {
                   entities: snapshot.entities.map(({ id, kind, name, identifiers }) => ({ id, kind, name,
                     identifiers: identifiers.map(({ scheme, namespace, normalized_value }) => ({ scheme, namespace, normalized_value })) })),
                   facts: snapshot.facts.map(({ id, subject_id, predicate, object_id, valid_from, valid_to, participants }) =>
@@ -263,10 +278,10 @@ export function useBoard(boardId: string, listener?: ChangeListener) {
               } else if (message.operation === 'apply' && Array.isArray(message.drafts) &&
                          message.drafts.length <= 200 && message.drafts.every(isDraft)) {
                 const accepted = await emitMany(message.drafts, message.deferRender === true)
-                send({ type: 'api-result', requestId, ok: true, accepted })
-              } else send({ type: 'api-result', requestId, ok: false, error: 'Invalid API request' })
+                reply(requestId, { ok: true, accepted })
+              } else reply(requestId, { ok: false, error: 'Invalid API request' })
             } catch (error) {
-              send({ type: 'api-result', requestId, ok: false, error: String(error) })
+              reply(requestId, { ok: false, error: String(error) })
             }
           })()
         }
@@ -303,7 +318,7 @@ export function useBoard(boardId: string, listener?: ChangeListener) {
       websocket?.close()
       socketRef.current = null
     }
-  }, [actor, boardId, emitMany, merge, projectCached, send, sendActions, sessionToken, undo, redo])
+  }, [actor, boardId, emitMany, merge, projectCached, reply, send, sendActions, sessionToken, undo, redo])
 
   return { actor, name, setName, actions, boards, peers, ready, connected, storageError,
     boardName: projection.name, data: projection.data, emit, emitMany, undo, redo, importActions, sessionToken }

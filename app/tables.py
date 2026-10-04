@@ -131,6 +131,24 @@ class Part:
     lower: bool = False
     name: Callable[[Row, Callable], str] | None = None
     kind_of: Callable[[str], str] | None = None
+    # Files and processes: the column with the full path or folder, and the device it is on. Without a hash, the
+    # entity is identified by device and path, never by its file name alone.
+    path: tuple[str, ...] = ()
+    scope: tuple[str, ...] = ()
+
+
+SCOPED_KINDS = ("File", "Process")
+DEVICE_SCOPE = ("DeviceName", "Computer", "DvcHostname", "DstHostname", "TargetHostname", "SrcHostname", "DeviceId")
+
+
+def full_path(folder: str, name: str) -> str:
+    """MDE's FolderPath usually ends with the file name; otherwise the name is appended."""
+    folder = folder.strip()
+    if not folder or not name:
+        return folder
+    sep = "/" if "/" in folder and "\\" not in folder else "\\"
+    return folder if folder.replace("/", "\\").lower().rstrip("\\").endswith("\\" + name.lower()) or folder.lower() == name.lower() \
+        else folder.rstrip("\\/") + sep + name
 
 
 @dataclass(frozen=True)
@@ -196,7 +214,7 @@ def initiating_account(role="actor") -> Part:
 
 
 def initiating_process(role="via") -> Part:
-    return Part(role, "Process", ("InitiatingProcessFileName",), HASHES("InitiatingProcess"))
+    return Part(role, "Process", ("InitiatingProcessFileName",), HASHES("InitiatingProcess"), path=("InitiatingProcessFolderPath",))
 
 
 def sign_in(row: Row, g: Callable, result="ResultType", error="ErrorCode") -> str:
@@ -208,7 +226,7 @@ MAPPINGS: tuple[Mapping, ...] = (
     # ---------------------------------------------------------------- Defender XDR (and the same tables in Sentinel)
     Mapping("DeviceProcessEvents", "Defender XDR", ("DeviceName", "FileName", "ProcessCommandLine", "InitiatingProcessFileName"), (
         device(), initiating_account(), initiating_process(),
-        Part("target", "Process", ("FileName",), HASHES()),
+        Part("target", "Process", ("FileName",), HASHES(), path=("FolderPath",)),
         Part("identity", "User", ("AccountUpn",), (Ident("AccountObjectId", namespace="entra-object-id"), Ident("AccountSid", namespace="windows-sid"),
              Ident("AccountUpn", "email")), name=account("AccountUpn", domain="AccountDomain", name="AccountName")))),
     Mapping("DeviceNetworkEvents", "Defender XDR", ("DeviceName", "RemoteIP", "RemotePort", "InitiatingProcessFileName"), (
@@ -217,7 +235,7 @@ MAPPINGS: tuple[Mapping, ...] = (
         Part("target", "Domain", ("RemoteUrl",), kind_of=url_kind))),
     Mapping("DeviceFileEvents", "Defender XDR", ("DeviceName", "FileName", "FolderPath", "InitiatingProcessFileName"), (
         device(), initiating_account(), initiating_process(),
-        Part("target", "File", ("FileName",), HASHES(), name=file_name("FileName", "FolderPath")),
+        Part("target", "File", ("FileName",), HASHES(), name=file_name("FileName", "FolderPath"), path=("FolderPath",)),
         Part("source", "Domain", ("FileOriginUrl",), kind_of=url_kind),
         Part("source", "IP", ("FileOriginIP", "RequestSourceIP"), (Ident("FileOriginIP", "ip"),)))),
     Mapping("DeviceLogonEvents", "Defender XDR", ("DeviceName", "LogonType", "AccountName"), (
@@ -231,10 +249,10 @@ MAPPINGS: tuple[Mapping, ...] = (
         Part("target", "Registry Key", ("RegistryKey",)))),
     Mapping("DeviceImageLoadEvents", "Defender XDR", ("DeviceName", "FileName", "FolderPath", "InitiatingProcessFileName", "InitiatingProcessId"), (
         device(), initiating_account(), initiating_process(),
-        Part("target", "File", ("FileName",), HASHES(), name=file_name("FileName", "FolderPath")))),
+        Part("target", "File", ("FileName",), HASHES(), name=file_name("FileName", "FolderPath"), path=("FolderPath",)))),
     Mapping("DeviceEvents", "Defender XDR", ("DeviceName", "ActionType", "InitiatingProcessFileName", "RemoteUrl", "FileName"), (
         device(), initiating_account(), initiating_process(),
-        Part("target", "File", ("FileName",), HASHES(), name=file_name("FileName", "FolderPath")),
+        Part("target", "File", ("FileName",), HASHES(), name=file_name("FileName", "FolderPath"), path=("FolderPath",)),
         Part("target", "IP", ("RemoteIP",), (Ident("RemoteIP", "ip"),)),
         Part("target", "Domain", ("RemoteUrl",), kind_of=url_kind),
         Part("target", "Registry Key", ("RegistryKey",)))),
@@ -305,7 +323,7 @@ MAPPINGS: tuple[Mapping, ...] = (
         Part("target", "User", ("AccountUpn", "AccountName"), (Ident("AccountObjectId", namespace="entra-object-id"), Ident("AccountUpn", "email")), lower=True),
         Part("target", "IP", ("RemoteIP",), (Ident("RemoteIP", "ip"),)),
         Part("target", "Domain", ("RemoteUrl",), kind_of=url_kind),
-        Part("target", "File", ("FileName",), HASHES()),
+        Part("target", "File", ("FileName",), HASHES(), path=("FolderPath",)),
         Part("target", "Email Address", ("EmailSubject",))),
         operation=lambda r, g: f"alert evidence ({text(g('EvidenceRole')).lower() or 'related'})", locator=("AlertId", "ReportId")),
 
@@ -354,7 +372,8 @@ MAPPINGS: tuple[Mapping, ...] = (
         device("target", ("Computer",), ()),
         Part("source", "IP", ("IpAddress",), (Ident("IpAddress", "ip"),)),
         device("source", ("WorkstationName",), ()),
-        Part("via", "Process", ("NewProcessName", "Process"), name=lambda r, g: (text(g("NewProcessName")) or text(g("Process"))).replace("/", "\\").split("\\")[-1])),
+        Part("via", "Process", ("NewProcessName", "Process"), name=lambda r, g: (text(g("NewProcessName")) or text(g("Process"))).replace("/", "\\").split("\\")[-1],
+             path=("NewProcessName",), scope=("Computer",))),
         operation=lambda r, g: text(g("Activity")), locator=("EventRecordId", "EventOriginId")),
     Mapping("CommonSecurityLog", "Sentinel", ("DeviceVendor", "DeviceProduct", "SourceIP", "DestinationIP"), (
         Part("actor", "User", ("SourceUserName",), lower=True),
@@ -382,10 +401,10 @@ ASIM = Mapping("ASIM", "Sentinel ASIM", ("EventType", "EventSchema"), (
     Part("target", "Device", ("DstHostname", "TargetHostname", "DvcHostname"), (Ident("DstDvcId", namespace="asim-device-id"),), lower=True),
     Part("target", "Service", ("TargetAppName",), (Ident("TargetAppId", namespace="asim-app-id"),)),
     Part("target", "Domain", ("Url", "DnsQuery"), kind_of=url_kind),
-    Part("target", "Process", ("TargetProcessName",), (Ident("TargetProcessSHA256", namespace="sha256"),),
+    Part("target", "Process", ("TargetProcessName",), (Ident("TargetProcessSHA256", namespace="sha256"),), path=("TargetProcessName",),
          name=lambda r, g: text(g("TargetProcessName")).replace("/", "\\").split("\\")[-1]),
-    Part("target", "File", ("TargetFileName", "TargetFilePath"), (Ident("TargetFileSHA256", namespace="sha256"),)),
-    Part("via", "Process", ("ActingProcessName",), name=lambda r, g: text(g("ActingProcessName")).replace("/", "\\").split("\\")[-1])),
+    Part("target", "File", ("TargetFileName", "TargetFilePath"), (Ident("TargetFileSHA256", namespace="sha256"),), path=("TargetFilePath",)),
+    Part("via", "Process", ("ActingProcessName",), name=lambda r, g: text(g("ActingProcessName")).replace("/", "\\").split("\\")[-1], path=("ActingProcessName",))),
     operation=lambda r, g: " ".join(v for v in (phrase(g("EventType")), f"({text(g('EventResult')).lower()})" if text(g("EventResult")) else "") if v),
     time=("TimeGenerated", "EventStartTime"), end=("EventEndTime",), locator=("EventUid", "EventOriginalUid"))
 
@@ -422,6 +441,7 @@ def heuristic(columns: set[str], table: str = "", product: str = "") -> Mapping 
         if kind == "File":
             ids += tuple(Ident(h, namespace=h.lower()) for h in ("SHA256", "SHA1", "MD5") if h in columns)
         parts.append(Part(role, kind, (column,), ids, lower=kind in ("User", "Device"),
+                          path=tuple(c for c in ("FolderPath", "FilePath", "TargetFilePath") if c in columns) if kind == "File" else (),
                           kind_of=url_kind if kind == "URL" else resource_kind if kind == "Azure Resource" else None,
                           name=resource_name if kind == "Azure Resource" else None))
     if len(parts) < 2:
@@ -512,6 +532,7 @@ def participants_of(mapping: Mapping, row: Row) -> list[dict]:
         # The type comes from the full original value (a resource ID says Key Vault; its last segment does not).
         kind = part.kind_of(raw or name) if part.kind_of else part.kind
         identifiers = []
+        scoped = kind in SCOPED_KINDS
         for ident in part.ids:
             raw = text(g(ident.field))
             if not raw:
@@ -520,7 +541,14 @@ def participants_of(mapping: Mapping, row: Row) -> list[dict]:
                 identifiers.append({"scheme": "hostname", "namespace": "", "raw": raw})
                 continue
             identifiers.append({"scheme": ident.scheme, "namespace": ident.namespace, "raw": raw})
-        out.append({"role": part.role, "kind": kind, "name": name, "identifiers": identifiers})
+        if scoped:
+            device = next((text(g(c)).lower() for c in (part.scope or DEVICE_SCOPE) if text(g(c))), "")
+            path = full_path(next((text(g(c)) for c in part.path if text(g(c))), ""), name)
+            if device and path:
+                identifiers.append({"scheme": "external_id", "namespace": "device-path", "raw": f"{device}|{path}"})
+            elif device:
+                identifiers.append({"scheme": "external_id", "namespace": "device-file", "raw": f"{device}|{name}"})
+        out.append({"role": part.role, "kind": kind, "name": name, "identifiers": identifiers, "by_name": not scoped})
     return out
 
 

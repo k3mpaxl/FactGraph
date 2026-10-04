@@ -637,3 +637,121 @@ test('drop: Defender XDR and Sentinel exports are recognised, mapped and joined 
   await dialog.getByRole('button',{name:'Apply import'}).click()
   await expect.poll(async()=>(await graph()).facts.some((f:any)=>f.predicate==='FileDownloaded'),{timeout:15000}).toBe(true)
 })
+
+test('large payloads: 9 MiB source and evidence keep lists small, records complete, sync intact (REST and MCP)',async({page,browser,request})=>{
+  test.setTimeout(180_000)
+  const {id,token,call}=await setup(page,request)
+  const big=(c:string)=>c.repeat(9*1024*1024)
+  const a=(await call('POST','/entities',{name:'Build host',kind:'Device'})).id
+  const b=(await call('POST','/entities',{name:'secrets.yml',kind:'File'})).id
+  const source=(await call('POST','/sources',{title:'Huge export',source_kind:'primary',uri:'export://huge',excerpt:big('s')})).id
+  const relation=(await call('POST','/relations',{subject_id:a,object_id:b,predicate:'reads'})).id
+  const evidence=(await call('POST',`/relations/${relation}/evidence`,{source_id:source,stance:'supports',observation:'Huge note',locator:'row 1',note:big('n')})).id
+  // Lists only carry the requested page, with long texts shortened.
+  const entities=await call('GET','/entities?limit=1')
+  expect(entities.items).toHaveLength(1);expect(entities.total).toBe(2)
+  const sources=await call('GET','/sources')
+  expect(sources.items[0].excerpt).toHaveLength(2000);expect(sources.items[0].excerpt_truncated).toBe(true);expect(sources.items[0].excerpt_length).toBe(9*1024*1024)
+  const relations=await call('GET','/relations')
+  expect(relations.items[0].assertions[0].note_truncated).toBe(true)
+  // Single records are complete: the reply crosses the WebSocket in parts.
+  expect((await call('GET',`/sources/${source}`)).excerpt).toHaveLength(9*1024*1024)
+  expect((await call('GET',`/evidence/${evidence}`)).note).toHaveLength(9*1024*1024)
+  expect((await call('GET','/graph')).sources[0].excerpt).toHaveLength(9*1024*1024)
+  const viaMcp=await mcp(token,'find_entities',{board_id:id,q:'secrets',limit:5})
+  expect(viaMcp.items.map((e:any)=>e.name)).toEqual(['secrets.yml'])
+  // A second browser receives both large actions (split by size, not one oversized message) and the board stays online.
+  const second=await browser.newContext({storageState:'e2e/storage.json'});const peer=await second.newPage()
+  await peer.goto(`/boards/${id}`)
+  await expect(page.getByText('2 online',{exact:true})).toBeVisible()
+  await expect.poll(async()=>peer.evaluate(()=>document.querySelectorAll('.react-flow__node').length),{timeout:30000}).toBeGreaterThanOrEqual(2)
+  await expect(page.getByText('2 online',{exact:true})).toBeVisible()
+  expect((await call('GET','/entities?limit=1')).total).toBe(2)
+  await second.close()
+})
+
+test('import queue: several files without fixed pauses, no duplicate own notices, one undo group per file',async({page,request})=>{
+  const {id,token,call,graph}=await setup(page,request)
+  const files=Array.from({length:6},(_,i)=>({name:`access-${i}.csv`,text:`IPAddress,FilePath,TimeGenerated\n10.0.0.${i+1},repo/file-${i}.env,2026-09-28T10:0${i}:00Z`}))
+  const transfer=await page.evaluateHandle(files=>{const dt=new DataTransfer();for(const f of files) dt.items.add(new File([f.text],f.name,{type:'text/csv'}));return dt},files)
+  const started=Date.now()
+  await page.locator('.workspace').dispatchEvent('dragenter',{dataTransfer:transfer})
+  await page.locator('.workspace').dispatchEvent('drop',{dataTransfer:transfer})
+  await expect.poll(async()=>(await graph()).facts.length,{timeout:20000}).toBe(6)
+  await page.getByRole('button',{name:'Notifications'}).click()
+  const panel=page.getByRole('dialog',{name:'Notifications'})
+  await expect(panel.locator('.notice.done').filter({hasText:'Import access-'})).toHaveCount(6)
+  // Six small files used to take 6 × 1.5 s of fixed waiting on top of the work.
+  expect(Date.now()-started).toBeLessThan(6000)
+  // Own imports are recognised by their batch: no second notice as someone else's change.
+  await expect(panel.locator('.notice').filter({hasText:'changed the board'})).toHaveCount(0)
+  await page.keyboard.press('Escape')
+  const history=await request.get(`http://127.0.0.1:18088/api/boards/${id}/history?limit=1000`,{headers:{'X-FactGraph-Token':token}})
+  const actions=(await history.json()).items as any[]
+  const batches=new Set(actions.filter(a=>a.channel==='Import').map(a=>a.batch_id))
+  expect(batches.size).toBe(6)
+  // Undo removes exactly the last file.
+  await page.getByRole('button',{name:'Undo'}).click()
+  await expect.poll(async()=>(await graph()).facts.length).toBe(5)
+})
+
+test('viewport: pan and zoom survive switching views and reloading; reset view fits again',async({page,request})=>{
+  const {call}=await setup(page,request)
+  await call('POST','/actions',{actions:[['Alpha',0],['Beta',400],['Gamma',800]].map(([name,x])=>({type:'entity.add',payload:{id:randomUUID(),name,kind:'Device',x,y:0}}))})
+  await expect(page.locator('.react-flow__node')).toHaveCount(3)
+  const transform=()=>page.locator('.react-flow__viewport').evaluate(el=>(el as HTMLElement).style.transform)
+  await page.waitForTimeout(400)
+  await page.getByRole('button',{name:'zoom in'}).click()
+  await page.getByRole('button',{name:'zoom in'}).click()
+  await page.waitForTimeout(500)
+  const zoomed=await transform()
+  await page.getByRole('tab',{name:'Timeline'}).click()
+  await page.getByRole('tab',{name:'Graph'}).click()
+  await expect(page.locator('.react-flow__node')).toHaveCount(3)
+  await page.waitForTimeout(400)
+  expect(await transform()).toBe(zoomed)
+  await page.reload()
+  await expect(page.locator('.react-flow__node')).toHaveCount(3)
+  await page.waitForTimeout(400)
+  expect(await transform()).toBe(zoomed)
+  await page.getByLabel('Board menu').click()
+  await page.getByRole('button',{name:'Reset my view'}).click()
+  await page.waitForTimeout(700)
+  expect(await transform()).not.toBe(zoomed)
+})
+
+test('organic layout runs in a worker: canvas stays responsive, cancel saves nothing, concurrent moves survive',async({page,request})=>{
+  test.setTimeout(240_000)
+  const {call,graph}=await setup(page,request)
+  const ids=Array.from({length:1100},()=>randomUUID())
+  const entities=ids.map((id,i)=>({type:'entity.add',payload:{id,name:`node ${i}`,kind:i%3?'Device':'IP',x:(i%40)*300,y:Math.floor(i/40)*150}}))
+  const relations=Array.from({length:2000},(_,i)=>({type:'fact.add',payload:{id:randomUUID(),subject_id:ids[(i*7)%1100],predicate:'connects to',object_id:ids[(i*13+1)%1100]}}))
+  await call('POST','/actions',{actions:[...entities,...relations]})
+  await expect.poll(async()=>(await graph()).entities.length,{timeout:30000}).toBe(1100)
+  const positions=async()=>new Map((await graph()).entities.map((e:any)=>[e.id,`${e.position.x},${e.position.y}`]))
+  const progress=page.locator('.layout-progress')
+  const arrange=page.getByRole('button',{name:'Arrange organically'})
+
+  // 1. Cancel: nothing moves.
+  const before=await positions()
+  await arrange.click()
+  await expect(progress).toBeVisible()
+  await progress.getByRole('button',{name:'Cancel'}).click()
+  await expect(progress).toHaveCount(0)
+  await page.waitForTimeout(500)
+  expect(await positions()).toEqual(before)
+
+  // 2. While the layout runs the main thread stays free (the synchronous version blocked it for seconds).
+  await page.evaluate(()=>{const w=window as any;w.__gaps=[];w.__sampling=true;let last=performance.now();const tick=()=>{const now=performance.now();w.__gaps.push(now-last);last=now;if(w.__sampling) setTimeout(tick,16)};setTimeout(tick,16)})
+  await arrange.click()
+  await expect(progress).toBeVisible()
+  // A node moved by someone else meanwhile keeps its new place.
+  await call('POST','/actions',{actions:[{type:'entity.position',payload:{id:ids[5],x:12340,y:5670}}]})
+  await expect(progress).toHaveCount(0,{timeout:60000})
+  const gaps:number[]=await page.evaluate(()=>{const w=window as any;w.__sampling=false;return w.__gaps})
+  // Ignore the final re-render that applies 1,100 positions; the layout itself must not block.
+  expect(Math.max(...gaps.slice(0,-3))).toBeLessThan(700)
+  const after=await positions()
+  expect(after.get(ids[5])).toBe('12340,5670')
+  expect([...after.entries()].filter(([id,p])=>id!==ids[5]&&p!==before.get(id)).length).toBeGreaterThan(1000)
+})

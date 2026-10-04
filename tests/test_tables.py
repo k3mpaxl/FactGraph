@@ -148,6 +148,41 @@ class TablesTest(unittest.TestCase):
         target = next(p for p in participants_of(kinds.mapping, row) if p["role"] == "target")
         self.assertEqual((target["name"], target["kind"]), ("kv-prod", "Key Vault"))
 
+    def test_files_on_different_devices_or_folders_stay_apart(self):
+        board, index = str(uuid4()), {"entities": [], "facts": [], "sources": []}
+        row = lambda device, folder, report: {"Timestamp": "2026-09-28T10:00:00Z", "DeviceId": f"id-{device}", "DeviceName": device,  # noqa: E731
+                                              "ActionType": "FileCreated", "FileName": ".env", "FolderPath": folder,
+                                              "InitiatingProcessFileName": "git.exe", "InitiatingProcessFolderPath": "C:\\Program Files\\Git\\git.exe",
+                                              "ReportId": report}
+        rows = [row("ws-a", "C:\\repo-a\\.env", "1"), row("ws-b", "C:\\repo-b\\.env", "2")]
+        detection, drafts, _ = run(board, rows, index)
+        self.assertEqual(detection.table, "DeviceFileEvents")
+        files = [d["payload"] for d in drafts if d["type"] == "entity.add" and d["payload"]["kind"] == "File"]
+        self.assertEqual(len(files), 2, "two .env files on two devices are two entities")
+        targets = {p["entity_id"] for d in drafts if d["type"] == "fact.add" for p in d["payload"]["participants"] if p["role"] == "target"}
+        self.assertEqual(targets, {f["id"] for f in files})
+        paths = {d["payload"]["normalized_value"] for d in drafts if d["type"] == "identifier.add" and d["payload"]["namespace"] == "device-path"}
+        self.assertIn("ws-a|c:\\repo-a\\.env", paths)
+        # git.exe without a hash: one entity per device too.
+        self.assertEqual(sum(d["payload"]["name"] == "git.exe" for d in drafts if d["type"] == "entity.add"), 2)
+        # The same file again (also a new row on the same device and path): no duplicate.
+        _, again, _ = run(board, [row("ws-a", "C:\\Repo-A\\.env", "3")], index)
+        self.assertFalse([d for d in again if d["type"] == "entity.add"])
+        # The same hash on two devices is deliberately one binary.
+        hashed = [{**row("ws-a", "C:\\x\\tool.exe", "4"), "FileName": "tool.exe", "SHA256": "e" * 64},
+                  {**row("ws-b", "D:\\y\\tool.exe", "5"), "FileName": "tool.exe", "SHA256": "e" * 64}]
+        _, drafts, _ = run(board, hashed, index)
+        self.assertEqual(sum(d["payload"]["name"] == "tool.exe" for d in drafts if d["type"] == "entity.add"), 1)
+        # First seen without a hash on ws-c, later with its hash on ws-c and on ws-d: still one entity.
+        first = [{**row("ws-c", "C:\\z\\agent.exe", "6"), "FileName": "agent.exe"}]
+        _, drafts, _ = run(board, first, index)
+        agent = next(d["payload"]["id"] for d in drafts if d["type"] == "entity.add" and d["payload"]["name"] == "agent.exe")
+        later = [{**row("ws-c", "C:\\z\\agent.exe", "7"), "FileName": "agent.exe", "SHA256": "f" * 64},
+                 {**row("ws-d", "E:\\agent.exe", "8"), "FileName": "agent.exe", "SHA256": "f" * 64}]
+        _, drafts, _ = run(board, later, index)
+        self.assertFalse([d for d in drafts if d["type"] == "entity.add" and d["payload"]["name"] == "agent.exe"])
+        self.assertEqual({p["entity_id"] for d in drafts if d["type"] == "fact.add" for p in d["payload"]["participants"] if p["role"] == "target"}, {agent})
+
     def test_asim_and_heuristics(self):
         asim = detect({"TimeGenerated", "EventType", "EventResult", "EventSchema", "SrcIpAddr", "TargetUsername", "TargetAppName", "EventProduct"})
         self.assertEqual(asim.product, "Sentinel ASIM")

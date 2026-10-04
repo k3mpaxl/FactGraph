@@ -164,11 +164,13 @@ def register_extensions(app, mcp, core):
 
     @app.get('/api/boards/{board_id}/history')
     async def board_history(board_id: str, offset: int = 0, limit: int = 100):
-        result = await command(board_id, 'history')
-        items = result['actions']
         if offset < 0 or not 1 <= limit <= 1000:
             raise HTTPException(422, 'Invalid pagination')
-        return {'board_id': board_id, 'items': items[offset:offset+limit], 'total': len(items)}
+        # The browser pages the history, so only the requested actions cross the WebSocket.
+        result = await command(board_id, 'history', offset=offset, limit=limit)
+        items = result['actions']
+        total = result.get('total', len(items))
+        return {'board_id': board_id, 'items': items if 'total' in result else items[offset:offset+limit], 'total': total}
 
     @app.post('/api/boards/{board_id}/undo')
     async def undo_board(board_id: str):
@@ -183,19 +185,16 @@ def register_extensions(app, mcp, core):
         return {'rules': core['MCP_INSTRUCTIONS'].strip().splitlines()}
 
     def collection_routes(resource, key):
-        def records(graph):
-            return [a for f in graph['facts'] for a in f['assertions']] if key == 'evidence' else graph.get(key, [])
-
+        # The browser filters and paginates, so only the requested slice crosses the WebSocket. Lists shorten long
+        # texts (<field>_truncated, <field>_length); a single record is complete.
         async def list_records(board_id: str, q: str = '', offset: int = 0, limit: int = 100):
-            graph = await read_graph(board_id)
             if offset < 0 or not 1 <= limit <= 1000:
                 raise HTTPException(422, 'Invalid pagination')
-            items = [item for item in records(graph) if not q or q.casefold() in str(item).casefold()]
-            return {'board_id': board_id, 'items': items[offset:offset+limit], 'total': len(items), 'revision': graph.get('revision')}
+            result = await command(board_id, 'query', collection=key, q=q, offset=offset, limit=limit)
+            return {'board_id': board_id, 'items': result.get('items', []), 'total': result.get('total', 0), 'revision': result.get('revision')}
 
         async def get_record(board_id: str, record_id: str):
-            graph = await read_graph(board_id)
-            record = next((item for item in records(graph) if item['id'] == record_id), None)
+            record = (await command(board_id, 'query', collection=key, id=record_id)).get('record')
             if record is None:
                 raise HTTPException(404, f'{resource} record not found on this board')
             return record

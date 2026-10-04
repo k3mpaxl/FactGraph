@@ -252,12 +252,14 @@ def activity_rows_to_actions(board_id: str, rows: list[dict], *, title: str, rol
 # Identifiers that are unique on their own (GUIDs, hashes, resource IDs) may join entities of different types
 # (a File and a Process with the same SHA-256 are one binary); names like IPs, FQDNs or emails only within a type.
 GLOBAL_SCHEMES = {"external_id", "resource_id"}
+# One binary can be stored in several places: locations never contradict each other, only single-valued IDs do.
+MULTI_VALUED = {"device-path", "device-file"}
 
 
 def normalize_identifier(scheme: str, namespace: str, raw: str) -> str:
     value = raw.strip()
-    if scheme in ("hostname", "fqdn", "email", "resource_id") or namespace in ("sha256", "sha1", "md5", "entra-object-id",
-                                                                                 "entra-app-id", "entra-device-id", "mde-device-id"):
+    if scheme in ("hostname", "fqdn", "email", "resource_id") or namespace in ("sha256", "sha1", "md5", "entra-object-id", "entra-app-id",
+                                                                                 "entra-device-id", "mde-device-id", "device-path", "device-file"):
         value = value.rstrip(".").lower()
     return value
 
@@ -313,13 +315,15 @@ def table_rows_to_actions(board_id: str, rows: list[dict], mapping, *, title: st
                     for i in part["identifiers"]]
             def contradicts(candidate: str) -> bool:
                 # Same name or FQDN, but a different ID of the same kind (another DeviceId, another SHA-256): a different thing.
-                return any(k[1] in GLOBAL_SCHEMES and (candidate, k[1], k[2]) in id_namespaces and (candidate, *k[1:]) not in have_identifier
-                           for k, _ in keys)
+                return any(k[1] in GLOBAL_SCHEMES and k[2] not in MULTI_VALUED and (candidate, k[1], k[2]) in id_namespaces
+                           and (candidate, *k[1:]) not in have_identifier for k, _ in keys)
             # Strong IDs first (DeviceId, object IDs, hashes), then name-like identifiers (FQDN, IP, email), then the name.
-            entity_id = next((by_identifier[k] for k, _ in keys if k[1] in GLOBAL_SCHEMES and k in by_identifier), None)
+            # A match through one ID is vetoed by a contradicting ID of another namespace (same path, different SHA-1).
+            entity_id = next((by_identifier[k] for k, _ in keys if k[1] in GLOBAL_SCHEMES and k in by_identifier and not contradicts(by_identifier[k])), None)
             if not entity_id:
                 weak = [by_identifier[k] for k, _ in keys if k[1] not in GLOBAL_SCHEMES and k in by_identifier]
-                named = by_name.get((kind.casefold(), name.casefold()))
+                # Files and processes are never joined by their name alone (two .env files on two devices are two files).
+                named = by_name.get((kind.casefold(), name.casefold())) if part.get("by_name", True) else None
                 entity_id = next((c for c in [*weak, named] if c and not contradicts(c)), None)
             if not entity_id:
                 anchor = next((f"{k[1]}:{k[2]}:{k[3]}" for k, _ in keys if k[1] in GLOBAL_SCHEMES), name.casefold())
@@ -329,7 +333,8 @@ def table_rows_to_actions(board_id: str, rows: list[dict], mapping, *, title: st
                 drafts.append(action("entity.add", {"id": entity_id, "name": name, "kind": kind, "description": ""},
                     action_id=_stable(board_id, "entity-action", entity_id), author="Import"))
             touched.add(entity_id)
-            by_name.setdefault((kind.casefold(), name.casefold()), entity_id)
+            if part.get("by_name", True):
+                by_name.setdefault((kind.casefold(), name.casefold()), entity_id)
             for key, ident in keys:
                 by_identifier.setdefault(key, entity_id)
                 owned = (entity_id, *key[1:])

@@ -304,10 +304,19 @@ export class ImportProblem extends Error {
   constructor(message: string, readonly suggestion?: MappingSuggestion, readonly detection?: Detected) { super(message) }
 }
 
+/** Change batches of this browser's own file imports: their actions must not be reported as someone else's change. */
+const ownImportBatches = new Set<string>()
+
 /** Upload one file to the import endpoint. auto = recognise Defender XDR / Sentinel exports and map them automatically. */
 export async function uploadImport(boardId: string, sessionToken: string, file: File, fields: Record<string, string>) {
   const body = new FormData()
   for (const [key, value] of Object.entries(fields)) body.set(key, value)
+  if (fields.dry_run !== 'true') {
+    // The server uses this ID for the whole import, so it is known here before the first action arrives.
+    const batch = uuid()
+    ownImportBatches.add(batch)
+    body.set('batch_id', batch)
+  }
   body.set('file', file)
   const response = await fetch(`/api/boards/${boardId}/imports/file`, { method: 'POST', headers: { 'X-FactGraph-Token': sessionToken }, body })
   const result = await response.json().catch(() => ({})) as Record<string, unknown>
@@ -913,6 +922,14 @@ export default function App() {
   // ---------------------------------------------------------------------------------------------- notifications
   const [notices, setNotices] = useState<Notice[]>(() => loadNotices(boardId))
   useEffect(() => { const timer = window.setTimeout(() => saveNotices(boardId, notices), 400); return () => window.clearTimeout(timer) }, [boardId, notices])
+  // A reload right after an import must not lose the last notices still waiting for the debounced save.
+  const latestNotices = useRef(notices)
+  latestNotices.current = notices
+  useEffect(() => {
+    const flush = () => saveNotices(boardId, latestNotices.current)
+    window.addEventListener('pagehide', flush)
+    return () => window.removeEventListener('pagehide', flush)
+  }, [boardId])
   const notify = useCallback((notice: Omit<Notice, 'id' | 'at'> & { id?: string }) => {
     const full: Notice = { id: notice.id ?? uuid(), at: new Date().toISOString(), ...notice }
     setNotices(list => [full, ...list.filter(n => n.id !== full.id)])
@@ -922,13 +939,12 @@ export default function App() {
   // Remote batches arrive in chunks of 100; collect them briefly so one batch becomes one notice.
   const pendingBatches = useRef(new Map<string, BoardAction[]>())
   const batchTimer = useRef<number | undefined>(undefined)
-  const ownImports = useRef(0)
   const syncCount = useRef<{ id: string; count: number } | null>(null)
   changes.current = fresh => {
     for (const item of fresh) {
       if (item.actor === board.actor && (item.channel ?? 'UI') === 'UI') continue
-      // The analyst's own log imports have their own notice.
-      if (item.channel === 'Import' && item.actor === board.actor && ownImports.current > 0) continue
+      // The analyst's own file imports have their own notice.
+      if (item.batch_id && ownImportBatches.has(item.batch_id)) continue
       if (syncCount.current && item.actor !== board.actor) syncCount.current.count++
       const key = item.batch_id ?? item.id
       const list = pendingBatches.current.get(key)
@@ -996,18 +1012,16 @@ export default function App() {
       const id = notify({ kind: 'import', status: 'queued', title: `Import ${job.name}` })
       done.push(importSlots(async () => {
         updateNotice(id, { status: 'running', progress: 'Importing rows…' })
-        ownImports.current++
         try {
+          // The import is confirmed once the browser has stored every chunk; the next file starts right away.
           const summary = await job.run()
-          // Let the last chunks arrive before own Import batches count as someone else's again.
-          await new Promise(resolve => window.setTimeout(resolve, 1500))
           updateNotice(id, { status: 'done', detail: `${summary}. New evidence is unconfirmed.`, finished: new Date().toISOString(), progress: undefined, target: { kind: 'review' }, read: false })
         } catch (problem) {
           // A table that was not recognised is no failure: the mapping dialog opened for it.
           const mapping = problem instanceof ImportProblem && !!problem.suggestion
           updateNotice(id, { status: mapping ? 'info' : 'error', detail: problem instanceof Error ? problem.message : 'Import failed',
             finished: new Date().toISOString(), progress: undefined, read: false })
-        } finally { ownImports.current-- }
+        }
       }))
     }
     setToast(`${jobs.length} import${jobs.length === 1 ? '' : 's'} started · see notifications`)
@@ -1337,7 +1351,7 @@ export default function App() {
             boardName={board.boardName} filterSummary={filterSummary} onNotice={setToast} onRequestDone={() => setRequest(null)}
             selection={selection} search={search} onSelect={setSelectionState}
             onExported={detail => notify({ kind: 'export', status: 'done', title: 'Graph exported', detail, read: true })}
-            initialViewport={saved.viewport} onViewportChange={v => { viewport.current = v; persistView() }} />}
+            initialViewport={viewport.current} onViewportChange={v => { viewport.current = v; persistView() }} />}
           {data && data.entities.length > 0 && <div className="status-filter" role="group" aria-label="Filter relationships by status">
             <button className={stateFilter === 'all' ? 'active' : ''} onClick={() => setStateFilter('all')}>All <b>{timeFacts.length}</b></button>
             {allStates.map(state => <button key={state} className={`${state} ${stateFilter === state ? 'active' : ''}`} onClick={() => setStateFilter(stateFilter === state ? 'all' : state)} title={`Show only ${labels[state].toLowerCase()} relationships`}><span className="legend-line" />{labels[state]} <b>{counts[state]}</b></button>)}

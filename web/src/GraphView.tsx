@@ -5,14 +5,15 @@ import { ReactFlow, ReactFlowProvider, Background, BackgroundVariant, Controls, 
 import '@xyflow/react/dist/style.css'
 import { Layers, Plus, Search, X, Pin, Sparkles, Copy, ArrowDown,
   Grid3x3, Map as MapIcon, Crosshair, Pencil, Merge, Trash2, PinOff, Settings2, Boxes, Zap, ChevronRight, ChevronDown,
-  FolderTree, Group as GroupIcon, Ungroup, EyeOff, Save, Columns3, Workflow, Download, ClipboardCopy, ImageDown, Waypoints } from 'lucide-react'
+  FolderTree, Group as GroupIcon, Ungroup, EyeOff, Save, Columns3, Workflow, Download, ClipboardCopy, ImageDown, Waypoints, Loader2 } from 'lucide-react'
 import type { Entity, EntityType, Fact, Group, Perspective, TruthState } from './types'
 import { CONTAINS_PREDICATES, type ActionDraft } from './board'
 import { snapPosition } from './layout'
 import { KindIcon, iconMarkup, prepareIconMarkup, typeIcons } from './KindIcon'
 import { browserMeasure, buildGraphSvg, downloadBlob, exportFilename, svgToPng } from './exportGraph'
 import { createWheelClassifier, zoomAround, zoomFactor } from './wheel'
-import { ORGANIC_THRESHOLD, organicLayout } from './organicLayout'
+import { ORGANIC_THRESHOLD } from './organicLayout'
+import { LayoutCancelled, organicLayoutAsync } from './layoutClient'
 
 const MIN_ZOOM = 0.05
 const MAX_ZOOM = 2.5
@@ -229,6 +230,8 @@ function Canvas(props: Props) {
   const [menu, setMenu] = useState<{ id: string; kind: 'entity' | 'group'; x: number; y: number } | null>(null)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  // A running organic layout: progress and a way to cancel it (the work happens in a Web Worker).
+  const [layoutRun, setLayoutRun] = useState<{ nodes: number; done: number; total: number; abort: AbortController } | null>(null)
   const [grid, setGrid] = useState(() => pref('snap', true))
   const [minimapPref, setMinimapPref] = useState<boolean | null>(() => { try { const v = localStorage.getItem('factgraph:minimap'); return v === null ? null : v === 'true' } catch { return null } })
   const minimap = minimapPref ?? entities.length > 60
@@ -453,13 +456,29 @@ function Canvas(props: Props) {
       }
       const organic = !byLayer && (mode === 'organic' || (mode === 'auto' && movable.length > ORGANIC_THRESHOLD))
       if (organic) {
-        // Let the browser paint the busy state before the synchronous simulation runs.
-        await new Promise(resolve => requestAnimationFrame(() => setTimeout(resolve, 0)))
         const size = (n: Node<AnyData>) => ({ width: n.measured?.width ?? (n.type === 'activity' ? 28 : NODE_W), height: n.measured?.height ?? (n.type === 'activity' ? 28 : NODE_H) })
-        const positions = organicLayout(chosen.map(n => ({ id: n.id, ...size(n), x: n.position.x, y: n.position.y, pinned: isPinned(n) })),
-          view.edges.filter(e => ids.has(e.source) || ids.has(e.target)).map(e => ({ source: e.source, target: e.target })))
+        const started = new Map(movable.map(n => [n.id, { ...n.position }]))
+        const abort = new AbortController()
+        setLayoutRun({ nodes: movable.length, done: 0, total: 1, abort })
+        let positions: Map<string, { x: number; y: number }>
+        try {
+          positions = await organicLayoutAsync(chosen.map(n => ({ id: n.id, ...size(n), x: n.position.x, y: n.position.y, pinned: isPinned(n) })),
+            view.edges.filter(e => ids.has(e.source) || ids.has(e.target)).map(e => ({ source: e.source, target: e.target })),
+            { signal: abort.signal, onProgress: (done, total) => setLayoutRun(current => current && current.abort === abort ? { ...current, done, total } : current) })
+        } catch (problem) {
+          if (problem instanceof LayoutCancelled) { props.onNotice('Layout cancelled · nothing was moved'); return }
+          throw problem
+        } finally { setLayoutRun(null) }
+        // Nodes moved or removed while the layout ran (by you, a colleague or an agent) keep what happened to them.
+        const current = new Map(flow.getNodes().map(n => [n.id, n.position]))
+        const untouched = movable.filter(n => {
+          const before = started.get(n.id)!, now = current.get(n.id)
+          return !!now && Math.abs(now.x - before.x) < 0.5 && Math.abs(now.y - before.y) < 0.5 && positions.has(n.id)
+        })
+        const kept = movable.length - untouched.length
         pendingFit.current = true
-        await run(movable.map(n => {
+        // One batch: the whole layout is one undo step.
+        await run(untouched.map(n => {
           const position = snapPosition(positions.get(n.id)!)
           if (n.id.startsWith('group:')) return { type: 'group.update' as const, payload: { id: n.id.slice(6), ...position } }
           if (n.id.startsWith('act:')) return { type: 'fact.position' as const, payload: { id: n.id.slice(4), ...position } }
@@ -467,7 +486,8 @@ function Canvas(props: Props) {
         }))
         // Layer lanes only make sense for the layer layout; in an organic layout they would overlap.
         if (lens.showLanes) props.onLensChange({ ...lens, showLanes: false })
-        if (mode === 'auto') props.onNotice(`Organic layout for ${movable.length} nodes · use ↓ or Layers for a flow layout`)
+        if (kept) props.onNotice(`Organic layout for ${untouched.length} nodes · ${kept} changed meanwhile and kept their place`)
+        else if (mode === 'auto') props.onNotice(`Organic layout for ${movable.length} nodes · use ↓ or Layers for a flow layout`)
         return
       }
       const pane = shellRef.current?.getBoundingClientRect()
@@ -745,6 +765,9 @@ function Canvas(props: Props) {
       </form>
     </div>}
     {error && <div className="canvas-error" role="alert" onClick={() => setError('')}>{error}</div>}
+    {layoutRun && <div className="layout-progress" role="status"><Loader2 size={14} className="spin" />
+      <span>Arranging {layoutRun.nodes.toLocaleString('en')} nodes · {Math.round(layoutRun.done / Math.max(1, layoutRun.total) * 100)}%</span>
+      <button className="secondary-button small" onClick={() => layoutRun.abort.abort()}>Cancel</button></div>}
   </div>
 }
 export default function GraphView(props: Props) { return <ReactFlowProvider><Canvas {...props} /></ReactFlowProvider> }

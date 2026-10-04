@@ -787,3 +787,8 @@ button.link:hover { text-decoration: underline }
 .drop-overlay span { max-width: 460px; font-size: 12.5px; color: var(--text-2) }
 .import-files.detected li { flex-direction: column; align-items: flex-start; gap: 1px }
 .import-files.detected li small { white-space: normal }
+
+/* Organic layout running in a worker */
+.layout-progress { position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%); z-index: 30; display: flex; align-items: center; gap: 10px;
+  padding: 6px 8px 6px 12px; border-radius: 999px; background: var(--surface); border: 1px solid var(--border); box-shadow: var(--shadow); font-size: 12.5px; color: var(--text-2) }
+.layout-progress svg { color: var(--accent) }

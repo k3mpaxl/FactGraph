@@ -69,8 +69,13 @@ class Peer:
 rooms: dict[str, dict[str, Peer]] = {}
 rooms_lock = asyncio.Lock()
 pending: dict[str, tuple[WebSocket, asyncio.Future[dict]]] = {}
+# Large browser replies arrive in parts of about 1 MB; 512 parts cap one reply at roughly 0.5 GB of text.
+result_parts: dict[str, list[str]] = {}
+MAX_RESULT_PARTS = 512
 request_token: contextvars.ContextVar[str | None] = contextvars.ContextVar("factgraph_request_token", default=None)
 request_channel: contextvars.ContextVar[str] = contextvars.ContextVar("factgraph_request_channel", default="REST")
+# A batch ID chosen by the client (file import from the board UI), so the browser recognises its own import exactly.
+request_batch: contextvars.ContextVar[str | None] = contextvars.ContextVar("factgraph_request_batch", default=None)
 
 
 def token_matches(expected: str | None, given: str) -> bool:
@@ -228,13 +233,14 @@ async def browser_command(board_id: str, operation: str, **values) -> dict:
         raise HTTPException(503, "Browser connection lost") from error
     finally:
         pending.pop(request_id, None)
+        result_parts.pop(request_id, None)
 
 
 async def apply_drafts(board_id: str, drafts: list[dict]) -> int:
     if len(drafts) > 200_000:
         raise HTTPException(413, "Zu viele Aktionen in einem Auftrag")
     from uuid import uuid4
-    batch_id = str(uuid4())
+    batch_id = request_batch.get() or str(uuid4())
     channel = request_channel.get()
     drafts = [{**draft, "batch_id": batch_id, "channel": channel, "author": channel if draft.get("author") in (None, "API") else draft["author"]}
               for draft in drafts]
@@ -582,14 +588,17 @@ async def import_file(board_id: str, file: UploadFile = File(...),
                       predicate: str = Form("accessed"), predicate_field: str = Form(""),
                       subject_kind: str = Form("IP"),
                       object_kind: str = Form("File"), roles: str = Form(""),
-                      auto: bool = Form(False, description="Recognise Defender XDR / Sentinel exports and map their columns automatically.")):
+                      auto: bool = Form(False, description="Recognise Defender XDR / Sentinel exports and map their columns automatically."),
+                      batch_id: str = Form("", description="Optional UUID for the change batch, so the uploading browser recognises its own import.")):
     # File uploads are imports: the change log and the notifications show them as such, not as agent writes.
     channel_context = request_channel.set("Import")
+    batch_context = request_batch.set(str(UUID(batch_id)) if batch_id and valid_uuid(batch_id) else None)
     try:
         return await _import_file(board_id, file, title, query, dry_run, subject_field, object_field, predicate, predicate_field,
                                   subject_kind, object_kind, roles, auto)
     finally:
         request_channel.reset(channel_context)
+        request_batch.reset(batch_context)
 
 
 async def _import_file(board_id, file, title, query, dry_run, subject_field, object_field, predicate, predicate_field,
@@ -695,6 +704,27 @@ async def board_socket(websocket: WebSocket, board_id: str):
                 entry = pending.get(message["requestId"])
                 if entry and entry[0] is websocket and not entry[1].done():
                     entry[1].set_result(message)
+            elif kind == "api-result-part" and isinstance(message.get("requestId"), str):
+                # Large replies arrive in parts (each far below the WebSocket message limit) and are joined here.
+                request_id = message["requestId"]
+                entry = pending.get(request_id)
+                index, total, data = message.get("index"), message.get("total"), message.get("data")
+                if not entry or entry[0] is not websocket or entry[1].done() or not isinstance(data, str) or \
+                        not isinstance(index, int) or not isinstance(total, int) or not 0 <= index < total <= MAX_RESULT_PARTS:
+                    continue
+                buffer = result_parts.setdefault(request_id, [])
+                if index != len(buffer):
+                    result_parts.pop(request_id, None)
+                    entry[1].set_result({"ok": False, "error": "Reply parts arrived out of order"})
+                    continue
+                buffer.append(data)
+                if len(buffer) == total:
+                    joined = "".join(result_parts.pop(request_id))
+                    try:
+                        result = json.loads(joined)
+                    except ValueError:
+                        result = {"ok": False, "error": "Malformed reply"}
+                    entry[1].set_result(result if isinstance(result, dict) else {"ok": False, "error": "Malformed reply"})
     except (WebSocketDisconnect, RuntimeError):
         pass
     finally:

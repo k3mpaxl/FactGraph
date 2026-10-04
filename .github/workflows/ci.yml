@@ -37,6 +37,10 @@ jobs:
         run: npm ci && npm test && npm run build
         working-directory: web
 
+      - name: Check performance budgets
+        run: npm run bench
+        working-directory: web
+
       - name: Install browser for workflow tests
         run: npx playwright install --with-deps chromium
         working-directory: web

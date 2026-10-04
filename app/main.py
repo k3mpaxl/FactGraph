@@ -26,7 +26,8 @@ from typing import Literal
 
 from app.contracts import (StrictModel, EntityInput, RelationInput, SourceInput, EvidenceInput, ActionInput, ActionBatch, RowsInput, EntityUpdate, EntityMergeInput, SourceUpdate, RelationUpdate, EvidenceUpdate)
 
-from app.ingest import action, entity_actions, parse_rows, relation_actions, rows_to_actions
+from app.ingest import OBJECT_FIELDS, SUBJECT_FIELDS, action, entity_actions, identifier_key, parse_rows, relation_actions, rows_to_actions, table_rows_to_actions
+from app.tables import clean_rows, detect
 
 
 WEB_DIR = Path(__file__).resolve().parents[1] / "web" / "dist"
@@ -52,9 +53,9 @@ Workflow
 Editing: update tools change only the fields you pass; explicit null clears nullable fields. Pass expected_revision for sources and evidence; HTTP 409 means someone changed it — re-read and retry. undo reverts your session's last change batch. Content changes reset affected reviews.
 Tool profile: this server shows a compact agent tool set by default; with FACTGRAPH_MCP_TOOLS=full it exposes one rest_<operation> tool per REST endpoint instead.
 """
-mcp = FastMCP("FactGraph Browser Boards", version="0.4.9", instructions=MCP_INSTRUCTIONS)
+mcp = FastMCP("FactGraph Browser Boards", version="0.5.0", instructions=MCP_INSTRUCTIONS)
 mcp_app = mcp.http_app(path="/")
-app = FastAPI(title="FactGraph API", version="0.4.9", lifespan=mcp_app.lifespan)
+app = FastAPI(title="FactGraph API", version="0.5.0", lifespan=mcp_app.lifespan)
 
 
 @dataclass
@@ -254,6 +255,52 @@ async def apply_drafts(board_id: str, drafts: list[dict]) -> int:
             raise
         accepted += int(response.get("accepted", 0))
     return accepted
+
+
+async def import_table(board_id: str, rows: list[dict], *, title: str = "", query: str = "", dry_run: bool = False, filename: str = "") -> dict:
+    """A Defender XDR / Sentinel export: detect the table, map its columns, import. Unsure detection → 422 with a suggestion."""
+    if not valid_uuid(board_id):
+        raise HTTPException(422, "Invalid board UUID")
+    if not rows:
+        raise HTTPException(422, "The file contains no result rows")
+    columns = set().union(*(row.keys() for row in rows))
+    detection = detect(columns)
+    if (not detection.confident or not detection.mapping) and any(c in columns for c in SUBJECT_FIELDS) and any(c in columns for c in OBJECT_FIELDS):
+        # Not an XDR/Sentinel table, but the classic two-column log (IPAddress → FilePath): import it as before.
+        summary = await import_rows(board_id, RowsInput(rows=rows, title=title or (filename or "Activity logs"), query=query, dry_run=dry_run))
+        return {**summary, "table": "Log rows", "product": f"{summary['subject_field']} → {summary['object_field']}",
+                "detection": {**detection.summary(), "table": "Log rows", "confident": True}}
+    if not detection.confident or not detection.mapping:
+        mapping = detection.mapping
+        raise HTTPException(422, {
+            "message": f"Could not recognise the table of {filename or 'this file'}. Check the column mapping.",
+            "needs_mapping": True, "detection": detection.summary(),
+            "suggestion": {"roles": [{"field": p.fields[0], "role": p.role, "kind": p.kind} for p in (mapping.parts if mapping else ())],
+                           "operation_field": next((c for c in ("ActionType", "OperationName", "Operation", "Activity", "EventType") if c in columns), None)}})
+    if not title or title in ("Activity logs", "Access Logs"):
+        title = f"{detection.table} ({detection.product})" if detection.product else detection.table
+    if filename and filename not in title:
+        title = f"{title} · {filename}"
+    index = (await browser_command(board_id, "index"))["index"]
+    entities = {(item["kind"].casefold(), item["name"].casefold()): item["id"] for item in index["entities"]}
+    by_identifier, owned = {}, set()
+    for item in index["entities"]:
+        for ident in item.get("identifiers", []):
+            key = identifier_key(item["kind"], ident["scheme"], ident.get("namespace") or "", ident["normalized_value"])
+            by_identifier.setdefault(key, item["id"])
+            owned.add((item["id"], *key[1:]))
+    try:
+        drafts, summary = table_rows_to_actions(board_id, rows, detection.mapping, title=title, query=query,
+            existing_entities=entities, existing_identifiers=by_identifier, known_identifiers=owned,
+            existing_facts={item["id"] for item in index["facts"]}, existing_sources={item["id"] for item in index["sources"]})
+    except (ValueError, KeyError) as error:
+        raise HTTPException(422, str(error)) from error
+    summary["detection"] = detection.summary()
+    summary["title"] = title
+    if dry_run:
+        return {**summary, "dry_run": True, "action_count": len(drafts)}
+    summary["accepted_actions"] = await apply_drafts(board_id, drafts)
+    return summary
 
 
 async def import_rows(board_id: str, data: RowsInput) -> dict:
@@ -498,6 +545,24 @@ async def create_actions(board_id: str, body: ActionBatch):
     return {"accepted_actions": await apply_drafts(board_id, drafts)}
 
 
+class TableRowsInput(StrictModel):
+    rows: list[dict] = Field(max_length=50_000)
+    title: str = Field(default="", max_length=200)
+    query: str = Field(default="", max_length=20_000, description="KQL that produced the rows (provenance).")
+    dry_run: bool = False
+
+
+@app.post("/api/boards/{board_id}/imports/table")
+async def import_table_export(board_id: str, body: TableRowsInput):
+    """Import rows from Defender XDR advanced hunting or Microsoft Sentinel (DeviceNetworkEvents, SigninLogs, AuditLogs, ASIM …).
+
+    The table is recognised from the column names; devices, accounts, IPs, files and apps become entities matched by their
+    IDs (DeviceId, Entra object ID, SID, hashes, resource IDs) with what is already on the board; each row becomes one
+    unconfirmed evidence item of an activity with its timestamp and a locator such as ReportId. Use dry_run first. An
+    unrecognised table returns 422 with a suggested column mapping; then use import_activities with explicit roles."""
+    return await import_table(board_id, clean_rows(body.rows), title=body.title, query=body.query, dry_run=body.dry_run)
+
+
 @app.post("/api/boards/{board_id}/imports/kql")
 async def import_kql(board_id: str, body: RowsInput):
     if not body.query.strip():
@@ -516,14 +581,28 @@ async def import_file(board_id: str, file: UploadFile = File(...),
                       subject_field: str = Form(""), object_field: str = Form(""),
                       predicate: str = Form("accessed"), predicate_field: str = Form(""),
                       subject_kind: str = Form("IP"),
-                      object_kind: str = Form("File"), roles: str = Form("")):
+                      object_kind: str = Form("File"), roles: str = Form(""),
+                      auto: bool = Form(False, description="Recognise Defender XDR / Sentinel exports and map their columns automatically.")):
+    # File uploads are imports: the change log and the notifications show them as such, not as agent writes.
+    channel_context = request_channel.set("Import")
+    try:
+        return await _import_file(board_id, file, title, query, dry_run, subject_field, object_field, predicate, predicate_field,
+                                  subject_kind, object_kind, roles, auto)
+    finally:
+        request_channel.reset(channel_context)
+
+
+async def _import_file(board_id, file, title, query, dry_run, subject_field, object_field, predicate, predicate_field,
+                       subject_kind, object_kind, roles, auto=False):
     content = await file.read(20_000_001)
     if len(content) > 20_000_000:
         raise HTTPException(413, "File is larger than 20 MB")
     try:
-        rows = parse_rows(content, file.filename or "")
+        rows = clean_rows(parse_rows(content, file.filename or ""))
     except (UnicodeError, ValueError, csv.Error) as error:
         raise HTTPException(422, str(error)) from error
+    if auto:
+        return await import_table(board_id, rows, title=title, query=query, dry_run=dry_run, filename=file.filename or "")
     if roles.strip():
         from app.structures import ActivityRowsInput
         from pydantic import ValidationError

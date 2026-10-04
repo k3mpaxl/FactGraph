@@ -561,7 +561,8 @@ footer.pager { justify-content: center; margin-top: 16px }
 @media (max-width: 1180px) {
   .inspector { position: absolute; top: 0; right: 0; bottom: 0; z-index: 20; box-shadow: var(--shadow-lg) }
   .tab-text { display: none }
-  .header-search { width: 170px; flex-basis: 170px }
+  .header-search { width: 170px; flex-basis: 170px; min-width: 80px }
+  .trigger-text { display: none }
 }
 @media (max-width: 900px) {
   .explorer { position: absolute; top: 0; left: 0; bottom: 0; z-index: 21; box-shadow: var(--shadow-lg) }
@@ -728,3 +729,61 @@ button.link:hover { text-decoration: underline }
 
 /* Icons keep their size in the narrow header and menus. */
 .topbar svg, .menu-trigger svg, .icon-button svg, .canvas-toolbar svg { flex-shrink: 0 }
+
+/* Notifications */
+.channel-badge.import { background: var(--ok-soft); color: var(--ok) }
+.notifications { position: relative }
+.notifications-trigger { position: relative }
+.notifications-badge { position: absolute; top: -2px; right: -3px; min-width: 15px; height: 15px; padding: 0 4px; border-radius: 8px; background: var(--accent); color: var(--accent-text); font-size: 9.5px; font-weight: 700; line-height: 15px; text-align: center; pointer-events: none }
+.notifications-badge.alarm { background: var(--bad) }
+.menu-content.notifications-panel { width: 400px; max-height: min(72vh, 640px); overflow: auto; padding: 6px 6px 8px; gap: 4px }
+.notifications-head { display: flex; align-items: center; justify-content: space-between; position: sticky; top: -6px; background: var(--surface); padding: 2px 2px 4px; z-index: 1 }
+.notifications-head .menu-label { padding: 6px 7px 2px }
+.notifications-panel .menu-note { padding: 4px 9px 8px; white-space: normal }
+.notice-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 1px }
+.notice-list + .notice-list { border-top: 1px solid var(--border); padding-top: 4px; margin-top: 2px }
+.notice { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; gap: 8px; align-items: start; padding: 7px 7px; border-radius: var(--radius-sm) }
+.notice:hover { background: var(--surface-2) }
+.notice-icon { padding-top: 1px; color: var(--text-3) }
+.notice.done .notice-icon { color: var(--ok) }
+.notice.error .notice-icon { color: var(--bad) }
+.notice.running .notice-icon, .notice.queued .notice-icon { color: var(--accent) }
+.notice-text { display: flex; flex-direction: column; gap: 1px; min-width: 0 }
+.notice-text strong { font-size: 12.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.notice-text span { font-size: 12px; color: var(--text-2); white-space: normal; overflow-wrap: anywhere }
+.notice.error .notice-text span { color: var(--bad) }
+.notice-text small { font-family: var(--font); font-size: 11px; color: var(--text-3) }
+.notice.quiet .notice-text strong { font-weight: 550; color: var(--text-2) }
+.notice-actions { display: flex; align-items: center; gap: 2px }
+.menu-content .notice-actions button { width: auto; padding: 3px 7px; gap: 4px; font-size: 11.5px }
+.menu-content .notice-actions .icon-button { padding: 0; width: 24px; height: 24px; justify-content: center }
+.notifications-head .secondary-button { width: auto; padding: 3px 8px; font-size: 11.5px; gap: 4px }
+.import-files { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 2px; max-height: 140px; overflow: auto }
+.import-files li { display: flex; justify-content: space-between; gap: 10px; font-size: 12px }
+.import-files li span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.import-files li.failed small { color: var(--bad) }
+@media (max-width: 520px) { .menu-content.notifications-panel { width: calc(100vw - 16px) } }
+.spin { animation: notice-spin 1s linear infinite }
+@keyframes notice-spin { to { transform: rotate(360deg) } }
+
+/* Explanations */
+.truth-why { display: flex; gap: 6px; align-items: flex-start; margin: -4px 0 10px; font-size: 12px; line-height: 1.45; color: var(--text-2) }
+.truth-why svg { flex: none; margin-top: 2px; color: var(--text-3) }
+.glossary-list { margin: 8px 0 0; display: flex; flex-direction: column; gap: 9px }
+.glossary-list > div { display: grid; grid-template-columns: 130px 1fr; gap: 12px; align-items: baseline }
+.glossary-list dt { font-weight: 600; font-size: 12.5px }
+.glossary-list dd { margin: 0; font-size: 12.5px; line-height: 1.5; color: var(--text-2) }
+@media (max-width: 520px) { .glossary-list > div { grid-template-columns: 1fr; gap: 2px } }
+
+/* Only the search field gives way in a narrow header; buttons and menus keep their size. */
+.topbar-right > .menu, .topbar-right > .icon-button { flex: none }
+
+/* Drop exports onto the board */
+.drop-overlay { position: absolute; inset: 8px; z-index: 60; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; text-align: center; padding: 24px;
+  border: 2px dashed var(--accent); border-radius: var(--radius-lg); background: color-mix(in srgb, var(--surface) 90%, var(--accent)); color: var(--text);
+  backdrop-filter: blur(3px); box-shadow: var(--shadow-lg); pointer-events: none; animation: fade .12s var(--ease) }
+.drop-overlay svg { color: var(--accent) }
+.drop-overlay strong { font-size: 15px }
+.drop-overlay span { max-width: 460px; font-size: 12.5px; color: var(--text-2) }
+.import-files.detected li { flex-direction: column; align-items: flex-start; gap: 1px }
+.import-files.detected li small { white-space: normal }

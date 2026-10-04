@@ -45,3 +45,22 @@ assert.equal(merged.facts[0].subject_id,'b');assert.equal(merged.facts[0].assert
 const undone = project('board',[...ops,{type:'action.undo',payload:{action_id:'1'},id:'u',clock:3,actor:'test',at:'2030-01-01'}]).data.entities[0]
 assert.equal(undone.name,'Old')
 console.log('Timeline grouping, ranges, legacy logs, unknown dates, retractions, merge and undo passed')
+
+// Window keeps the old semantics: retracted evidence never counts; untouched facts keep their identity; 200k values do not overflow.
+{
+  const t = require(require('node:path').resolve(process.argv[2]) + '/timeline.js')
+  const fact = (id, assertions) => ({ id, subject_id: 'a', predicate: 'p', object_id: 'b', valid_from: null, valid_to: null, assertions, truth_state: 'supported' })
+  const a = (id, from, extra = {}) => ({ id, fact_id: 'f', stance: 'supports', confidence: 1, source_id: 's', note: 'free text {not json', valid_from: from, valid_to: null, review_status: 'confirmed', ...extra })
+  const inside = fact('f1', [a('a1', '2026-09-10T00:00:00Z')])
+  const mixed = fact('f2', [a('a2', '2026-09-10T00:00:00Z'), a('a3', '2026-09-10T00:00:00Z', { retracted_at: '2026-09-11T00:00:00Z' })])
+  const outside = fact('f3', [a('a4', '2026-08-01T00:00:00Z')])
+  const legacy = fact('f4', [a('a5', null, { note: JSON.stringify({ TimeGenerated: '2026-09-09T12:00:00Z' }) })])
+  const result = t.factsInWindow([inside, mixed, outside, legacy], '2026-09-05T00:00:00Z', '2026-09-12T00:00:00Z', false)
+  assert.deepEqual(result.map(f => f.id), ['f1', 'f2', 'f4'])
+  assert.equal(result[0], inside, 'unchanged facts are not copied')
+  assert.deepEqual(result[1].assertions.map(x => x.id), ['a2'], 'retracted evidence is left out')
+  const many = Array.from({ length: 70000 }, (_, i) => fact(`m${i}`, [a(`m${i}`, new Date(Date.UTC(2026, 0, 1) + i * 60000).toISOString())]))
+  const bounds = t.timelineBounds(many)
+  assert.equal(bounds.from, '2026-01-01T00:00:00.000Z')
+  console.log('Timeline window semantics and large boards passed')
+}

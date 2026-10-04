@@ -181,13 +181,14 @@ test('layout: compact header and viewport on desktop/mobile, import file preview
   await page.getByLabel('Board menu').click()
   await page.getByRole('button',{name:'Import logs / KQL',exact:true}).click()
   const dialog=page.getByRole('dialog',{name:'Import activity logs'})
-  await dialog.getByLabel('File',{exact:true}).setInputFiles({name:'access.csv',mimeType:'text/csv',buffer:Buffer.from('IPAddress,FilePath,TimeGenerated\n10.0.0.5,repo/.env,2026-09-28T10:00:00Z')})
+  await dialog.getByLabel(/^Files/).setInputFiles({name:'access.csv',mimeType:'text/csv',buffer:Buffer.from('IPAddress,FilePath,TimeGenerated\n10.0.0.5,repo/.env,2026-09-28T10:00:00Z')})
   await dialog.getByRole('button',{name:'Preview import'}).click()
   await expect(dialog.getByText('Preview · no changes saved yet')).toBeVisible()
   expect((await graph()).entities).toHaveLength(0)
   await dialog.getByRole('button',{name:'Apply import'}).click()
   await expect(dialog).not.toBeVisible()
-  expect((await graph()).entities).toHaveLength(2)
+  // The import continues in the background and reports in the notifications.
+  await expect.poll(async()=> (await graph()).entities.length).toBe(2)
   await page.setViewportSize({width:768,height:900})
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true)
   await page.setViewportSize({width:390,height:844})
@@ -536,4 +537,103 @@ test('groups keep their place: drag collapsed card, expand, drag the expanded fr
   await page.locator('.frame-node.group .frame-head button').click()
   await expect.poll(async()=>Math.round((await graph()).groups[0].position.x-centre((await graph()).entities).x)).toBe(0)
   expect(group).toBeTruthy()
+})
+
+test('notifications: agent writes, several log files in a queue, remembered view after reload',async({page,request})=>{
+  const {id,token,call,graph}=await setup(page,request)
+  // An agent writes over MCP: the bell shows it and leads to the review.
+  const a=(await call('POST','/entities',{name:'Build agent',kind:'Device',x:60,y:100})).id
+  const b=(await mcp(token,'create_entity',{board_id:id,body:{name:'Secret store',kind:'Key Vault',x:550,y:100}})).id
+  const relation=(await mcp(token,'create_relation',{board_id:id,body:{subject_id:a,object_id:b,predicate:'reads'}})).id
+  await mcp(token,'add_evidence',{board_id:id,relation_id:relation,body:{stance:'supports',observation:'Read secret',locator:'row 1'}})
+  const bell=page.getByRole('button',{name:'Notifications'})
+  await expect(bell.locator('.notifications-badge')).toBeVisible()
+  await bell.click()
+  const panel=page.getByRole('dialog',{name:'Notifications'})
+  // The agent's three MCP calls are one notice; the REST call is another client.
+  const mcpNotice=panel.locator('.notice').filter({hasText:'Agent via MCP changed the board'})
+  await expect(mcpNotice).toHaveCount(1)
+  await expect(mcpNotice).toContainText('1 entity, 1 relationship, 1 new evidence item')
+  await expect(panel.locator('.notice').filter({hasText:'Agent via REST changed the board'})).toHaveCount(1)
+  await panel.getByRole('button',{name:'Review'}).first().click()
+  await expect(page.getByRole('tab',{name:/Evidence review/})).toHaveAttribute('aria-selected','true')
+  await page.getByRole('tab',{name:'Graph'}).click()
+  // Two log files at once: previewed together, imported one after another, each with its own notification.
+  await page.getByLabel('Board menu').click()
+  await page.getByRole('button',{name:'Import logs / KQL',exact:true}).click()
+  const dialog=page.getByRole('dialog',{name:'Import activity logs'})
+  await dialog.getByLabel(/^Files/).setInputFiles([
+    {name:'day1.csv',mimeType:'text/csv',buffer:Buffer.from('IPAddress,FilePath,TimeGenerated\n10.0.0.5,repo/.env,2026-09-28T10:00:00Z')},
+    {name:'day2.csv',mimeType:'text/csv',buffer:Buffer.from('IPAddress,FilePath,TimeGenerated\n10.0.0.6,repo/secrets.yml,2026-09-29T10:00:00Z')},
+  ])
+  await dialog.getByRole('button',{name:'Preview import'}).click()
+  await expect(dialog.getByText('2 of 2 files')).toBeVisible()
+  await dialog.getByRole('button',{name:'Import 2 files'}).click()
+  await expect(dialog).not.toBeVisible()
+  await expect.poll(async()=> (await graph()).entities.length).toBe(6)
+  await bell.click()
+  await expect(panel.locator('.notice.done').filter({hasText:'Import day1.csv'})).toBeVisible()
+  await expect(panel.locator('.notice.done').filter({hasText:'Import day2.csv'})).toBeVisible()
+  // Own imports are not reported a second time as someone else's change.
+  await expect(panel.locator('.notice').filter({hasText:'Import changed the board'})).toHaveCount(0)
+  await page.keyboard.press('Escape')
+  // The evidence window and the status filter survive a reload; the notifications too.
+  await page.getByRole('button',{name:'Evidence window',exact:true}).click()
+  await page.locator('.status-filter button.unknown').click()
+  await page.reload()
+  await expect(page.getByText('1 online',{exact:true})).toBeVisible()
+  await expect(page.locator('.status-filter button.unknown')).toHaveClass(/active/)
+  await expect(page.getByRole('button',{name:'Evidence window',exact:true})).toHaveAttribute('aria-pressed','true')
+  await page.getByRole('button',{name:'Notifications'}).click()
+  await expect(page.getByRole('dialog',{name:'Notifications'}).getByText('Import day2.csv')).toBeVisible()
+})
+
+test('drop: Defender XDR and Sentinel exports are recognised, mapped and joined by their IDs; unknown tables open the mapping',async({page,request})=>{
+  const {graph}=await setup(page,request)
+  const network=['Timestamp,DeviceId,DeviceName,ActionType,RemoteIP,RemotePort,RemoteUrl,LocalIP,Protocol,InitiatingProcessFileName,InitiatingProcessSHA1,InitiatingProcessAccountUpn,InitiatingProcessAccountObjectId,ReportId',
+    '2026-09-28T10:42:07.1234567Z,a1b2c3,WS-0142.corp.example,ConnectionSuccess,203.0.113.7,443,evil.example,10.0.0.5,Tcp,powershell.exe,'+'ab'.repeat(20)+',J.Doe@corp.example,11111111-2222-3333-4444-555555555555,18842',
+    '2026-09-28T10:43:07Z,a1b2c3,WS-0142.corp.example,ConnectionSuccess,203.0.113.7,443,evil.example,10.0.0.5,Tcp,powershell.exe,'+'ab'.repeat(20)+',J.Doe@corp.example,11111111-2222-3333-4444-555555555555,18843'].join('\n')
+  const signins=['"TimeGenerated [UTC]",UserPrincipalName,UserId,AppDisplayName,AppId,IPAddress,ResultType,ConditionalAccessStatus,CorrelationId,DeviceDetail',
+    '"9/28/2026, 10:40:01.512 AM",j.doe@corp.example,11111111-2222-3333-4444-555555555555,Azure Portal,c44b4083-3bb0-49c1-b47d-974e53cbdf3c,203.0.113.7,0,success,corr-1,"{""deviceId"":""dev-1"",""displayName"":""WS-0142""}"'].join('\n')
+  const drop=async(files:{name:string,text:string}[])=>{
+    const transfer=await page.evaluateHandle(files=>{const dt=new DataTransfer();for(const f of files) dt.items.add(new File([f.text],f.name,{type:'text/csv'}));return dt},files)
+    const target=page.locator('.workspace')
+    await target.dispatchEvent('dragenter',{dataTransfer:transfer})
+    await expect(page.locator('.drop-overlay')).toBeVisible()
+    await target.dispatchEvent('dragover',{dataTransfer:transfer})
+    await target.dispatchEvent('drop',{dataTransfer:transfer})
+    await expect(page.locator('.drop-overlay')).toHaveCount(0)
+  }
+  await drop([{name:'DeviceNetworkEvents.csv',text:network},{name:'SigninLogs.csv',text:signins}])
+  // Both files: XDR first (queue), then Sentinel; the user from both is one entity (Entra object ID), so is the IP.
+  await expect.poll(async()=>(await graph()).facts.length,{timeout:15000}).toBe(2)
+  const board=await graph()
+  const users=board.entities.filter((e:any)=>e.kind==='User')
+  expect(users.map((e:any)=>e.name)).toEqual(['j.doe@corp.example'])
+  expect(board.entities.filter((e:any)=>e.name==='203.0.113.7')).toHaveLength(1)
+  const device=board.entities.find((e:any)=>e.name==='ws-0142.corp.example')
+  expect(device.identifiers.map((i:any)=>i.namespace||i.scheme)).toEqual(expect.arrayContaining(['mde-device-id','fqdn']))
+  const net=board.facts.find((f:any)=>f.predicate==='connection success')
+  expect(net.participants.map((p:any)=>p.role).sort()).toEqual(['actor','source','target','target','via'])
+  expect(net.assertions).toHaveLength(2)
+  expect(net.assertions[0].locator).toMatch(/^DeviceNetworkEvents ReportId=1884\d DeviceId=a1b2c3$/)
+  const signin=board.facts.find((f:any)=>f.predicate==='signed in')
+  expect(signin.assertions[0].valid_from).toBe('2026-09-28T10:40:01.512000Z')
+  await page.getByRole('button',{name:'Notifications'}).click()
+  await expect(page.getByRole('dialog',{name:'Notifications'}).locator('.notice.done').filter({hasText:'DeviceNetworkEvents (Defender XDR)'})).toBeVisible()
+  await expect(page.getByRole('dialog',{name:'Notifications'}).locator('.notice.done').filter({hasText:'SigninLogs (Sentinel)'})).toBeVisible()
+  await page.keyboard.press('Escape')
+  // An unknown export: no automatic import, the mapping dialog opens with the columns it could guess.
+  await drop([{name:'proxy.csv',text:'when,ClientIP,UserPrincipalName,Operation,Workload\n2026-09-28T10:00:00Z,198.51.100.9,eve@corp.example,FileDownloaded,SharePoint'}])
+  const dialog=page.getByRole('dialog',{name:'Import activity logs'})
+  await expect(dialog).toBeVisible()
+  await expect(dialog.getByLabel('Column 1')).toHaveValue('UserPrincipalName')
+  await expect(dialog.getByLabel('Column 2')).toHaveValue('ClientIP')
+  await dialog.getByRole('button',{name:'Add column'}).click()
+  await dialog.getByLabel('Column 3').fill('Workload')
+  await dialog.getByLabel('Role 3').selectOption('target')
+  await dialog.getByLabel('Type 3').fill('Service')
+  await dialog.getByRole('button',{name:'Preview import'}).click()
+  await dialog.getByRole('button',{name:'Apply import'}).click()
+  await expect.poll(async()=>(await graph()).facts.some((f:any)=>f.predicate==='FileDownloaded'),{timeout:15000}).toBe(true)
 })

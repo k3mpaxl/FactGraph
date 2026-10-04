@@ -29,3 +29,29 @@ assert.deepEqual([...organicLayout(nodes, edges).entries()].slice(0, 20), [...po
 const hub = positions.get('hub'), leaf = positions.get('leaf0'), user = positions.get('u1')
 assert.ok(Math.hypot(leaf.x - hub.x, leaf.y - hub.y) < Math.hypot(user.x - hub.x, user.y - hub.y) + 3000)
 console.log('Organic layout: speed, compact shape, overlaps, pinned nodes and determinism passed')
+
+// Placement of new entities: same cells as the old all-pairs search, never overlapping, linear for bulk imports.
+{
+  const { placeNew, initialPosition } = require(path + '/layout.js')
+  const naive = (drafts, existing) => {
+    const occupied = [...existing]; let index = 0
+    return drafts.map(d => {
+      if (d.type !== 'entity.add' || d.payload.x != null || d.payload.y != null) return d
+      let p; do { p = initialPosition(index++); p = { x: p.x * 1.5, y: p.y } } while (occupied.some(o => Math.abs(o.x - p.x) < 270 && Math.abs(o.y - p.y) < 110))
+      occupied.push(p); return { ...d, payload: { ...d.payload, ...p } }
+    })
+  }
+  const existing = [{ x: 0, y: 0 }, { x: 450, y: 0 }, { x: 37, y: 160 }, { x: -460, y: -150 }]
+  const drafts = [...Array(60).keys()].map(i => i % 7 === 0 ? { type: 'fact.add', payload: { id: `f${i}` } } : i % 11 === 0 ? { type: 'entity.add', payload: { id: `p${i}`, x: 5, y: 5 } } : { type: 'entity.add', payload: { id: `e${i}` } })
+  assert.deepEqual(placeNew(drafts, existing), naive(drafts, existing), 'same positions as before')
+  const placed = placeNew(drafts, existing).filter(d => d.type === 'entity.add' && d.payload.id.startsWith('e')).map(d => d.payload)
+  const all = [...existing, ...placed]
+  for (let i = 0; i < all.length; i++) for (let j = i + 1; j < all.length; j++)
+    if (i >= existing.length || j >= existing.length) assert.ok(Math.abs(all[i].x - all[j].x) >= 270 || Math.abs(all[i].y - all[j].y) >= 110, `overlap ${i}/${j}`)
+  // Bulk: 3,000 new entities next to 3,000 existing ones.
+  const many = [...Array(3000).keys()].map(i => ({ x: (i % 60) * 405, y: Math.floor(i / 60) * 160 }))
+  const started = Date.now()
+  placeNew([...Array(3000).keys()].map(i => ({ type: 'entity.add', payload: { id: `b${i}` } })), many)
+  assert.ok(Date.now() - started < 1500, `bulk placement took ${Date.now() - started} ms`)
+  console.log('placement ok')
+}

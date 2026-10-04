@@ -38,6 +38,11 @@ type Props = {
   boardName: string; filterSummary: string; onNotice: (message: string) => void;
   /** Called once a request was handled, so a remounted canvas never replays it. */
   onRequestDone: () => void;
+  /** The analyst's remembered zoom and pan for this board; without one the graph is fitted once. */
+  /** A file was saved (image export), for the notification history. */
+  onExported?: (message: string) => void
+  initialViewport?: { x: number; y: number; zoom: number } | null
+  onViewportChange?: (viewport: { x: number; y: number; zoom: number }) => void
 }
 const builtInKinds = ['User', 'Device', 'IP', 'Service Principal', 'Key Vault', 'AKS Cluster', 'S3 Bucket', 'File', 'Repository', 'Credential', 'Environment Variable', 'Blob Storage']
 export { KindIcon }
@@ -319,7 +324,7 @@ function Canvas(props: Props) {
   }, [view, selectedNodeId, needle, typeByName, focusIds])
   useEffect(() => { if (pendingFocus.current && groups.some(g => g.id === pendingFocus.current && !g.collapsed)) { const id = pendingFocus.current; pendingFocus.current = null; requestAnimationFrame(() => focusOn(id)) } }, [view])
   useEffect(() => { if (pendingFit.current) { pendingFit.current = false; requestAnimationFrame(() => void flow.fitView({ padding: 0.2, maxZoom: 1.1, duration: 400 })) } }, [view])
-  useEffect(() => { if (!fitted.current && nodes.length) { fitted.current = true; requestAnimationFrame(() => void flow.fitView({ padding: 0.2, maxZoom: 1.1 })) } }, [nodes.length, flow])
+  useEffect(() => { if (!fitted.current && nodes.length) { fitted.current = true; if (!props.initialViewport) requestAnimationFrame(() => void flow.fitView({ padding: 0.2, maxZoom: 1.1 })) } }, [nodes.length, flow, props.initialViewport])
 
   const pickEdge = useRef((_id: string) => {})
   pickEdge.current = (id: string) => {
@@ -512,12 +517,12 @@ function Canvas(props: Props) {
       if (!result.nodeCount) throw new Error('Nothing to export in this area.')
       if (settings.format === 'svg') {
         if (mode === 'copy') { await navigator.clipboard.writeText(result.svg); props.onNotice('SVG markup copied') }
-        else { downloadBlob(new Blob([result.svg], { type: 'image/svg+xml;charset=utf-8' }), exportFilename(props.boardName, 'svg')); props.onNotice(`SVG exported · ${result.nodeCount} nodes`) }
+        else { downloadBlob(new Blob([result.svg], { type: 'image/svg+xml;charset=utf-8' }), exportFilename(props.boardName, 'svg')); props.onNotice(`SVG exported · ${result.nodeCount} nodes`); props.onExported?.(`SVG · ${result.nodeCount} nodes · ${exportFilename(props.boardName, 'svg')}`) }
       } else {
         const { blob, scale } = await svgToPng(result.svg, result.width, result.height, settings.scale)
         const note = scale < settings.scale - 0.01 ? ` · reduced to ${scale.toFixed(2)}× (browser size limit; use SVG for full detail)` : ''
         if (mode === 'copy') { await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]); props.onNotice(`PNG copied to clipboard${note}`) }
-        else { downloadBlob(blob, exportFilename(props.boardName, 'png')); props.onNotice(`PNG exported · ${Math.round(result.width * scale)}×${Math.round(result.height * scale)} px${note}`) }
+        else { downloadBlob(blob, exportFilename(props.boardName, 'png')); props.onNotice(`PNG exported · ${Math.round(result.width * scale)}×${Math.round(result.height * scale)} px${note}`); props.onExported?.(`PNG · ${Math.round(result.width * scale)}×${Math.round(result.height * scale)} px · ${exportFilename(props.boardName, 'png')}`) }
       }
       setPopover(null)
     } catch (e) { setError(e instanceof Error ? e.message : String(e)) } finally { setExporting(false) }
@@ -597,6 +602,7 @@ function Canvas(props: Props) {
       }}
       onDoubleClick={e => { if ((e.target as HTMLElement).classList.contains('react-flow__pane')) setDraft({ position: flow.screenToFlowPosition({ x: e.clientX, y: e.clientY }), kind: 'Device', name: '', predicate: '' }) }}
       deleteKeyCode={null} selectionOnDrag panOnDrag={[1, 2]} zoomOnScroll zoomOnPinch panActivationKeyCode="Space" zoomOnDoubleClick={false} selectionKeyCode="Shift" multiSelectionKeyCode="Shift"
+      defaultViewport={props.initialViewport ?? undefined} onMoveEnd={(_, viewport) => props.onViewportChange?.(viewport)}
       minZoom={MIN_ZOOM} maxZoom={MAX_ZOOM} snapToGrid={grid} snapGrid={[20, 20]} connectionRadius={40} colorMode={props.theme} onlyRenderVisibleElements proOptions={{ hideAttribution: true }}>
       <Background variant={BackgroundVariant.Dots} gap={20} size={1.2} />
       <Controls showInteractive={false} fitViewOptions={{ padding: 0.2, maxZoom: 1.1, duration: 300 }} position="bottom-left" />

@@ -202,7 +202,7 @@ export function buildGraphSvg(options: ExportOptions) {
         + (sub ? `<text x="${n(cx)}" y="${n(b.y + 57)}" text-anchor="middle" font-size="10" fill="${p.text3}">${text(sub)}</text>` : ''))
     }
   }
-  out.push(...labels)
+  for (const label of labels) out.push(label)  // no spread: very large graphs would overflow the call stack
   out.push('</g>')
 
   if (options.legend) {

@@ -1,16 +1,21 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import {
   Activity, ArrowDownToLine, ArrowLeft, ArrowRight, ChevronDown, ChevronRight, Clock, Command, Copy, CornerDownLeft,
   FileText, GitBranch, Keyboard, Link2, HardDrive, Server, Users, AlertTriangle, Lock, CircleHelp, ListTree, Merge, Moon, Pause, Pencil, Play, Plus, Plug, Search, ShieldCheck,
   SkipBack, SkipForward, Sparkles, Sun, Trash2, Undo2, Redo2, Upload, X, Crosshair, CheckCircle2, CircleDashed, Boxes, Zap, Layers, Ungroup, ImageDown,
+  RotateCcw,
 } from 'lucide-react'
 import { factsInWindow, timelineSteps, timelineEvents, periodLabel, evidencePeriod } from './timeline'
 import GraphView, { KindIcon, type CanvasRequest, type Lens, type Selection } from './GraphView'
 import { ActivityDialog, GroupInspector, ParticipantList, ROLES } from './Structures'
-import { LAYERS, LAYER_IDS, layerLabel, layerOf } from './layers'
+import { LAYERS, layerLabel, layerOf } from './layers'
+import { defaultView, loadView, saveView } from './savedView'
+import NotificationCenter from './NotificationCenter'
+import { explainTruth, GLOSSARY } from './explain'
+import { createLimiter, loadNotices, noticesFor, saveNotices, type Notice } from './notifications'
 import EvidenceReader, { EvidenceQueue } from './EvidenceReader'
 import { demoDrafts, factKey, legacyDrafts, normalizeIdentifier, type ActionDraft, type BoardAction } from './board'
-import { useBoard } from './useBoard'
+import { useBoard, type ChangeListener } from './useBoard'
 import { uuid } from './uuid'
 import { entityVisual } from './entityVisual'
 import type { Assertion, Entity, Fact, GraphData, Identifier, TruthState } from './types'
@@ -151,6 +156,7 @@ function Inspector({ data, selection, onAdd, onDelete, onRetract, onOpenEvidence
         <button onClick={() => onSelect({ kind: 'entity', id: fact.object_id }, true)}>{nameOf(data, fact.object_id)}</button>
       </div>}
       <div className="fact-state"><StatePill state={fact.truth_state} /><span>{active.length} active · {confirmed} confirmed</span>{!isActivity && confirmed > 0 && <span className="lock-note" title="Confirmed evidence refers to these two entities. Retract or unconfirm it before moving an end.">Ends locked</span>}</div>
+      {(() => { const why = explainTruth(fact.truth_state, fact.assertions); return <p className="truth-why"><CircleHelp size={13} /><span>{why.sentence}{why.notCounted ? ` ${why.notCounted}` : ''}</span></p> })()}
       <dl className="meta-list"><dt>Valid from</dt><dd>{date(fact.valid_from)}</dd>{fact.valid_to && <><dt>Valid to</dt><dd>{date(fact.valid_to)}</dd></>}</dl>
       <Section title="Evidence" count={fact.assertions.length} action={<button className="text-button" onClick={() => onAdd('assertion')}><Plus size={14} /> Add evidence</button>}>
         {fact.assertions.length ? fact.assertions.map(assertion => <AssertionRow key={assertion.id} assertion={assertion} fact={fact} data={data} onCopy={onCopy} onOpen={() => onOpenEvidence(assertion.id)} onRetract={() => onRetract(assertion.id)} />)
@@ -290,42 +296,114 @@ function StanceSelect({ value, onChange }: { value: 'supports' | 'refutes'; onCh
   return <div className="stance-field"><span>Evidence stance</span><div className="segmented"><button type="button" className={value === 'supports' ? 'active supports' : ''} onClick={() => onChange('supports')}>Supports</button><button type="button" className={value === 'refutes' ? 'active refutes' : ''} onClick={() => onChange('refutes')}>Refutes</button></div></div>
 }
 
-function LogImportDialog({ boardId, sessionToken, onClose, onDone }: {
-  boardId: string; sessionToken: string; onClose: () => void; onDone: (summary: string) => void;
+export type MappingSuggestion = { roles: { field: string; role: string; kind: string }[]; operation_field?: string | null }
+type Detected = { table: string; product: string; known_columns: number; total_columns: number; doc?: string; roles?: { field: string; role: string; kind: string; identifiers?: string[] }[] }
+
+/** Error from the import endpoint; a not recognised export carries a mapping suggestion for the dialog. */
+export class ImportProblem extends Error {
+  constructor(message: string, readonly suggestion?: MappingSuggestion, readonly detection?: Detected) { super(message) }
+}
+
+/** Change batches of this browser's own file imports: their actions must not be reported as someone else's change. */
+const ownImportBatches = new Set<string>()
+
+/** Upload one file to the import endpoint. auto = recognise Defender XDR / Sentinel exports and map them automatically. */
+export async function uploadImport(boardId: string, sessionToken: string, file: File, fields: Record<string, string>) {
+  const body = new FormData()
+  for (const [key, value] of Object.entries(fields)) body.set(key, value)
+  if (fields.dry_run !== 'true') {
+    // The server uses this ID for the whole import, so it is known here before the first action arrives.
+    const batch = uuid()
+    ownImportBatches.add(batch)
+    body.set('batch_id', batch)
+  }
+  body.set('file', file)
+  const response = await fetch(`/api/boards/${boardId}/imports/file`, { method: 'POST', headers: { 'X-FactGraph-Token': sessionToken }, body })
+  const result = await response.json().catch(() => ({})) as Record<string, unknown>
+  if (!response.ok) {
+    const detail = result.detail as Record<string, unknown> | string | undefined
+    if (detail && typeof detail === 'object') throw new ImportProblem(String(detail.message ?? 'Import failed'), detail.suggestion as MappingSuggestion | undefined, detail.detection as Detected | undefined)
+    throw new ImportProblem(typeof detail === 'string' ? detail : `Import failed (HTTP ${response.status})`)
+  }
+  return result
+}
+
+export const describeTableImport = (r: Record<string, unknown>) =>
+  `${r.table} (${r.product}) · ${Number(r.rows).toLocaleString('en')} rows · ${r.new_entities !== undefined ? `${Number(r.new_entities).toLocaleString('en')} new of ` : ''}${Number(r.entities).toLocaleString('en')} entities · ${Number(r.relations).toLocaleString('en')} ${r.table === 'Log rows' ? 'relationships' : 'activities'} · ${Number(r.evidence).toLocaleString('en')} evidence items${r.skipped ? ` · ${r.skipped} rows skipped` : ''}`
+
+function LogImportDialog({ boardId, sessionToken, onClose, onApply, initialFiles, suggestion }: {
+  boardId: string; sessionToken: string; onClose: () => void;
+  /** Runs the imports in the background (one after another, each with a notification); the dialog closes at once. */
+  onApply: (jobs: { name: string; run: () => Promise<string> }[]) => void;
+  /** Files dropped on the board whose table was not recognised, with the server's mapping suggestion. */
+  initialFiles?: File[]; suggestion?: MappingSuggestion;
 }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const [preview, setPreview] = useState<Record<string, unknown> | null>(null)
-  const [mode, setMode] = useState<'relation' | 'activity'>('relation')
-  const [roles, setRoles] = useState([{ field: 'CallerIPAddress', role: 'source', kind: 'IP' }, { field: 'AppId', role: 'identity', kind: 'Service Principal' }, { field: 'ResourceId', role: 'target', kind: 'Key Vault' }])
+  const [files, setFiles] = useState<File[]>(initialFiles ?? [])
+  type FilePreview = { file: string; result?: Record<string, unknown>; error?: string; suggestion?: MappingSuggestion; detection?: Detected }
+  const [preview, setPreview] = useState<FilePreview[] | null>(null)
+  const [mode, setMode] = useState<'auto' | 'relation' | 'activity'>(suggestion?.roles.length ? 'activity' : 'auto')
+  const [roles, setRoles] = useState(suggestion?.roles.length ? suggestion.roles.length >= 2 ? suggestion.roles : [...suggestion.roles, { field: '', role: 'target', kind: 'Other' }]
+    : [{ field: 'CallerIPAddress', role: 'source', kind: 'IP' }, { field: 'AppId', role: 'identity', kind: 'Service Principal' }, { field: 'ResourceId', role: 'target', kind: 'Key Vault' }])
+  const [operationField, setOperationField] = useState(suggestion?.operation_field ?? '')
+  const send = async (fields: FormData, file: File, dryRun: boolean) => {
+    const values: Record<string, string> = {}
+    for (const [key, value] of fields) if (key !== 'file' && typeof value === 'string') values[key] = value
+    values.dry_run = String(dryRun)
+    if (mode === 'auto') values.auto = 'true'
+    if (mode === 'activity') values.roles = JSON.stringify(roles.filter(r => r.field.trim()))
+    return uploadImport(boardId, sessionToken, file, values)
+  }
+  const describe = (r: Record<string, unknown>) => mode === 'auto' ? describeTableImport(r) : `${r.rows} log rows · ${r.entities} entities · ${r.relations} ${mode === 'activity' ? 'activities' : 'relationships'} · ${r.evidence} evidence items`
   const submit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault()
+    if (!files.length) { setError('Choose at least one file.'); return }
+    const fields = new FormData(event.currentTarget)
+    if (preview) {
+      // Apply every file that previewed cleanly; the work continues in the background.
+      const good = files.filter(file => preview.find(p => p.file === file.name)?.result)
+      onApply(good.map(file => ({ name: file.name, run: async () => describe(await send(fields, file, false)) })))
+      onClose()
+      return
+    }
     setBusy(true); setError('')
     try {
-      const body = new FormData(event.currentTarget)
-      body.set('dry_run', preview ? 'false' : 'true')
-      if (mode === 'activity') body.set('roles', JSON.stringify(roles.filter(r => r.field.trim())))
-      const response = await fetch(`/api/boards/${boardId}/imports/file`, {
-        method: 'POST', headers: { 'X-FactGraph-Token': sessionToken }, body,
-      })
-      const result = await response.json() as Record<string, unknown>
-      if (!response.ok) throw new Error(String(result.detail ?? 'Import failed'))
-      if (!preview) { setPreview(result); return }
-      onDone(`${result.rows} log rows · ${result.entities} entities · ${result.relations} ${mode === 'activity' ? 'activities' : 'relationships'} · ${result.evidence} evidence items`)
-    } catch (problem) { setError(problem instanceof Error ? problem.message : 'Import failed') }
-    finally { setBusy(false) }
+      const results: FilePreview[] = []
+      for (const file of files) {
+        try { results.push({ file: file.name, result: await send(fields, file, true) }) }
+        catch (problem) { results.push({ file: file.name, error: problem instanceof Error ? problem.message : 'Import failed',
+          suggestion: problem instanceof ImportProblem ? problem.suggestion : undefined, detection: problem instanceof ImportProblem ? problem.detection : undefined }) }
+      }
+      setPreview(results)
+      if (results.every(r => r.error)) setError(results.length === 1 ? results[0].error! : 'None of the files can be imported with this mapping.')
+    } finally { setBusy(false) }
   }
+  const mapManually = (p: FilePreview) => {
+    const file = files.find(f => f.name === p.file)
+    if (file) setFiles([file])
+    if (p.suggestion?.roles.length) setRoles(p.suggestion.roles.length >= 2 ? p.suggestion.roles : [...p.suggestion.roles, { field: '', role: 'target', kind: 'Other' }])
+    setOperationField(p.suggestion?.operation_field ?? '')
+    setMode('activity'); setPreview(null); setError('')
+  }
+  const total = (key: string) => (preview ?? []).reduce((sum, p) => sum + Number(p.result?.[key] ?? 0), 0)
+  const importable = (preview ?? []).filter(p => p.result).length
   return <div className="modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) onClose() }}>
     <div className="modal" role="dialog" aria-modal="true" aria-label="Import activity logs">
       <div className="modal-header"><h2>Import logs & KQL results</h2><button className="icon-button" onClick={onClose} aria-label="Close dialog"><X size={18} /></button></div>
       <form onChange={() => setPreview(null)} onSubmit={event => void submit(event)}>
         <div className="modal-body">
-          <p className="hint">CSV, JSON or JSONL result rows. KQL is not executed here; the query and supplied rows are stored as the evidence source.</p>
-          <div className="segmented full" role="group" aria-label="Import mode"><button type="button" className={mode === 'relation' ? 'active' : ''} onClick={() => { setMode('relation'); setPreview(null) }}>Relationships · 2 columns</button><button type="button" className={mode === 'activity' ? 'active' : ''} onClick={() => { setMode('activity'); setPreview(null) }}>Activities · several roles</button></div>
-          <label>File<input name="file" type="file" accept=".csv,.json,.jsonl,.ndjson" required /></label>
-          <label>Source title<input name="title" defaultValue="Access Logs" required /></label>
+          <p className="hint">{mode === 'auto' ? 'Exports from Defender XDR advanced hunting or Microsoft Sentinel (CSV, JSON): the table is recognised from its columns, devices, accounts, IPs, files and apps are mapped with their IDs. Tip: drop the files straight onto the board.'
+            : 'CSV, JSON or JSONL result rows. KQL is not executed here; the query and supplied rows are stored as the evidence source.'}</p>
+          <div className="segmented full" role="group" aria-label="Import mode">
+            <button type="button" className={mode === 'auto' ? 'active' : ''} onClick={() => { setMode('auto'); setPreview(null) }}>Automatic · XDR / Sentinel</button>
+            <button type="button" className={mode === 'relation' ? 'active' : ''} onClick={() => { setMode('relation'); setPreview(null) }}>Relationships · 2 columns</button>
+            <button type="button" className={mode === 'activity' ? 'active' : ''} onClick={() => { setMode('activity'); setPreview(null) }}>Activities · several roles</button></div>
+          <label>Files <span className="optional">several at once are imported one after another</span><input name="file" type="file" multiple accept=".csv,.json,.jsonl,.ndjson" onChange={e => setFiles([...(e.target.files ?? [])])} /></label>
+          {files.length > 0 && initialFiles && <p className="hint">Selected: {files.map(f => f.name).join(', ')}</p>}
+          <label>Source title {mode === 'auto' && <span className="optional">blank = table and file name</span>}<input name="title" key={`title-${mode}`} defaultValue={mode === 'auto' ? '' : 'Access Logs'} required={mode !== 'auto'} /></label>
           <label>KQL query <span className="optional">optional</span><textarea name="query" rows={3} className="mono" placeholder="AccessLogs | project IPAddress, FilePath, TimeGenerated" /></label>
-          {mode === 'relation' ? <>
+          {mode === 'auto' ? null : mode === 'relation' ? <>
             <div className="field-grid"><label>Source column <span className="optional">blank = auto</span><input name="subject_field" placeholder="IPAddress" /></label><label>Target column <span className="optional">blank = auto</span><input name="object_field" placeholder="FilePath" /></label></div>
             <div className="field-grid"><label>Source type<input name="subject_kind" defaultValue="IP" /></label><label>Target type<input name="object_kind" defaultValue="File" /></label></div>
           </> : <div className="stack role-mapping">
@@ -338,10 +416,20 @@ function LogImportDialog({ boardId, sessionToken, onClose, onDone }: {
             </div>)}
             <button type="button" className="text-button" onClick={() => setRoles([...roles, { field: '', role: 'actor', kind: 'User' }])}><Plus size={14} /> Add column</button>
           </div>}
-          <div className="field-grid"><label>{mode === 'activity' ? 'Operation' : 'Relationship'}<input name="predicate" defaultValue={mode === 'activity' ? 'performed' : 'accessed'} key={mode} required /></label><label>{mode === 'activity' ? 'Operation column' : 'Relationship column'} <span className="optional">optional</span><input name="predicate_field" placeholder="OperationName" /></label></div>
-          {preview && <div className="import-preview"><strong>Preview · no changes saved yet</strong><p>{String(preview.rows)} rows · {String(preview.entities)} entities · {String(preview.relations)} {mode === 'activity' ? 'activities' : 'relationships'} · {String(preview.skipped)} skipped</p><p>{mode === 'activity' ? `Roles: ${roles.filter(r => r.field).map(r => `${r.field} → ${r.role}`).join(', ')}` : `Mapping: ${String(preview.subject_field)} → ${String(preview.object_field)}`}. New evidence is unconfirmed.</p></div>}{error && <div className="form-error">{error}</div>}
+          {mode !== 'auto' && <div className="field-grid"><label>{mode === 'activity' ? 'Operation' : 'Relationship'}<input name="predicate" defaultValue={mode === 'activity' ? 'performed' : 'accessed'} key={mode} required /></label><label>{mode === 'activity' ? 'Operation column' : 'Relationship column'} <span className="optional">optional</span><input name="predicate_field" placeholder="OperationName" value={operationField} onChange={e => setOperationField(e.target.value)} /></label></div>}
+          {preview && mode === 'auto' && <div className="import-preview"><strong>Preview · no changes saved yet</strong>
+            {preview.length > 1 && <p>{importable} of {preview.length} files can be imported</p>}
+            <ul className="import-files detected">{preview.map(p => <li key={p.file} className={p.error ? 'failed' : ''}>
+              <span>{p.file}</span>
+              {p.result ? <small>{String(p.result.table)} ({String(p.result.product)}) · {Number((p.result.detection as Detected | undefined)?.known_columns ?? 0)} of {Number((p.result.detection as Detected | undefined)?.total_columns ?? 0)} columns known · {String(p.result.rows)} rows → {String(p.result.relations)} activities, {String(p.result.new_entities)} new entities</small>
+                : <small>{p.error} {p.suggestion && <button type="button" className="text-button" onClick={() => mapManually(p)}>Map columns manually</button>}</small>}
+              {p.result && Array.isArray((p.result.detection as Detected | undefined)?.roles) && <small className="muted">{(p.result.detection as Detected).roles!.map(r => `${r.field} → ${r.role} (${r.kind})`).join(' · ')}</small>}
+            </li>)}</ul>
+            <p>New evidence is unconfirmed. Devices, accounts and files are matched by their IDs (DeviceId, object ID, hashes) with what is already on the board.</p></div>}
+          {preview && mode !== 'auto' && <div className="import-preview"><strong>Preview · no changes saved yet</strong><p>{preview.length > 1 ? `${importable} of ${preview.length} files · ` : ''}{total('rows')} rows · {total('entities')} entities · {total('relations')} {mode === 'activity' ? 'activities' : 'relationships'} · {total('skipped')} skipped</p><p>{mode === 'activity' ? `Roles: ${roles.filter(r => r.field).map(r => `${r.field} → ${r.role}`).join(', ')}` : preview[0]?.result ? `Mapping: ${String(preview[0].result.subject_field)} → ${String(preview[0].result.object_field)}` : ''}. New evidence is unconfirmed.</p>
+            {preview.length > 1 && <ul className="import-files">{preview.map(p => <li key={p.file} className={p.error ? 'failed' : ''}><span>{p.file}</span><small>{p.error ?? `${String(p.result?.rows)} rows · ${String(p.result?.relations)} ${mode === 'activity' ? 'activities' : 'relationships'}`}</small></li>)}</ul>}</div>}{error && <div className="form-error">{error}</div>}
         </div>
-        <div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>Cancel</button><button className="primary-button" disabled={busy}>{busy ? 'Processing…' : preview ? 'Apply import' : 'Preview import'} <ArrowRight size={14} /></button></div>
+        <div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>Cancel</button><button className="primary-button" disabled={busy || (!!preview && !importable)}>{busy ? 'Processing…' : preview ? importable > 1 ? `Import ${importable} files` : 'Apply import' : 'Preview import'} <ArrowRight size={14} /></button></div>
       </form>
     </div>
   </div>
@@ -549,7 +637,7 @@ type StorageInfo = { persisted: boolean | null; usage: number | null; quota: num
 const formatBytes = (value: number) => value < 1024 * 1024 ? `${Math.max(1, Math.round(value / 1024))} KB` : value < 1024 ** 3 ? `${(value / 1024 / 1024).toFixed(1)} MB` : `${(value / 1024 ** 3).toFixed(1)} GB`
 
 /** Help: where data lives, version, and the keyboard and mouse controls. */
-function HelpDialog({ boardCount, onExport, onClose, initialTab = 'data' }: { boardCount: number; onExport: () => void; onClose: () => void; initialTab?: 'data' | 'keys' }) {
+function HelpDialog({ boardCount, onExport, onClose, initialTab = 'data' }: { boardCount: number; onExport: () => void; onClose: () => void; initialTab?: 'data' | 'keys' | 'glossary' }) {
   const [tab, setTab] = useState(initialTab)
   const [storage, setStorage] = useState<StorageInfo>({ persisted: null, usage: null, quota: null })
   const [server, setServer] = useState<string | null>(null)
@@ -581,7 +669,8 @@ function HelpDialog({ boardCount, onExport, onClose, initialTab = 'data' }: { bo
         <button className="icon-button" onClick={onClose} aria-label="Close dialog"><X size={18} /></button></div>
       <div className="help-tabs"><div className="segmented full" role="tablist" aria-label="Help topics">
         <button role="tab" aria-selected={tab === 'data'} className={tab === 'data' ? 'active' : ''} onClick={() => setTab('data')}>Where your data lives</button>
-        <button role="tab" aria-selected={tab === 'keys'} className={tab === 'keys' ? 'active' : ''} onClick={() => setTab('keys')}>Keyboard & mouse</button></div></div>
+        <button role="tab" aria-selected={tab === 'keys'} className={tab === 'keys' ? 'active' : ''} onClick={() => setTab('keys')}>Keyboard & mouse</button>
+        <button role="tab" aria-selected={tab === 'glossary'} className={tab === 'glossary' ? 'active' : ''} onClick={() => setTab('glossary')}>Glossary</button></div></div>
       <div className="modal-body">
         {tab === 'data' ? <>
           <div className="storage-hero"><HardDrive size={20} /><div><strong>Everything stays in this browser.</strong><p>Boards, entities, evidence and their history are stored only in this browser's local database (IndexedDB) on this device.</p></div></div>
@@ -601,6 +690,9 @@ function HelpDialog({ boardCount, onExport, onClose, initialTab = 'data' }: { bo
             </div>
           </div>
           <p className="hint version-line">App v{__APP_VERSION__}{server ? ` · server v${server}` : ''}{mismatch ? ' — versions differ, reload the page after an update.' : ''} · <a href="/docs" target="_blank" rel="noreferrer">REST documentation</a></p>
+        </> : tab === 'glossary' ? <>
+          <p className="hint">How FactGraph decides what is known. The status of a relationship comes only from confirmed, unretracted evidence.</p>
+          <dl className="glossary-list">{GLOSSARY.map(entry => <div key={entry.term}><dt>{['Supported', 'Disputed', 'Refuted', 'Unknown'].includes(entry.term) ? <StatePill state={entry.term.toLowerCase() as TruthState} /> : entry.term}</dt><dd>{entry.text}</dd></div>)}</dl>
         </> : <>
           <dl className="shortcut-list">{rows.map(([label, keys]) => <div key={label}><dt>{label}</dt><dd>{keys.map((k, i) => ['–', '·'].includes(k) || k.includes(' ') ? <span key={i} className="muted">{k}</span> : <Kbd key={i}>{k}</Kbd>)}</dd></div>)}</dl>
           <div className="form-divider">Mouse & trackpad</div>
@@ -727,9 +819,12 @@ function Menu({ label, trigger, children, className = '', align = 'left' }: { la
 
 export default function App() {
   const [boardId] = useState(currentBoardId)
-  const board = useBoard(boardId)
+  const changes: ChangeListener = useRef(null)
+  const board = useBoard(boardId, changes)
   const data = board.ready ? board.data : null
-  const [selection, setSelectionState] = useState<Selection>(null)
+  // Filters, layers, time window, selection and zoom are this analyst's own: per board in this browser, never synced.
+  const saved = useMemo(() => loadView(boardId), [boardId])
+  const [selection, setSelectionState] = useState<Selection>(saved.selection)
   const [dialog, setDialog] = useState<DialogKind>(null)
   const [readerId, setReaderId] = useState<string | null>(null)
   const [editingAssertionId, setEditingAssertionId] = useState<string | null>(null)
@@ -738,26 +833,23 @@ export default function App() {
   // Light is the default; dark is an explicit choice that is remembered.
   const [theme, setTheme] = useState<Theme>(() => readPref('theme') === 'dark' ? 'dark' : 'light')
   const [search, setSearch] = useState('')
-  const [stateFilter, setStateFilter] = useState<TruthState | 'all'>('all')
+  const [stateFilter, setStateFilter] = useState<TruthState | 'all'>(saved.stateFilter)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [toast, setToast] = useState('')
   const [showLogImport, setShowLogImport] = useState(false)
   const [showPalette, setShowPalette] = useState(false)
-  const [showHelp, setShowHelp] = useState<false | 'data' | 'keys'>(false)
+  const [showHelp, setShowHelp] = useState<false | 'data' | 'keys' | 'glossary'>(false)
   const [showConnect, setShowConnect] = useState(false)
   const [askName, setAskName] = useState(() => { try { return !localStorage.getItem('factgraph:displayName') } catch { return false } })
-  const [showTime, setShowTime] = useState(false)
+  const [showTime, setShowTime] = useState(saved.showTime)
   const [request, setRequest] = useState<CanvasRequest | null>(null)
   // Layer visibility and display options; a saved perspective can set them in one step.
-  const [lens, setLensState] = useState<Lens>(() => {
-    try { const raw = JSON.parse(localStorage.getItem('factgraph:lens') ?? 'null'); if (raw) return { layers: Array.isArray(raw.layers) ? new Set<string>(raw.layers.filter((l: string) => LAYER_IDS.includes(l))) : null, collapseActivities: !!raw.collapseActivities, showLanes: !!raw.showLanes } } catch { /* ignore */ }
-    return { layers: null, collapseActivities: false, showLanes: false }
-  })
+  const [lens, setLensState] = useState<Lens>(() => ({ layers: saved.lens.layers ? new Set(saved.lens.layers) : null,
+    collapseActivities: saved.lens.collapseActivities, showLanes: saved.lens.showLanes }))
   const [activePerspective, setActivePerspective] = useState<string | null>(() => new URLSearchParams(location.search).get('lens'))
   const setLens = (next: Lens, keepPerspective = false) => {
     setLensState(next)
-    writePref('lens', JSON.stringify({ layers: next.layers ? [...next.layers] : null, collapseActivities: next.collapseActivities, showLanes: next.showLanes }))
     if (!keepPerspective) setPerspectiveParam(null)
   }
   const setPerspectiveParam = (id: string | null) => {
@@ -803,12 +895,171 @@ export default function App() {
     setLens({ layers: view.layers ? new Set(view.layers) : null, collapseActivities: view.collapse_activities, showLanes: view.show_lanes }, true)
     setPerspectiveParam(view.id)
   }
-  const [evidenceFrom, setEvidenceFrom] = useState('')
-  const [evidenceTo, setEvidenceTo] = useState('')
-  const [includeUndated, setIncludeUndated] = useState(true)
+  const [evidenceFrom, setEvidenceFrom] = useState(saved.from)
+  const [evidenceTo, setEvidenceTo] = useState(saved.to)
+  const [includeUndated, setIncludeUndated] = useState(saved.includeUndated)
+  const viewport = useRef(saved.viewport)
+  const persistView = useCallback(() => saveView(boardId, { stateFilter, from: evidenceFrom, to: evidenceTo, includeUndated, showTime, selection, viewport: viewport.current,
+    lens: { layers: lens.layers ? [...lens.layers] : null, collapseActivities: lens.collapseActivities, showLanes: lens.showLanes } }),
+    [boardId, stateFilter, evidenceFrom, evidenceTo, includeUndated, showTime, selection, lens])
+  useEffect(persistView, [persistView])
+  // A remembered selection that no longer exists (deleted by a colleague, undone) is dropped once the board is loaded.
+  useEffect(() => {
+    if (!data || !selection) return
+    const exists = selection.kind === 'entity' ? data.entities.some(e => e.id === selection.id) : selection.kind === 'fact' ? data.facts.some(f => f.id === selection.id) : (data.groups ?? []).some(g => g.id === selection.id)
+    if (!exists) setSelectionState(null)
+  }, [data, selection])
+  const resetView = () => {
+    const base = defaultView()
+    setStateFilter(base.stateFilter); setEvidenceFrom(''); setEvidenceTo(''); setIncludeUndated(true); setShowTime(false)
+    setLens({ layers: null, collapseActivities: false, showLanes: false })
+    canvas('fit'); setToast('View reset: all filters cleared')
+  }
   const importInput = useRef<HTMLInputElement>(null)
 
   useEffect(() => { if (toast) { const timer = window.setTimeout(() => setToast(''), 3000); return () => clearTimeout(timer) } }, [toast])
+
+  // ---------------------------------------------------------------------------------------------- notifications
+  const [notices, setNotices] = useState<Notice[]>(() => loadNotices(boardId))
+  useEffect(() => { const timer = window.setTimeout(() => saveNotices(boardId, notices), 400); return () => window.clearTimeout(timer) }, [boardId, notices])
+  // A reload right after an import must not lose the last notices still waiting for the debounced save.
+  const latestNotices = useRef(notices)
+  latestNotices.current = notices
+  useEffect(() => {
+    const flush = () => saveNotices(boardId, latestNotices.current)
+    window.addEventListener('pagehide', flush)
+    return () => window.removeEventListener('pagehide', flush)
+  }, [boardId])
+  const notify = useCallback((notice: Omit<Notice, 'id' | 'at'> & { id?: string }) => {
+    const full: Notice = { id: notice.id ?? uuid(), at: new Date().toISOString(), ...notice }
+    setNotices(list => [full, ...list.filter(n => n.id !== full.id)])
+    return full.id
+  }, [])
+  const updateNotice = useCallback((id: string, patch: Partial<Notice>) => setNotices(list => list.map(n => n.id === id ? { ...n, ...patch } : n)), [])
+  // Remote batches arrive in chunks of 100; collect them briefly so one batch becomes one notice.
+  const pendingBatches = useRef(new Map<string, BoardAction[]>())
+  const batchTimer = useRef<number | undefined>(undefined)
+  const syncCount = useRef<{ id: string; count: number } | null>(null)
+  changes.current = fresh => {
+    for (const item of fresh) {
+      if (item.actor === board.actor && (item.channel ?? 'UI') === 'UI') continue
+      // The analyst's own file imports have their own notice.
+      if (item.batch_id && ownImportBatches.has(item.batch_id)) continue
+      if (syncCount.current && item.actor !== board.actor) syncCount.current.count++
+      const key = item.batch_id ?? item.id
+      const list = pendingBatches.current.get(key)
+      if (list) list.push(item); else pendingBatches.current.set(key, [item])
+    }
+    if (!pendingBatches.current.size) return
+    window.clearTimeout(batchTimer.current)
+    batchTimer.current = window.setTimeout(() => {
+      const batches = pendingBatches.current
+      pendingBatches.current = new Map()
+      setNotices(list => {
+        const { updates, created } = noticesFor(batches, board.actor, list)
+        const changed = new Map(updates.map(n => [n.id, n]))
+        return [...created, ...updates, ...list.filter(n => !changed.has(n.id))]
+      })
+    }, 800)
+  }
+  // Connection: only lasting outages (> 5 s) are worth a notice; when back, say how long and what was synced.
+  const wasConnected = useRef(false)
+  const outage = useRef<{ since: string; id: string | null; timer?: number } | null>(null)
+  useEffect(() => {
+    if (!board.ready) return
+    if (board.connected) {
+      const lost = outage.current
+      outage.current = null
+      if (lost?.timer) window.clearTimeout(lost.timer)
+      if (lost?.id) {
+        const id = lost.id
+        const minutes = Math.round((Date.now() - Date.parse(lost.since)) / 60000)
+        updateNotice(id, { status: 'done', title: 'Connection restored', finished: new Date().toISOString(), read: false,
+          detail: `Offline for ${minutes < 1 ? 'less than a minute' : `${minutes} min`}. Changes made meanwhile were kept in this browser and sent now.` })
+        syncCount.current = { id, count: 0 }
+        window.setTimeout(() => {
+          const synced = syncCount.current
+          syncCount.current = null
+          if (synced?.count) setNotices(list => list.map(n => n.id === synced.id ? { ...n, detail: `${n.detail} ${synced.count.toLocaleString('en')} changes from others synced.` } : n))
+        }, 6000)
+      }
+      wasConnected.current = true
+    } else if (wasConnected.current && !outage.current) {
+      const since = new Date().toISOString()
+      outage.current = { since, id: null }
+      outage.current.timer = window.setTimeout(() => {
+        if (outage.current?.since !== since) return
+        outage.current.id = notify({ kind: 'connection', status: 'error', title: 'Connection to the server lost',
+          detail: 'Your changes are kept in this browser and sent when the connection is back. Agents cannot reach this board meanwhile.' })
+      }, 5000)
+    }
+  }, [board.ready, board.connected, notify, updateNotice])
+  useEffect(() => { if (board.storageError) notify({ id: `storage:${board.storageError}`, kind: 'error', status: 'error', title: 'Browser storage problem', detail: board.storageError }) }, [board.storageError, notify])
+  const markNoticesRead = useCallback(() => setNotices(list => list.map(n => n.read || n.status === 'running' || n.status === 'queued' ? n : { ...n, read: true })), [])
+  const openNotice = (notice: Notice) => {
+    const target = notice.target
+    if (!target) return
+    if (target.kind === 'review') setActiveTab('review')
+    else if (target.kind === 'activity') setActiveTab('activity')
+    else if (target.id && data && (target.kind === 'entity' ? data.entities.some(e => e.id === target.id) : data.facts.some(f => f.id === target.id))) setSelection({ kind: target.kind, id: target.id }, true)
+    else setToast('That item is no longer on the board')
+  }
+  // Several log files: one after another, each with its own notice; the dialog closes right away.
+  const importSlots = useMemo(() => createLimiter(1), [])
+  const runImports = (jobs: { name: string; run: () => Promise<string> }[]) => {
+    const done: Promise<unknown>[] = []
+    for (const job of jobs) {
+      const id = notify({ kind: 'import', status: 'queued', title: `Import ${job.name}` })
+      done.push(importSlots(async () => {
+        updateNotice(id, { status: 'running', progress: 'Importing rows…' })
+        try {
+          // The import is confirmed once the browser has stored every chunk; the next file starts right away.
+          const summary = await job.run()
+          updateNotice(id, { status: 'done', detail: `${summary}. New evidence is unconfirmed.`, finished: new Date().toISOString(), progress: undefined, target: { kind: 'review' }, read: false })
+        } catch (problem) {
+          // A table that was not recognised is no failure: the mapping dialog opened for it.
+          const mapping = problem instanceof ImportProblem && !!problem.suggestion
+          updateNotice(id, { status: mapping ? 'info' : 'error', detail: problem instanceof Error ? problem.message : 'Import failed',
+            finished: new Date().toISOString(), progress: undefined, read: false })
+        }
+      }))
+    }
+    setToast(`${jobs.length} import${jobs.length === 1 ? '' : 's'} started · see notifications`)
+    return Promise.allSettled(done)
+  }
+
+  // Drag & drop: Defender XDR / Sentinel exports are recognised and imported right away; a FactGraph board export is
+  // imported as such; a table that cannot be recognised opens the mapping dialog with a suggestion.
+  const [dropping, setDropping] = useState(false)
+  const dragDepth = useRef(0)
+  const [mappingRequest, setMappingRequest] = useState<{ files: File[]; suggestion?: MappingSuggestion } | null>(null)
+  const hasFiles = (event: React.DragEvent) => event.dataTransfer.types.includes('Files')
+  const dropFiles = async (files: File[]) => {
+    const supported = files.filter(file => /\.(csv|tsv|json|jsonl|ndjson)$/i.test(file.name))
+    if (supported.length < files.length) setToast(`Skipped ${files.length - supported.length} file${files.length - supported.length === 1 ? '' : 's'}: only CSV, JSON and JSONL exports can be imported`)
+    const jobs: { name: string; run: () => Promise<string> }[] = []
+    for (const file of supported) {
+      if (/\.json$/i.test(file.name) && (await file.slice(0, 2048).text()).includes('"factgraph-board-v1"')) { void importFile(file); continue }
+      jobs.push({ name: file.name, run: async () => {
+        try { return describeTableImport(await uploadImport(boardId, board.sessionToken, file, { auto: 'true', dry_run: 'false' })) }
+        catch (problem) {
+          if (problem instanceof ImportProblem && problem.suggestion) {
+            const suggestion = problem.suggestion
+            setMappingRequest(current => current ? { ...current, files: [...current.files, file] } : { files: [file], suggestion })
+            throw new ImportProblem(`${problem.message} The column mapping dialog is open.`, suggestion)
+          }
+          throw problem
+        }
+      } })
+    }
+    if (!jobs.length) return
+    // On an empty board the imported graph is arranged once everything is in; otherwise new nodes keep their spots.
+    const wasEmpty = !data?.entities.length
+    await runImports(jobs)
+    setActiveTab('graph')
+    window.setTimeout(() => canvas(wasEmpty ? 'arrange' : 'fit'), 300)
+    if (wasEmpty) window.setTimeout(() => canvas('fit'), 1400)
+  }
 
   const act = async (action: () => Promise<unknown>, message: string) => {
     setBusy(true); setError('')
@@ -922,16 +1173,26 @@ export default function App() {
     anchor.remove()
     window.setTimeout(() => URL.revokeObjectURL(url), 1000)
     setToast('Board export started')
+    notify({ kind: 'export', status: 'done', title: 'Board exported as JSON', detail: `${board.actions.length.toLocaleString('en')} actions · ${anchor.download}`, read: true })
   }
   const importFile = async (file: File | undefined) => {
     if (!file) return
     setError('')
     try {
       const parsed = JSON.parse(await file.text()) as Record<string, unknown>
-      if (parsed.format === 'factgraph-board-v1' && Array.isArray(parsed.actions))
-        await act(() => board.importActions(parsed.actions as unknown[]), 'Actions imported')
-      else await act(() => board.emitMany(legacyDrafts(parsed)), 'Legacy data imported')
-    } catch (problem) { setError(problem instanceof Error ? problem.message : 'Import failed') }
+      if (parsed.format === 'factgraph-board-v1' && Array.isArray(parsed.actions)) {
+        const count = await board.importActions(parsed.actions as unknown[])
+        setToast('Actions imported')
+        notify({ kind: 'import', status: 'done', title: `Imported ${file.name}`, detail: `${count.toLocaleString('en')} new actions (already known ones are skipped)`, target: { kind: 'activity' }, read: true })
+      } else {
+        const count = await board.emitMany(legacyDrafts(parsed))
+        setToast('Legacy data imported')
+        notify({ kind: 'import', status: 'done', title: `Imported ${file.name}`, detail: `${count.toLocaleString('en')} changes from a legacy export`, target: { kind: 'activity' }, read: true })
+      }
+    } catch (problem) {
+      setError(problem instanceof Error ? problem.message : 'Import failed')
+      notify({ kind: 'import', status: 'error', title: `Import of ${file.name} failed`, detail: problem instanceof Error ? problem.message : 'Import failed' })
+    }
   }
   const renameBoard = () => { const value = window.prompt('Board name', board.boardName); if (value?.trim()) void act(() => board.emit('board.rename', { name: value.trim() }), 'Board renamed') }
   const renameSelf = () => { const value = window.prompt('Your display name', board.name); if (value?.trim()) board.setName(value) }
@@ -977,6 +1238,7 @@ export default function App() {
       ...(data?.groups ?? []).map(group => ({ id: `g-${group.id}`, group: 'Groups', label: group.name, hint: `${group.member_ids.length} members`, icon: <Boxes size={15} />, run: () => setSelection({ kind: 'group', id: group.id }, true) })),
       { id: 'c-explorer', group: 'Canvas', label: explorerOpen ? 'Hide entity explorer' : 'Show entity explorer', hint: 'E', icon: <ListTree size={15} />, run: toggleExplorer },
       { id: 'c-time', group: 'Canvas', label: showTime ? 'Hide evidence window' : 'Show evidence window', hint: 'T', icon: <Clock size={15} />, run: () => setShowTime(!showTime) },
+      { id: 'c-reset-view', group: 'Canvas', label: 'Reset my view (filters, layers, evidence window)', icon: <RotateCcw size={15} />, run: resetView },
       { id: 'c-theme', group: 'Canvas', label: theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme', icon: theme === 'dark' ? <Sun size={15} /> : <Moon size={15} />, run: toggleTheme },
       { id: 'x-png', group: 'Export', label: 'Export graph as PNG', icon: <ImageDown size={15} />, run: () => { setActiveTab('graph'); window.setTimeout(() => canvas('export', { kind: 'png' }), 50) } },
       { id: 'x-svg', group: 'Export', label: 'Export graph as SVG (vector)', icon: <ImageDown size={15} />, run: () => { setActiveTab('graph'); window.setTimeout(() => canvas('export', { kind: 'svg' }), 50) } },
@@ -987,6 +1249,7 @@ export default function App() {
       { id: 'b-token', group: 'Board', label: 'Copy session token (REST + MCP)', icon: <Plug size={15} />, run: () => void copyValue(board.sessionToken, 'Session token') },
       { id: 'b-connect', group: 'Board', label: 'Connect an agent (VS Code, Claude Code)…', icon: <Plug size={15} />, run: () => setShowConnect(true) },
       { id: 'b-help', group: 'Board', label: 'Keyboard & mouse controls', hint: '?', icon: <Keyboard size={15} />, run: () => setShowHelp('keys') },
+      { id: 'b-glossary', group: 'Board', label: 'Glossary: status, evidence, review…', icon: <CircleHelp size={15} />, run: () => setShowHelp('glossary') },
       { id: 'b-data', group: 'Board', label: 'Where is my data stored?', icon: <HardDrive size={15} />, run: () => setShowHelp('data') },
     ]
     const entities: PaletteItem[] = (data?.entities ?? []).map(entity => ({ id: `e-${entity.id}`, group: 'Entities', label: entity.name,
@@ -1012,6 +1275,7 @@ export default function App() {
           <button onClick={renameBoard}><Pencil size={14} /> Rename board</button>
           <button onClick={() => void copyValue(window.location.href, 'Board link')}><Link2 size={14} /> Copy board link</button>
           <button onClick={() => void copyValue(boardId, 'Board ID')}><Copy size={14} /> Copy board ID</button>
+          <button onClick={resetView} title="Filters, layers, evidence window and zoom are remembered per board in this browser"><RotateCcw size={14} /> Reset my view</button>
           <div className="menu-sep" />
           <button onClick={() => setShowLogImport(true)}><Upload size={14} /> Import logs / KQL</button>
           <button onClick={() => importInput.current?.click()}><Upload size={14} /> Import board JSON</button>
@@ -1039,6 +1303,9 @@ export default function App() {
           {search ? <><span className="search-count">{matchCount}</span><button className="icon-button" aria-label="Clear search" onClick={() => setSearch('')}><X size={12} /></button></> : <Kbd>/</Kbd>}</div>
         <button className="icon-button command-button hide-sm" onClick={() => setShowPalette(true)} aria-label="Command palette" title={`Command palette · ${mod}K`}><Command size={15} /></button>
         <button className={`icon-button hide-sm ${showTime ? 'active' : ''} ${timeActive ? 'flagged' : ''}`} onClick={() => setShowTime(!showTime)} aria-label="Evidence window" aria-pressed={showTime} title="Evidence time window · T"><Clock size={15} /></button>
+        <NotificationCenter notices={notices} onOpen={openNotice} onDismiss={id => setNotices(list => list.filter(n => n.id !== id))}
+          onClearFinished={() => setNotices(list => list.filter(n => n.status === 'running' || n.status === 'queued'))}
+          onMarkRead={markNoticesRead} />
         <span className="topbar-sep" />
         <button className="icon-button" aria-label="Undo" title={`Undo · ${mod}Z`} onClick={undo}><Undo2 size={15} /></button>
         <button className="icon-button hide-sm" aria-label="Redo" title={`Redo · ⇧${mod}Z`} onClick={redo}><Redo2 size={15} /></button>
@@ -1064,7 +1331,13 @@ export default function App() {
       </div>
     </header>
 
-    <div className="workspace">
+    <div className={`workspace${dropping ? ' dropping' : ''}`}
+      onDragEnter={event => { if (!hasFiles(event) || !data) return; dragDepth.current++; setDropping(true) }}
+      onDragLeave={event => { if (!hasFiles(event)) return; dragDepth.current = Math.max(0, dragDepth.current - 1); if (!dragDepth.current) setDropping(false) }}
+      onDragOver={event => { if (!hasFiles(event) || !data) return; event.preventDefault(); event.dataTransfer.dropEffect = 'copy' }}
+      onDrop={event => { if (!hasFiles(event) || !data) return; event.preventDefault(); dragDepth.current = 0; setDropping(false); void dropFiles([...event.dataTransfer.files]) }}>
+      {dropping && <div className="drop-overlay" aria-hidden="true"><Upload size={26} /><strong>Drop exports to import them</strong>
+        <span>Defender XDR advanced hunting and Microsoft Sentinel exports (CSV, JSON) are recognised and mapped automatically. FactGraph board exports work too.</span></div>}
       {explorerOpen && data && <Explorer data={data} search={search} selection={selection} onSelect={setSelection} onClose={toggleExplorer} />}
       <main className={`stage${showTime ? ' time-open' : ''}`}>
         {activeTab === 'graph' && <div className="graph-stage">
@@ -1076,14 +1349,16 @@ export default function App() {
             onSavePerspective={name => { const id = uuid(); void act(async () => { await board.emit('view.add', { id, name, layers: lens.layers ? [...lens.layers] : null, collapse_activities: lens.collapseActivities, show_lanes: lens.showLanes }); setPerspectiveParam(id) }, 'Perspective saved') }}
             onDeletePerspective={id => { void act(() => board.emit('view.delete', { id }), 'Perspective deleted'); if (id === activePerspective) setPerspectiveParam(null) }}
             boardName={board.boardName} filterSummary={filterSummary} onNotice={setToast} onRequestDone={() => setRequest(null)}
-            selection={selection} search={search} onSelect={setSelectionState} />}
+            selection={selection} search={search} onSelect={setSelectionState}
+            onExported={detail => notify({ kind: 'export', status: 'done', title: 'Graph exported', detail, read: true })}
+            initialViewport={viewport.current} onViewportChange={v => { viewport.current = v; persistView() }} />}
           {data && data.entities.length > 0 && <div className="status-filter" role="group" aria-label="Filter relationships by status">
             <button className={stateFilter === 'all' ? 'active' : ''} onClick={() => setStateFilter('all')}>All <b>{timeFacts.length}</b></button>
             {allStates.map(state => <button key={state} className={`${state} ${stateFilter === state ? 'active' : ''}`} onClick={() => setStateFilter(stateFilter === state ? 'all' : state)} title={`Show only ${labels[state].toLowerCase()} relationships`}><span className="legend-line" />{labels[state]} <b>{counts[state]}</b></button>)}
           </div>}
           {data && data.entities.length === 0 && <div className="empty-overlay"><div className="empty-card">
             <div className="empty-graphic"><GitBranch size={26} /></div><h2>Start your investigation</h2>
-            <p>Create entities and connect them with evidence-backed relationships — or let an agent fill the board via REST / MCP.</p>
+            <p>Create entities and connect them with evidence-backed relationships, drop Defender XDR or Sentinel exports (CSV, JSON) here, or let an agent fill the board via REST / MCP.</p>
             <div className="empty-actions"><button className="primary-button" onClick={() => canvas('place')}><Plus size={15} /> First entity</button><button className="secondary-button" onClick={() => void act(() => board.emitMany(demoDrafts()), 'Example data loaded')}><Sparkles size={15} /> Load example</button><button className="secondary-button" onClick={() => setShowLogImport(true)}><Upload size={15} /> Import logs</button></div>
             <button className="empty-storage" onClick={() => setShowHelp('data')}><HardDrive size={13} /> Data stays in this browser — learn more</button>
             <div className="empty-keys"><span><Kbd>N</Kbd> new entity</span><span><Kbd>{mod}</Kbd><Kbd>K</Kbd> commands</span><span><Kbd>?</Kbd> shortcuts</span></div>
@@ -1105,7 +1380,9 @@ export default function App() {
     {dialog === 'activity' && data && <ActivityDialog data={data} initialEntity={selection?.kind === 'entity' ? selection.id : undefined} onClose={() => setDialog(null)} onCommand={board.emitMany}
       onCreated={id => { setDialog(null); setToast('Activity saved'); setSelection({ kind: 'fact', id }, true) }} />}
     {dialog && dialog !== 'activity' && data && <Dialog key={`${dialog}:${editingAssertionId ?? ''}:${relationTargetId ?? ''}`} kind={dialog} data={data} selection={selection} editingAssertionId={editingAssertionId} relationTargetId={relationTargetId} busy={busy} error={error} onClose={() => { setDialog(null); setEditingAssertionId(null); setRelationTargetId(null) }} onSubmit={submit} />}
-    {showLogImport && <LogImportDialog boardId={boardId} sessionToken={board.sessionToken} onClose={() => setShowLogImport(false)} onDone={summary => { setShowLogImport(false); setToast(summary) }} />}
+    {showLogImport && <LogImportDialog boardId={boardId} sessionToken={board.sessionToken} onClose={() => setShowLogImport(false)} onApply={runImports} />}
+    {mappingRequest && !showLogImport && <LogImportDialog key={mappingRequest.files.map(f => f.name).join('|')} boardId={boardId} sessionToken={board.sessionToken}
+      initialFiles={mappingRequest.files} suggestion={mappingRequest.suggestion} onClose={() => setMappingRequest(null)} onApply={runImports} />}
     {showPalette && <CommandPalette items={paletteItems} onClose={() => setShowPalette(false)} />}
     {showConnect && <AgentConnectDialog boardId={boardId} token={board.sessionToken} onCopy={(value, label) => void copyValue(value, label)} onClose={() => setShowConnect(false)} />}
     {askName && board.ready && !showHelp && <WelcomeDialog current={board.name} onSave={name => { board.setName(name); setAskName(false) }} onLearnMore={() => setShowHelp('data')} />}

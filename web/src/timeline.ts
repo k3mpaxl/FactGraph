@@ -5,31 +5,48 @@ function timestamp(value: unknown): string | null {
   return typeof value === 'string' && value.trim() && Number.isFinite(Date.parse(value)) ? value : null
 }
 
-export function evidencePeriod(assertion: Assertion, fact: Fact) {
+type Period = { from: string | null; to: string | null; start: number; end: number }
+// Projections create new assertion objects on every change, so the object is a safe cache key for its period.
+const periods = new WeakMap<Assertion, Period>()
+
+function computePeriod(assertion: Assertion, fact: Fact): Period {
   let from = timestamp(assertion.valid_from)
   let to = timestamp(assertion.valid_to)
-  // Older log imports preserved the original row in the evidence note.
-  if (!from && !to) {
+  // Older log imports preserved the original row in the evidence note. Only parse notes that look like JSON:
+  // a failing JSON.parse on every free-text note made the timeline slow on large boards.
+  if (!from && !to && assertion.note?.trimStart().startsWith('{')) {
     try {
       const row = JSON.parse(assertion.note)
       for (const key of ['valid_from', 'StartTime', 'TimeGenerated', 'timestamp', 'Timestamp', 'time', 'event_time']) {
         from = timestamp(row?.[key]); if (from) break
       }
       for (const key of ['valid_to', 'EndTime']) { to = timestamp(row?.[key]); if (to) break }
-    } catch { /* Free-text evidence has no embedded log timestamp. */ }
+    } catch { /* Not JSON after all. */ }
   }
   if (!from && !to) { from = timestamp(fact.valid_from); to = timestamp(fact.valid_to) }
+  const start = from ? Date.parse(from) : to ? Date.parse(to) : Number.NaN
+  const end = to ? Date.parse(to) : from ? Date.parse(from) : Number.NaN
+  return { from, to, start, end }
+}
+
+function period(assertion: Assertion, fact: Fact): Period {
+  let cached = periods.get(assertion)
+  if (!cached) { cached = computePeriod(assertion, fact); periods.set(assertion, cached) }
+  return cached
+}
+
+export function evidencePeriod(assertion: Assertion, fact: Fact) {
+  const { from, to } = period(assertion, fact)
   return { from, to }
 }
 
 export function timelineEntries(facts: Fact[]) {
-  return facts.flatMap(fact => fact.assertions.filter(a => !a.retracted_at).map(assertion => ({
-    fact, assertion, ...evidencePeriod(assertion, fact),
-  }))).sort((a, b) => {
-    const time = (entry: typeof a) => Date.parse(entry.from || entry.to || '')
-    return (Number.isFinite(time(a)) ? time(a) : Infinity) - (Number.isFinite(time(b)) ? time(b) : Infinity)
-      || a.assertion.id.localeCompare(b.assertion.id)
-  })
+  const entries = facts.flatMap(fact => fact.assertions.filter(a => !a.retracted_at).map(assertion => {
+    const p = period(assertion, fact)
+    return { fact, assertion, from: p.from, to: p.to, sortKey: Number.isFinite(p.start) ? p.start : Infinity }
+  }))
+  entries.sort((a, b) => (a.sortKey - b.sortKey) || a.assertion.id.localeCompare(b.assertion.id))
+  return entries.map(({ sortKey: _sortKey, ...entry }) => entry)
 }
 
 export function timelineEvents(facts: Fact[]) {
@@ -43,32 +60,39 @@ export function timelineEvents(facts: Fact[]) {
   return [...groups.values()]
 }
 
+function intersects(p: Period, lower: number, upper: number, includeUndated: boolean) {
+  if (!Number.isFinite(p.start) || !Number.isFinite(p.end)) return includeUndated
+  return p.start <= upper && p.end >= lower
+}
+
 export function factIntersects(fact: Fact, from: string | null, to: string | null, includeUndated = true) {
   if (!from && !to) return true
   const lower = from ? Date.parse(from) : Number.NEGATIVE_INFINITY
   const upper = to ? Date.parse(to) : Number.POSITIVE_INFINITY
-  return fact.assertions.some(assertion => {
-    if (assertion.retracted_at) return false
-    const period = evidencePeriod(assertion, fact)
-    const start = period.from ? Date.parse(period.from) : period.to ? Date.parse(period.to) : Number.NaN
-    const end = period.to ? Date.parse(period.to) : period.from ? Date.parse(period.from) : Number.NaN
-    if (!Number.isFinite(start) || !Number.isFinite(end)) return includeUndated
-    return start <= upper && end >= lower
-  })
+  return fact.assertions.some(assertion => !assertion.retracted_at && intersects(period(assertion, fact), lower, upper, includeUndated))
+}
+
+/** All evidence times in milliseconds (from and to of every unretracted assertion). */
+function times(facts: Fact[]) {
+  const values: number[] = []
+  for (const fact of facts) for (const assertion of fact.assertions) {
+    if (assertion.retracted_at) continue
+    const p = period(assertion, fact)
+    if (p.from && Number.isFinite(p.start)) values.push(p.start)
+    if (p.to && Number.isFinite(p.end)) values.push(p.end)
+  }
+  return values
 }
 
 export function timelineBounds(facts: Fact[]) {
-  const values = timelineEntries(facts).flatMap(entry => [entry.from, entry.to])
-    .filter((value): value is string => Boolean(value)).map(value => Date.parse(value)).filter(Number.isFinite)
+  const values = times(facts)
   if (!values.length) return { from: null, to: null }
-  return { from: new Date(Math.min(...values)).toISOString(), to: new Date(Math.max(...values)).toISOString() }
+  // reduce, not Math.min(...values): spreading 100k+ values overflows the call stack.
+  return { from: new Date(values.reduce((a, b) => Math.min(a, b))).toISOString(), to: new Date(values.reduce((a, b) => Math.max(a, b))).toISOString() }
 }
 
 export function timelineSteps(facts: Fact[]) {
-  const values = timelineEntries(facts).flatMap(entry => [entry.from, entry.to])
-    .filter((value): value is string => Boolean(value))
-    .map(value => Date.parse(value)).filter(Number.isFinite)
-  return [...new Set(values)].sort((a, b) => a - b).map(value => new Date(value).toISOString())
+  return [...new Set(times(facts))].sort((a, b) => a - b).map(value => new Date(value).toISOString())
 }
 
 export function periodLabel(from: string | null, to: string | null) {
@@ -80,8 +104,12 @@ export function periodLabel(from: string | null, to: string | null) {
 
 export function factsInWindow(facts: Fact[], from: string | null, to: string | null, includeUndated = true) {
   if (!from && !to) return facts
-  return facts.map(fact => {
-    const assertions = fact.assertions.filter(assertion => factIntersects({...fact, assertions:[assertion]},from,to,includeUndated))
-    return {...fact, assertions, truth_state: truth(assertions)}
-  }).filter(fact => fact.assertions.length > 0)
+  const lower = from ? Date.parse(from) : Number.NEGATIVE_INFINITY
+  const upper = to ? Date.parse(to) : Number.POSITIVE_INFINITY
+  const out: Fact[] = []
+  for (const fact of facts) {
+    const assertions = fact.assertions.filter(assertion => !assertion.retracted_at && intersects(period(assertion, fact), lower, upper, includeUndated))
+    if (assertions.length) out.push(assertions.length === fact.assertions.length ? fact : { ...fact, assertions, truth_state: truth(assertions) })
+  }
+  return out
 }

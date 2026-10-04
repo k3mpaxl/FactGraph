@@ -12,7 +12,7 @@ export const ORGANIC_THRESHOLD = 150
  * neighbours and cards never overlap horizontally. Deterministic (d3-force uses a seeded random source) and fast
  * enough for thousands of nodes (Barnes–Hut). Returns top-left positions; pinned nodes keep theirs.
  */
-export function organicLayout(nodes: LayoutNode[], edges: LayoutEdge[], ticks = 320) {
+export function organicLayout(nodes: LayoutNode[], edges: LayoutEdge[], ticks = 320, onProgress?: (done: number, total: number) => void) {
   const ids = new Set(nodes.map(n => n.id))
   const valid = edges.filter(e => e.source !== e.target && ids.has(e.source) && ids.has(e.target))
   const degree = new Map<string, number>()
@@ -32,7 +32,11 @@ export function organicLayout(nodes: LayoutNode[], edges: LayoutEdge[], ticks = 
     .force('x', forceX<SimNode>(0).strength(0.035))
     .force('y', forceY<SimNode>(0).strength(0.06))
     .stop()
-  simulation.tick(ticks)
+  // In steps, so a worker can report progress between them.
+  for (let done = 0; done < ticks; done += 20) {
+    simulation.tick(Math.min(20, ticks - done))
+    onProgress?.(Math.min(ticks, done + 20), ticks)
+  }
   return new Map(sim.map(node => [node.id, { x: (node.x ?? 0) - node.width / 2, y: (node.y ?? 0) - node.height / 2 }]))
 }
 

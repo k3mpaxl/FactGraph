@@ -51,7 +51,7 @@ With Docker Compose from the repository:
 docker compose -f deploy/compose.yaml up --build
 ```
 
-Directly with Python 3.11+ and Node.js 20+:
+Directly with Python 3.11+ (the Docker image and CI use 3.14) and Node.js 20+:
 
 ```bash
 python3 -m venv .venv
@@ -137,7 +137,7 @@ Notes:
 
 - **Exactly one instance.** The relay keeps the list of connected browsers in memory; with several instances, analysts on different instances would not see each other. Do not scale out.
 - **Web sockets must be on**, otherwise the board stays offline. **Always On** prevents the app from idling and dropping connections.
-- Prefer a pinned version (`k3mpaxl/factgraph:0.4.9`) over `latest` during an incident, so a restart never changes the version.
+- Prefer a pinned version (`k3mpaxl/factgraph:0.5.0`) over `latest` during an incident, so a restart never changes the version.
 - App Service **HTTP logging** is off by default. If you enable it, it records request URLs, which contain board IDs.
 - **App Service Authentication** (Entra ID sign-in) can be put in front of the UI. Agents and scripts then also need an Entra token, and if the incident involves your own tenant, an identity provider you cannot trust is no protection. IP access restrictions are often the better choice there.
 - When the incident is closed: export the boards as JSON, then `az group delete -n $RG`. Nothing remains on the server side.
@@ -150,7 +150,11 @@ Notes:
 - The header shows **who is online**: avatars of everyone connected to the board. A click lists them, together with recent authors who are no longer connected, such as agents writing via REST or MCP.
 - Light mode is the default; the moon icon switches to dark mode and the choice is remembered.
 - On the first visit FactGraph asks for a display name, which other analysts see in the presence list and in the history.
-- The **?** (top right) explains where data is stored, shows the storage used, can ask the browser for persistent storage, offers the JSON export and shows the app and server versions. The second tab lists all keyboard shortcuts.
+- The **?** (top right) explains where data is stored, shows the storage used, can ask the browser for persistent storage, offers the JSON export and shows the app and server versions. The second tab lists all keyboard shortcuts, the third is a **glossary** of statuses, review, stance, confidence, layers and the other terms.
+- The **bell** collects what happened on the board: changes by agents (REST/MCP; the calls of one agent within two minutes become one entry), intelligence sent by GTIEnricher, colleagues' changes (listed, but they do not raise the badge), your own imports and exports with progress and result, and connection or storage problems. Each entry leads to the review, the item or the change log. The badge turns red on errors; the history is kept per board in this browser.
+- **Your view stays yours:** status filter, evidence window, layers, selection and zoom are remembered per board in this browser and restored on reload. They are never synced, so colleagues keep their own view. Board menu → **Reset my view** clears them. A shared perspective link still takes precedence.
+
+![Notifications: an agent, GTIEnricher and your own imports](docs/images/notifications.png)
 
 ![Dark mode](docs/images/graph-dark.png)
 
@@ -171,6 +175,7 @@ Notes:
 - **Minimap** appears automatically from 60 nodes.
 - **Arrange:** up to 150 nodes as a directed flow (left → right, or ↓ for top → bottom), above that **organic** (force layout: connected nodes form clusters, cards never overlap; also available directly via the node icon). 1,100 nodes take about two seconds. Pinned nodes keep their position.
 - **Status filter** and **evidence time window** (`T`) filter edges by review status and time span; the time window can be played back step by step.
+- **Performance:** one projection of the action log is shared by the canvas, the inspector and every REST/MCP request; evidence times are parsed once per change. A board with 12,000 actions (2,000 entities, 5,000 relationships) projects in about 15 ms, and moving the evidence window takes about 2 ms. `npm run bench` checks this on a synthetic board.
 
 ### Mouse, trackpad, keyboard
 
@@ -230,7 +235,7 @@ Collapsed and expanded groups share one place: drag the collapsed card and the m
 - A **source** describes where something comes from: title, reference (log export, `path@commit`, portal link), the original records as an excerpt and, for queries, the KQL. `primary` sources are original logs, telemetry and files; `secondary` is context and never proof. **FactGraph does not run queries**; the query and the results it returned are stored together as provenance.
 - An **evidence item** holds the observation, the locator (event ID, CorrelationId, result row, file:line), the time span of the activity, the stance (`supports`/`refutes`) and a confidence.
 - New evidence is **unconfirmed**. Confirming requires a primary source with reference and original excerpt, a concrete locator, an observation and a review note, and is bound to the current revision. If the evidence, the claim or the source changes, the confirmation is reset.
-- The status of a relationship is derived only from active, confirmed evidence: **Supported**, **Refuted**, **Disputed** (both) or **Unknown**. Retracted evidence stays in the history.
+- The status of a relationship is derived only from active, confirmed evidence: **Supported**, **Refuted**, **Disputed** (both) or **Unknown**. Retracted evidence stays in the history. The inspector says why, for example “None of the evidence is confirmed yet” or “Confirmed evidence points both ways: 2 supporting, 1 refuting”, and what is not counted. Confidence is shown but does not change the status.
 - Relationships with confirmed evidence cannot be reconnected by dragging ("ends locked"); renaming asks for confirmation first.
 - **Review** lists open evidence. The evidence reader shows the observation, the source, the original results as a searchable table, the query and the history, and lets you edit, confirm, retract and restore.
 - The **timeline** shows active evidence chronologically in UTC. `valid_from`/`valid_to` describe when the activity happened, not when it was recorded; unknown times are listed at the end.
@@ -315,7 +320,7 @@ PATCH-style calls change only the fields they contain; an explicit `null` clears
 
 ## Importing logs and KQL results
 
-**Import logs / KQL** (board menu) accepts CSV, JSON arrays or JSONL up to 20 MB and 50,000 rows, always with a preview first:
+**Import logs / KQL** (board menu) accepts CSV, JSON arrays or JSONL up to 20 MB and 50,000 rows per file, always with a preview first. Several files can be selected at once: the preview shows each file, and the import runs in the background, one file after another, each with its own entry under the bell. Uploads from this dialog appear as channel **Import** in the change log.
 
 - **Relationships · 2 columns:** a source and a target column (for example `IPAddress → accessed → FilePath`); common column names are detected.
 - **Activities · several roles:** several columns with roles, for example `CallerIPAddress → source → IP`, `AppId → identity → Service Principal`, `ResourceId → target → Key Vault`, with a fixed operation or one taken from a column (`OperationName`).
@@ -335,6 +340,19 @@ Every row becomes its own unconfirmed evidence item with its timestamp (`TimeGen
   "dry_run": true
 }
 ```
+
+### Defender XDR and Sentinel exports: drop them on the board
+
+Export the results of an advanced hunting query (Defender XDR) or a Log Analytics query (Microsoft Sentinel) as CSV or JSON and **drop the files onto the board**. Each file is recognised by its columns and imported in the background, one after another, with an entry under the bell; an empty board is arranged afterwards. One file is one undo step.
+
+- **Recognised tables** with a curated mapping: `DeviceProcessEvents`, `DeviceNetworkEvents`, `DeviceFileEvents`, `DeviceLogonEvents`, `DeviceRegistryEvents`, `DeviceImageLoadEvents`, `DeviceEvents`, `IdentityLogonEvents`, `IdentityDirectoryEvents`, `IdentityQueryEvents`, `EntraIdSignInEvents`, `EntraIdSpnSignInEvents`, `CloudAppEvents`, `UrlClickEvents`, `EmailEvents`, `EmailUrlInfo`, `EmailAttachmentInfo`, `AlertEvidence`; Sentinel `SigninLogs`, `AADNonInteractiveUserSignInLogs`, `AADServicePrincipalSignInLogs`, `AuditLogs`, `AzureActivity`, `AzureDiagnostics` (Key Vault), `SecurityEvent`, `CommonSecurityLog`, `OfficeActivity`, and the normalised **ASIM** fields (`SrcIpAddr`, `TargetUsername` …). Other documented advanced hunting tables (65 in total) are mapped from their column names.
+- **Mapping:** every row becomes evidence for an activity whose participants carry roles, for example in `DeviceNetworkEvents` the device (source), the account (actor), the initiating process (via), the remote IP and URL (target). The operation comes from `ActionType`, `OperationName` or the sign-in result (“signed in”, “sign-in failed (50126)”); the time from `Timestamp`/`TimeGenerated`; the locator names the table and the record, for example `DeviceNetworkEvents ReportId=18842 DeviceId=…`. Columns that are not mapped stay in the evidence row.
+- **The same thing stays one entity:** devices, accounts, files, apps and Azure resources are stored with their identifiers (DeviceId, AadDeviceId, Entra object ID, SID, SHA-256/SHA-1/MD5, app ID, resource ID, FQDN, UPN, IP) and found by them on later imports, so `j.doe` from `DeviceProcessEvents` and from `SigninLogs` is one user. A different ID under the same name (another DeviceId, another hash) creates a separate entity instead of a wrong merge.
+- **Export quirks** are handled: the ` [UTC]` suffix and the US date format of Log Analytics exports, 7-digit fractions, JSON columns such as `DeviceDetail` or `InitiatedBy`, a byte-order mark.
+- **Not recognised?** A plain two-column log (`IPAddress` → `FilePath`) is imported as relationships as before. Anything else opens the import dialog with the columns FactGraph could guess; adjust the roles and import.
+- **Agents and scripts:** `POST /imports/table` with the rows (MCP `import_defender_rows`), or `POST /imports/file` with `auto=true`; both support `dry_run`.
+
+The table schemas (names, columns, types; no description text) are generated from the Microsoft Learn docs via [defender-docs-mirror](https://github.com/merill/defender-docs-mirror): `python scripts/build_table_schemas.py <path to a clone>` writes `app/data/table_schemas.json`.
 
 ## Export as PNG or SVG
 
@@ -357,7 +375,8 @@ curl -s -X POST "http://127.0.0.1:8080/api/boards/$BOARD/export" \
 - When joining and reconnecting, browsers exchange their histories. Changes made offline stay local and are delivered later.
 - If an entity is merged while another browser still works with the old ID, that browser's new relationships, activity roles, identifiers and group changes end up on the merge target instead of being lost.
 - Group membership changes are incremental, so concurrent edits by two analysts are both kept.
-- **Undo** (`Cmd/Ctrl+Z`) reverts your own last group of actions (an import counts as one group) and refuses if someone else has changed the same records in the meantime. The **Activity** view lists all actions with channel (UI, REST, MCP), author and time.
+- **Undo** (`Cmd/Ctrl+Z`) reverts your own last group of actions (an import counts as one group) and refuses if someone else has changed the same records in the meantime. The **Activity** view lists all actions with channel (UI, REST, MCP, Import), author and time.
+- If the connection to the server is lost for more than a few seconds, the bell says so; when it is back, it reports how long it was gone and how many changes were synced. Large histories (100,000+ actions) load without problems.
 - If no browser has the board open, a new device cannot restore it from the UUID alone; import a JSON export instead. Without an export, boards are lost when the browser data is cleared.
 
 ## Development and tests
@@ -366,7 +385,8 @@ curl -s -X POST "http://127.0.0.1:8080/api/boards/$BOARD/export" \
 .venv/bin/python -m unittest discover -s tests -v   # backend, REST/MCP contracts, relay
 cd web
 npm ci
-npm test                                           # projection, review, convergence, export, layout, wheel
+npm test                                           # projection, review, convergence, export, layout, wheel, notifications, saved view
+npm run bench                                      # performance on a synthetic 12,000-action board; fails on large regressions
 npx playwright install chromium
 npm run test:e2e                                   # browser workflows against a real server
 ```
@@ -385,8 +405,8 @@ cd web && npm run build && DOCS_SCREENSHOTS=1 npx playwright test e2e/docs-scree
 - **Publish Docker image** builds the image for `linux/amd64` and `linux/arm64` on a version tag (`v*.*.*`) or via **Run workflow**, and publishes it as `latest` and with the version number. It requires the repository secrets `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` (a Docker Hub access token with write permission).
 
 ```bash
-git tag v0.4.9
-git push origin v0.4.9
+git tag v0.5.0
+git push origin v0.5.0
 ```
 
 A manual multi-arch build is possible with `./deploy/publish-multiarch.sh` (`FACTGRAPH_IMAGE` and `FACTGRAPH_VERSION` override namespace and version).

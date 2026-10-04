@@ -62,7 +62,7 @@ def purpose(route: APIRoute) -> str:
     if not doc and name.startswith(('list_', 'get_')):
         noun = name.split('_', 1)[1].replace('_', ' ')
         singular = {'entities': 'entity', 'evidence': 'evidence item'}.get(noun, noun.rstrip('s'))
-        doc = (f'List {noun} of the board with IDs. q filters by text; offset/limit paginate (limit ≤ 1000).' if name.startswith('list_')
+        doc = (f'List {noun} of the board with IDs. q filters by text; offset/limit paginate (limit ≤ 1000). Long texts are cut to 2,000 characters (<field>_truncated); read one record for the full text.' if name.startswith('list_')
                else f'Read one {singular} of the board by its ID, with all stored fields. Returns 404 if it does not exist on this board.')
     return doc
 

@@ -181,13 +181,14 @@ test('layout: compact header and viewport on desktop/mobile, import file preview
   await page.getByLabel('Board menu').click()
   await page.getByRole('button',{name:'Import logs / KQL',exact:true}).click()
   const dialog=page.getByRole('dialog',{name:'Import activity logs'})
-  await dialog.getByLabel('File',{exact:true}).setInputFiles({name:'access.csv',mimeType:'text/csv',buffer:Buffer.from('IPAddress,FilePath,TimeGenerated\n10.0.0.5,repo/.env,2026-09-28T10:00:00Z')})
+  await dialog.getByLabel(/^Files/).setInputFiles({name:'access.csv',mimeType:'text/csv',buffer:Buffer.from('IPAddress,FilePath,TimeGenerated\n10.0.0.5,repo/.env,2026-09-28T10:00:00Z')})
   await dialog.getByRole('button',{name:'Preview import'}).click()
   await expect(dialog.getByText('Preview · no changes saved yet')).toBeVisible()
   expect((await graph()).entities).toHaveLength(0)
   await dialog.getByRole('button',{name:'Apply import'}).click()
   await expect(dialog).not.toBeVisible()
-  expect((await graph()).entities).toHaveLength(2)
+  // The import continues in the background and reports in the notifications.
+  await expect.poll(async()=> (await graph()).entities.length).toBe(2)
   await page.setViewportSize({width:768,height:900})
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true)
   await page.setViewportSize({width:390,height:844})
@@ -536,4 +537,226 @@ test('groups keep their place: drag collapsed card, expand, drag the expanded fr
   await page.locator('.frame-node.group .frame-head button').click()
   await expect.poll(async()=>Math.round((await graph()).groups[0].position.x-centre((await graph()).entities).x)).toBe(0)
   expect(group).toBeTruthy()
+})
+
+test('notifications: agent writes, several log files in a queue, remembered view after reload',async({page,request})=>{
+  const {id,token,call,graph}=await setup(page,request)
+  // An agent writes over MCP: the bell shows it and leads to the review.
+  const a=(await call('POST','/entities',{name:'Build agent',kind:'Device',x:60,y:100})).id
+  const b=(await mcp(token,'create_entity',{board_id:id,body:{name:'Secret store',kind:'Key Vault',x:550,y:100}})).id
+  const relation=(await mcp(token,'create_relation',{board_id:id,body:{subject_id:a,object_id:b,predicate:'reads'}})).id
+  await mcp(token,'add_evidence',{board_id:id,relation_id:relation,body:{stance:'supports',observation:'Read secret',locator:'row 1'}})
+  const bell=page.getByRole('button',{name:'Notifications'})
+  await expect(bell.locator('.notifications-badge')).toBeVisible()
+  await bell.click()
+  const panel=page.getByRole('dialog',{name:'Notifications'})
+  // The agent's three MCP calls are one notice; the REST call is another client.
+  const mcpNotice=panel.locator('.notice').filter({hasText:'Agent via MCP changed the board'})
+  await expect(mcpNotice).toHaveCount(1)
+  await expect(mcpNotice).toContainText('1 entity, 1 relationship, 1 new evidence item')
+  await expect(panel.locator('.notice').filter({hasText:'Agent via REST changed the board'})).toHaveCount(1)
+  await panel.getByRole('button',{name:'Review'}).first().click()
+  await expect(page.getByRole('tab',{name:/Evidence review/})).toHaveAttribute('aria-selected','true')
+  await page.getByRole('tab',{name:'Graph'}).click()
+  // Two log files at once: previewed together, imported one after another, each with its own notification.
+  await page.getByLabel('Board menu').click()
+  await page.getByRole('button',{name:'Import logs / KQL',exact:true}).click()
+  const dialog=page.getByRole('dialog',{name:'Import activity logs'})
+  await dialog.getByLabel(/^Files/).setInputFiles([
+    {name:'day1.csv',mimeType:'text/csv',buffer:Buffer.from('IPAddress,FilePath,TimeGenerated\n10.0.0.5,repo/.env,2026-09-28T10:00:00Z')},
+    {name:'day2.csv',mimeType:'text/csv',buffer:Buffer.from('IPAddress,FilePath,TimeGenerated\n10.0.0.6,repo/secrets.yml,2026-09-29T10:00:00Z')},
+  ])
+  await dialog.getByRole('button',{name:'Preview import'}).click()
+  await expect(dialog.getByText('2 of 2 files')).toBeVisible()
+  await dialog.getByRole('button',{name:'Import 2 files'}).click()
+  await expect(dialog).not.toBeVisible()
+  await expect.poll(async()=> (await graph()).entities.length).toBe(6)
+  await bell.click()
+  await expect(panel.locator('.notice.done').filter({hasText:'Import day1.csv'})).toBeVisible()
+  await expect(panel.locator('.notice.done').filter({hasText:'Import day2.csv'})).toBeVisible()
+  // Own imports are not reported a second time as someone else's change.
+  await expect(panel.locator('.notice').filter({hasText:'Import changed the board'})).toHaveCount(0)
+  await page.keyboard.press('Escape')
+  // The evidence window and the status filter survive a reload; the notifications too.
+  await page.getByRole('button',{name:'Evidence window',exact:true}).click()
+  await page.locator('.status-filter button.unknown').click()
+  await page.reload()
+  await expect(page.getByText('1 online',{exact:true})).toBeVisible()
+  await expect(page.locator('.status-filter button.unknown')).toHaveClass(/active/)
+  await expect(page.getByRole('button',{name:'Evidence window',exact:true})).toHaveAttribute('aria-pressed','true')
+  await page.getByRole('button',{name:'Notifications'}).click()
+  await expect(page.getByRole('dialog',{name:'Notifications'}).getByText('Import day2.csv')).toBeVisible()
+})
+
+test('drop: Defender XDR and Sentinel exports are recognised, mapped and joined by their IDs; unknown tables open the mapping',async({page,request})=>{
+  const {graph}=await setup(page,request)
+  const network=['Timestamp,DeviceId,DeviceName,ActionType,RemoteIP,RemotePort,RemoteUrl,LocalIP,Protocol,InitiatingProcessFileName,InitiatingProcessSHA1,InitiatingProcessAccountUpn,InitiatingProcessAccountObjectId,ReportId',
+    '2026-09-28T10:42:07.1234567Z,a1b2c3,WS-0142.corp.example,ConnectionSuccess,203.0.113.7,443,evil.example,10.0.0.5,Tcp,powershell.exe,'+'ab'.repeat(20)+',J.Doe@corp.example,11111111-2222-3333-4444-555555555555,18842',
+    '2026-09-28T10:43:07Z,a1b2c3,WS-0142.corp.example,ConnectionSuccess,203.0.113.7,443,evil.example,10.0.0.5,Tcp,powershell.exe,'+'ab'.repeat(20)+',J.Doe@corp.example,11111111-2222-3333-4444-555555555555,18843'].join('\n')
+  const signins=['"TimeGenerated [UTC]",UserPrincipalName,UserId,AppDisplayName,AppId,IPAddress,ResultType,ConditionalAccessStatus,CorrelationId,DeviceDetail',
+    '"9/28/2026, 10:40:01.512 AM",j.doe@corp.example,11111111-2222-3333-4444-555555555555,Azure Portal,c44b4083-3bb0-49c1-b47d-974e53cbdf3c,203.0.113.7,0,success,corr-1,"{""deviceId"":""dev-1"",""displayName"":""WS-0142""}"'].join('\n')
+  const drop=async(files:{name:string,text:string}[])=>{
+    const transfer=await page.evaluateHandle(files=>{const dt=new DataTransfer();for(const f of files) dt.items.add(new File([f.text],f.name,{type:'text/csv'}));return dt},files)
+    const target=page.locator('.workspace')
+    await target.dispatchEvent('dragenter',{dataTransfer:transfer})
+    await expect(page.locator('.drop-overlay')).toBeVisible()
+    await target.dispatchEvent('dragover',{dataTransfer:transfer})
+    await target.dispatchEvent('drop',{dataTransfer:transfer})
+    await expect(page.locator('.drop-overlay')).toHaveCount(0)
+  }
+  await drop([{name:'DeviceNetworkEvents.csv',text:network},{name:'SigninLogs.csv',text:signins}])
+  // Both files: XDR first (queue), then Sentinel; the user from both is one entity (Entra object ID), so is the IP.
+  await expect.poll(async()=>(await graph()).facts.length,{timeout:15000}).toBe(2)
+  const board=await graph()
+  const users=board.entities.filter((e:any)=>e.kind==='User')
+  expect(users.map((e:any)=>e.name)).toEqual(['j.doe@corp.example'])
+  expect(board.entities.filter((e:any)=>e.name==='203.0.113.7')).toHaveLength(1)
+  const device=board.entities.find((e:any)=>e.name==='ws-0142.corp.example')
+  expect(device.identifiers.map((i:any)=>i.namespace||i.scheme)).toEqual(expect.arrayContaining(['mde-device-id','fqdn']))
+  const net=board.facts.find((f:any)=>f.predicate==='connection success')
+  expect(net.participants.map((p:any)=>p.role).sort()).toEqual(['actor','source','target','target','via'])
+  expect(net.assertions).toHaveLength(2)
+  expect(net.assertions[0].locator).toMatch(/^DeviceNetworkEvents ReportId=1884\d DeviceId=a1b2c3$/)
+  const signin=board.facts.find((f:any)=>f.predicate==='signed in')
+  expect(signin.assertions[0].valid_from).toBe('2026-09-28T10:40:01.512000Z')
+  await page.getByRole('button',{name:'Notifications'}).click()
+  await expect(page.getByRole('dialog',{name:'Notifications'}).locator('.notice.done').filter({hasText:'DeviceNetworkEvents (Defender XDR)'})).toBeVisible()
+  await expect(page.getByRole('dialog',{name:'Notifications'}).locator('.notice.done').filter({hasText:'SigninLogs (Sentinel)'})).toBeVisible()
+  await page.keyboard.press('Escape')
+  // An unknown export: no automatic import, the mapping dialog opens with the columns it could guess.
+  await drop([{name:'proxy.csv',text:'when,ClientIP,UserPrincipalName,Operation,Workload\n2026-09-28T10:00:00Z,198.51.100.9,eve@corp.example,FileDownloaded,SharePoint'}])
+  const dialog=page.getByRole('dialog',{name:'Import activity logs'})
+  await expect(dialog).toBeVisible()
+  await expect(dialog.getByLabel('Column 1')).toHaveValue('UserPrincipalName')
+  await expect(dialog.getByLabel('Column 2')).toHaveValue('ClientIP')
+  await dialog.getByRole('button',{name:'Add column'}).click()
+  await dialog.getByLabel('Column 3').fill('Workload')
+  await dialog.getByLabel('Role 3').selectOption('target')
+  await dialog.getByLabel('Type 3').fill('Service')
+  await dialog.getByRole('button',{name:'Preview import'}).click()
+  await dialog.getByRole('button',{name:'Apply import'}).click()
+  await expect.poll(async()=>(await graph()).facts.some((f:any)=>f.predicate==='FileDownloaded'),{timeout:15000}).toBe(true)
+})
+
+test('large payloads: 9 MiB source and evidence keep lists small, records complete, sync intact (REST and MCP)',async({page,browser,request})=>{
+  test.setTimeout(180_000)
+  const {id,token,call}=await setup(page,request)
+  const big=(c:string)=>c.repeat(9*1024*1024)
+  const a=(await call('POST','/entities',{name:'Build host',kind:'Device'})).id
+  const b=(await call('POST','/entities',{name:'secrets.yml',kind:'File'})).id
+  const source=(await call('POST','/sources',{title:'Huge export',source_kind:'primary',uri:'export://huge',excerpt:big('s')})).id
+  const relation=(await call('POST','/relations',{subject_id:a,object_id:b,predicate:'reads'})).id
+  const evidence=(await call('POST',`/relations/${relation}/evidence`,{source_id:source,stance:'supports',observation:'Huge note',locator:'row 1',note:big('n')})).id
+  // Lists only carry the requested page, with long texts shortened.
+  const entities=await call('GET','/entities?limit=1')
+  expect(entities.items).toHaveLength(1);expect(entities.total).toBe(2)
+  const sources=await call('GET','/sources')
+  expect(sources.items[0].excerpt).toHaveLength(2000);expect(sources.items[0].excerpt_truncated).toBe(true);expect(sources.items[0].excerpt_length).toBe(9*1024*1024)
+  const relations=await call('GET','/relations')
+  expect(relations.items[0].assertions[0].note_truncated).toBe(true)
+  // Single records are complete: the reply crosses the WebSocket in parts.
+  expect((await call('GET',`/sources/${source}`)).excerpt).toHaveLength(9*1024*1024)
+  expect((await call('GET',`/evidence/${evidence}`)).note).toHaveLength(9*1024*1024)
+  expect((await call('GET','/graph')).sources[0].excerpt).toHaveLength(9*1024*1024)
+  const viaMcp=await mcp(token,'find_entities',{board_id:id,q:'secrets',limit:5})
+  expect(viaMcp.items.map((e:any)=>e.name)).toEqual(['secrets.yml'])
+  // A second browser receives both large actions (split by size, not one oversized message) and the board stays online.
+  const second=await browser.newContext({storageState:'e2e/storage.json'});const peer=await second.newPage()
+  await peer.goto(`/boards/${id}`)
+  await expect(page.getByText('2 online',{exact:true})).toBeVisible()
+  await expect.poll(async()=>peer.evaluate(()=>document.querySelectorAll('.react-flow__node').length),{timeout:30000}).toBeGreaterThanOrEqual(2)
+  await expect(page.getByText('2 online',{exact:true})).toBeVisible()
+  expect((await call('GET','/entities?limit=1')).total).toBe(2)
+  await second.close()
+})
+
+test('import queue: several files without fixed pauses, no duplicate own notices, one undo group per file',async({page,request})=>{
+  const {id,token,call,graph}=await setup(page,request)
+  const files=Array.from({length:6},(_,i)=>({name:`access-${i}.csv`,text:`IPAddress,FilePath,TimeGenerated\n10.0.0.${i+1},repo/file-${i}.env,2026-09-28T10:0${i}:00Z`}))
+  const transfer=await page.evaluateHandle(files=>{const dt=new DataTransfer();for(const f of files) dt.items.add(new File([f.text],f.name,{type:'text/csv'}));return dt},files)
+  const started=Date.now()
+  await page.locator('.workspace').dispatchEvent('dragenter',{dataTransfer:transfer})
+  await page.locator('.workspace').dispatchEvent('drop',{dataTransfer:transfer})
+  await expect.poll(async()=>(await graph()).facts.length,{timeout:20000}).toBe(6)
+  await page.getByRole('button',{name:'Notifications'}).click()
+  const panel=page.getByRole('dialog',{name:'Notifications'})
+  await expect(panel.locator('.notice.done').filter({hasText:'Import access-'})).toHaveCount(6)
+  // Six small files used to take 6 × 1.5 s of fixed waiting on top of the work.
+  expect(Date.now()-started).toBeLessThan(6000)
+  // Own imports are recognised by their batch: no second notice as someone else's change.
+  await expect(panel.locator('.notice').filter({hasText:'changed the board'})).toHaveCount(0)
+  await page.keyboard.press('Escape')
+  const history=await request.get(`http://127.0.0.1:18088/api/boards/${id}/history?limit=1000`,{headers:{'X-FactGraph-Token':token}})
+  const actions=(await history.json()).items as any[]
+  const batches=new Set(actions.filter(a=>a.channel==='Import').map(a=>a.batch_id))
+  expect(batches.size).toBe(6)
+  // Undo removes exactly the last file.
+  await page.getByRole('button',{name:'Undo'}).click()
+  await expect.poll(async()=>(await graph()).facts.length).toBe(5)
+})
+
+test('viewport: pan and zoom survive switching views and reloading; reset view fits again',async({page,request})=>{
+  const {call}=await setup(page,request)
+  await call('POST','/actions',{actions:[['Alpha',0],['Beta',400],['Gamma',800]].map(([name,x])=>({type:'entity.add',payload:{id:randomUUID(),name,kind:'Device',x,y:0}}))})
+  await expect(page.locator('.react-flow__node')).toHaveCount(3)
+  const transform=()=>page.locator('.react-flow__viewport').evaluate(el=>(el as HTMLElement).style.transform)
+  await page.waitForTimeout(400)
+  await page.getByRole('button',{name:'zoom in'}).click()
+  await page.getByRole('button',{name:'zoom in'}).click()
+  await page.waitForTimeout(500)
+  const zoomed=await transform()
+  await page.getByRole('tab',{name:'Timeline'}).click()
+  await page.getByRole('tab',{name:'Graph'}).click()
+  await expect(page.locator('.react-flow__node')).toHaveCount(3)
+  await page.waitForTimeout(400)
+  expect(await transform()).toBe(zoomed)
+  await page.reload()
+  await expect(page.locator('.react-flow__node')).toHaveCount(3)
+  await page.waitForTimeout(400)
+  expect(await transform()).toBe(zoomed)
+  await page.getByLabel('Board menu').click()
+  await page.getByRole('button',{name:'Reset my view'}).click()
+  await page.waitForTimeout(700)
+  expect(await transform()).not.toBe(zoomed)
+})
+
+test('organic layout runs in a worker: canvas stays responsive, cancel saves nothing, concurrent moves survive',async({page,request})=>{
+  test.setTimeout(240_000)
+  const {call,graph}=await setup(page,request)
+  const ids=Array.from({length:1100},()=>randomUUID())
+  const entities=ids.map((id,i)=>({type:'entity.add',payload:{id,name:`node ${i}`,kind:i%3?'Device':'IP',x:(i%40)*300,y:Math.floor(i/40)*150}}))
+  const relations=Array.from({length:2000},(_,i)=>({type:'fact.add',payload:{id:randomUUID(),subject_id:ids[(i*7)%1100],predicate:'connects to',object_id:ids[(i*13+1)%1100]}}))
+  await call('POST','/actions',{actions:[...entities,...relations]})
+  await expect.poll(async()=>(await graph()).entities.length,{timeout:30000}).toBe(1100)
+  const positions=async()=>new Map((await graph()).entities.map((e:any)=>[e.id,`${e.position.x},${e.position.y}`]))
+  const progress=page.locator('.layout-progress')
+  const arrange=page.getByRole('button',{name:'Arrange organically'})
+
+  // 1. Cancel: nothing moves.
+  const before=await positions()
+  await arrange.click()
+  await expect(progress).toBeVisible()
+  await progress.getByRole('button',{name:'Cancel'}).click()
+  await expect(progress).toHaveCount(0)
+  await page.waitForTimeout(500)
+  expect(await positions()).toEqual(before)
+
+  // 2. While the layout runs the main thread stays free (the synchronous version blocked it for 2.6 s and more).
+  //    Sampling stops as soon as the progress pill disappears, before the final re-render that applies the positions.
+  await page.evaluate(()=>{const w=window as any;w.__gaps=[];w.__sampling=true;let last=performance.now();const tick=()=>{const now=performance.now();if(!document.querySelector('.layout-progress')&&w.__seen){w.__sampling=false;return}if(document.querySelector('.layout-progress'))w.__seen=true;if(w.__seen)w.__gaps.push(now-last);last=now;if(w.__sampling) setTimeout(tick,16)};setTimeout(tick,16)})
+  await arrange.click()
+  await expect(progress).toBeVisible()
+  await expect(progress).toHaveCount(0,{timeout:60000})
+  const gaps:number[]=await page.evaluate(()=>(window as any).__gaps)
+  expect(gaps.length).toBeGreaterThan(5)
+  expect(Math.max(...gaps)).toBeLessThan(1000)
+  const arranged=await positions()
+  expect([...arranged.entries()].filter(([id,p])=>p!==before.get(id)).length).toBeGreaterThan(1000)
+
+  // 3. A node moved by someone else while the layout runs keeps its new place.
+  await arrange.click()
+  await expect(progress).toBeVisible()
+  await call('POST','/actions',{actions:[{type:'entity.position',payload:{id:ids[5],x:12340,y:5670}}]})
+  await expect(progress).toHaveCount(0,{timeout:60000})
+  await expect.poll(async()=>(await positions()).get(ids[5])).toBe('12340,5670')
 })

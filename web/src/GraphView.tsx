@@ -5,14 +5,15 @@ import { ReactFlow, ReactFlowProvider, Background, BackgroundVariant, Controls, 
 import '@xyflow/react/dist/style.css'
 import { Layers, Plus, Search, X, Pin, Sparkles, Copy, ArrowDown,
   Grid3x3, Map as MapIcon, Crosshair, Pencil, Merge, Trash2, PinOff, Settings2, Boxes, Zap, ChevronRight, ChevronDown,
-  FolderTree, Group as GroupIcon, Ungroup, EyeOff, Save, Columns3, Workflow, Download, ClipboardCopy, ImageDown, Waypoints } from 'lucide-react'
+  FolderTree, Group as GroupIcon, Ungroup, EyeOff, Save, Columns3, Workflow, Download, ClipboardCopy, ImageDown, Waypoints, Loader2 } from 'lucide-react'
 import type { Entity, EntityType, Fact, Group, Perspective, TruthState } from './types'
 import { CONTAINS_PREDICATES, type ActionDraft } from './board'
 import { snapPosition } from './layout'
 import { KindIcon, iconMarkup, prepareIconMarkup, typeIcons } from './KindIcon'
 import { browserMeasure, buildGraphSvg, downloadBlob, exportFilename, svgToPng } from './exportGraph'
 import { createWheelClassifier, zoomAround, zoomFactor } from './wheel'
-import { ORGANIC_THRESHOLD, organicLayout } from './organicLayout'
+import { ORGANIC_THRESHOLD } from './organicLayout'
+import { LayoutCancelled, organicLayoutAsync } from './layoutClient'
 
 const MIN_ZOOM = 0.05
 const MAX_ZOOM = 2.5
@@ -38,6 +39,11 @@ type Props = {
   boardName: string; filterSummary: string; onNotice: (message: string) => void;
   /** Called once a request was handled, so a remounted canvas never replays it. */
   onRequestDone: () => void;
+  /** The analyst's remembered zoom and pan for this board; without one the graph is fitted once. */
+  /** A file was saved (image export), for the notification history. */
+  onExported?: (message: string) => void
+  initialViewport?: { x: number; y: number; zoom: number } | null
+  onViewportChange?: (viewport: { x: number; y: number; zoom: number }) => void
 }
 const builtInKinds = ['User', 'Device', 'IP', 'Service Principal', 'Key Vault', 'AKS Cluster', 'S3 Bucket', 'File', 'Repository', 'Credential', 'Environment Variable', 'Blob Storage']
 export { KindIcon }
@@ -167,6 +173,20 @@ function ArrowDefs() {
   </defs></svg>
 }
 
+type ProgressChannel = { listener: ((done: number, total: number) => void) | null }
+
+/** Progress of a running layout with Cancel; updates itself so the canvas does not re-render on every step. */
+function LayoutProgress({ nodes, channel, onCancel }: { nodes: number; channel: ProgressChannel; onCancel: () => void }) {
+  const [percent, setPercent] = useState(0)
+  useEffect(() => {
+    channel.listener = (done, total) => setPercent(Math.round(done / Math.max(1, total) * 100))
+    return () => { channel.listener = null }
+  }, [channel])
+  return <div className="layout-progress" role="status"><Loader2 size={14} className="spin" />
+    <span>Arranging {nodes.toLocaleString('en')} nodes · {percent}%</span>
+    <button className="secondary-button small" onClick={onCancel}>Cancel</button></div>
+}
+
 function Canvas(props: Props) {
   const { entities, facts, groups, selection, search, onSelect, onCommand, entityTypes, request, lens } = props
   const flow = useReactFlow<Node<AnyData>>()
@@ -224,6 +244,8 @@ function Canvas(props: Props) {
   const [menu, setMenu] = useState<{ id: string; kind: 'entity' | 'group'; x: number; y: number } | null>(null)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  // A running organic layout: progress and a way to cancel it (the work happens in a Web Worker).
+  const [layoutRun, setLayoutRun] = useState<{ nodes: number; abort: AbortController; progress: ProgressChannel } | null>(null)
   const [grid, setGrid] = useState(() => pref('snap', true))
   const [minimapPref, setMinimapPref] = useState<boolean | null>(() => { try { const v = localStorage.getItem('factgraph:minimap'); return v === null ? null : v === 'true' } catch { return null } })
   const minimap = minimapPref ?? entities.length > 60
@@ -319,7 +341,7 @@ function Canvas(props: Props) {
   }, [view, selectedNodeId, needle, typeByName, focusIds])
   useEffect(() => { if (pendingFocus.current && groups.some(g => g.id === pendingFocus.current && !g.collapsed)) { const id = pendingFocus.current; pendingFocus.current = null; requestAnimationFrame(() => focusOn(id)) } }, [view])
   useEffect(() => { if (pendingFit.current) { pendingFit.current = false; requestAnimationFrame(() => void flow.fitView({ padding: 0.2, maxZoom: 1.1, duration: 400 })) } }, [view])
-  useEffect(() => { if (!fitted.current && nodes.length) { fitted.current = true; requestAnimationFrame(() => void flow.fitView({ padding: 0.2, maxZoom: 1.1 })) } }, [nodes.length, flow])
+  useEffect(() => { if (!fitted.current && nodes.length) { fitted.current = true; if (!props.initialViewport) requestAnimationFrame(() => void flow.fitView({ padding: 0.2, maxZoom: 1.1 })) } }, [nodes.length, flow, props.initialViewport])
 
   const pickEdge = useRef((_id: string) => {})
   pickEdge.current = (id: string) => {
@@ -448,13 +470,31 @@ function Canvas(props: Props) {
       }
       const organic = !byLayer && (mode === 'organic' || (mode === 'auto' && movable.length > ORGANIC_THRESHOLD))
       if (organic) {
-        // Let the browser paint the busy state before the synchronous simulation runs.
-        await new Promise(resolve => requestAnimationFrame(() => setTimeout(resolve, 0)))
         const size = (n: Node<AnyData>) => ({ width: n.measured?.width ?? (n.type === 'activity' ? 28 : NODE_W), height: n.measured?.height ?? (n.type === 'activity' ? 28 : NODE_H) })
-        const positions = organicLayout(chosen.map(n => ({ id: n.id, ...size(n), x: n.position.x, y: n.position.y, pinned: isPinned(n) })),
-          view.edges.filter(e => ids.has(e.source) || ids.has(e.target)).map(e => ({ source: e.source, target: e.target })))
+        const started = new Map(movable.map(n => [n.id, { ...n.position }]))
+        const abort = new AbortController()
+        // Progress goes straight to the pill, not through this component: re-rendering 1,000+ nodes per update would block.
+        const progress: ProgressChannel = { listener: null }
+        setLayoutRun({ nodes: movable.length, abort, progress })
+        let positions: Map<string, { x: number; y: number }>
+        try {
+          positions = await organicLayoutAsync(chosen.map(n => ({ id: n.id, ...size(n), x: n.position.x, y: n.position.y, pinned: isPinned(n) })),
+            view.edges.filter(e => ids.has(e.source) || ids.has(e.target)).map(e => ({ source: e.source, target: e.target })),
+            { signal: abort.signal, onProgress: (done, total) => progress.listener?.(done, total) })
+        } catch (problem) {
+          if (problem instanceof LayoutCancelled) { props.onNotice('Layout cancelled · nothing was moved'); return }
+          throw problem
+        } finally { setLayoutRun(null) }
+        // Nodes moved or removed while the layout ran (by you, a colleague or an agent) keep what happened to them.
+        const current = new Map(flow.getNodes().map(n => [n.id, n.position]))
+        const untouched = movable.filter(n => {
+          const before = started.get(n.id)!, now = current.get(n.id)
+          return !!now && Math.abs(now.x - before.x) < 0.5 && Math.abs(now.y - before.y) < 0.5 && positions.has(n.id)
+        })
+        const kept = movable.length - untouched.length
         pendingFit.current = true
-        await run(movable.map(n => {
+        // One batch: the whole layout is one undo step.
+        await run(untouched.map(n => {
           const position = snapPosition(positions.get(n.id)!)
           if (n.id.startsWith('group:')) return { type: 'group.update' as const, payload: { id: n.id.slice(6), ...position } }
           if (n.id.startsWith('act:')) return { type: 'fact.position' as const, payload: { id: n.id.slice(4), ...position } }
@@ -462,7 +502,8 @@ function Canvas(props: Props) {
         }))
         // Layer lanes only make sense for the layer layout; in an organic layout they would overlap.
         if (lens.showLanes) props.onLensChange({ ...lens, showLanes: false })
-        if (mode === 'auto') props.onNotice(`Organic layout for ${movable.length} nodes · use ↓ or Layers for a flow layout`)
+        if (kept) props.onNotice(`Organic layout for ${untouched.length} nodes · ${kept} changed meanwhile and kept their place`)
+        else if (mode === 'auto') props.onNotice(`Organic layout for ${movable.length} nodes · use ↓ or Layers for a flow layout`)
         return
       }
       const pane = shellRef.current?.getBoundingClientRect()
@@ -512,12 +553,12 @@ function Canvas(props: Props) {
       if (!result.nodeCount) throw new Error('Nothing to export in this area.')
       if (settings.format === 'svg') {
         if (mode === 'copy') { await navigator.clipboard.writeText(result.svg); props.onNotice('SVG markup copied') }
-        else { downloadBlob(new Blob([result.svg], { type: 'image/svg+xml;charset=utf-8' }), exportFilename(props.boardName, 'svg')); props.onNotice(`SVG exported · ${result.nodeCount} nodes`) }
+        else { downloadBlob(new Blob([result.svg], { type: 'image/svg+xml;charset=utf-8' }), exportFilename(props.boardName, 'svg')); props.onNotice(`SVG exported · ${result.nodeCount} nodes`); props.onExported?.(`SVG · ${result.nodeCount} nodes · ${exportFilename(props.boardName, 'svg')}`) }
       } else {
         const { blob, scale } = await svgToPng(result.svg, result.width, result.height, settings.scale)
         const note = scale < settings.scale - 0.01 ? ` · reduced to ${scale.toFixed(2)}× (browser size limit; use SVG for full detail)` : ''
         if (mode === 'copy') { await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]); props.onNotice(`PNG copied to clipboard${note}`) }
-        else { downloadBlob(blob, exportFilename(props.boardName, 'png')); props.onNotice(`PNG exported · ${Math.round(result.width * scale)}×${Math.round(result.height * scale)} px${note}`) }
+        else { downloadBlob(blob, exportFilename(props.boardName, 'png')); props.onNotice(`PNG exported · ${Math.round(result.width * scale)}×${Math.round(result.height * scale)} px${note}`); props.onExported?.(`PNG · ${Math.round(result.width * scale)}×${Math.round(result.height * scale)} px · ${exportFilename(props.boardName, 'png')}`) }
       }
       setPopover(null)
     } catch (e) { setError(e instanceof Error ? e.message : String(e)) } finally { setExporting(false) }
@@ -597,6 +638,7 @@ function Canvas(props: Props) {
       }}
       onDoubleClick={e => { if ((e.target as HTMLElement).classList.contains('react-flow__pane')) setDraft({ position: flow.screenToFlowPosition({ x: e.clientX, y: e.clientY }), kind: 'Device', name: '', predicate: '' }) }}
       deleteKeyCode={null} selectionOnDrag panOnDrag={[1, 2]} zoomOnScroll zoomOnPinch panActivationKeyCode="Space" zoomOnDoubleClick={false} selectionKeyCode="Shift" multiSelectionKeyCode="Shift"
+      defaultViewport={props.initialViewport ?? undefined} onMoveEnd={(_, viewport) => props.onViewportChange?.(viewport)}
       minZoom={MIN_ZOOM} maxZoom={MAX_ZOOM} snapToGrid={grid} snapGrid={[20, 20]} connectionRadius={40} colorMode={props.theme} onlyRenderVisibleElements proOptions={{ hideAttribution: true }}>
       <Background variant={BackgroundVariant.Dots} gap={20} size={1.2} />
       <Controls showInteractive={false} fitViewOptions={{ padding: 0.2, maxZoom: 1.1, duration: 300 }} position="bottom-left" />
@@ -739,6 +781,7 @@ function Canvas(props: Props) {
       </form>
     </div>}
     {error && <div className="canvas-error" role="alert" onClick={() => setError('')}>{error}</div>}
+    {layoutRun && <LayoutProgress nodes={layoutRun.nodes} channel={layoutRun.progress} onCancel={() => layoutRun.abort.abort()} />}
   </div>
 }
 export default function GraphView(props: Props) { return <ReactFlowProvider><Canvas {...props} /></ReactFlowProvider> }

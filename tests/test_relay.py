@@ -241,5 +241,41 @@ class RelayTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("max-age", headers["Strict-Transport-Security"])
 
 
+    async def test_large_replies_arrive_in_parts_and_lists_query_the_browser(self):
+        board, actor, token = str(uuid4()), str(uuid4()), "parts-token"
+
+        def get(path):
+            request = Request(f"http://127.0.0.1:{self.port}/api/boards/{board}{path}", headers={"X-FactGraph-Token": token})
+            with urlopen(request, timeout=5) as response:
+                return json.load(response)
+
+        async with join(f"ws://127.0.0.1:{self.port}/ws/boards/{board}", actor, "Browser", token) as websocket:
+            await receive(websocket)
+            # A list asks the browser for one page of one collection, not for the whole graph.
+            listing = asyncio.create_task(asyncio.to_thread(get, "/entities?limit=1&q=host"))
+            command = await receive(websocket)
+            self.assertEqual((command["operation"], command["collection"], command["limit"], command["q"]), ("query", "entities", 1, "host"))
+            await websocket.send(json.dumps({"type": "api-result", "requestId": command["requestId"], "ok": True,
+                                             "items": [{"id": "e1"}], "total": 3, "revision": "r9"}))
+            self.assertEqual(await listing, {"board_id": board, "items": [{"id": "e1"}], "total": 3, "revision": "r9"})
+            # A large single record comes in parts and is joined before parsing.
+            record = asyncio.create_task(asyncio.to_thread(get, "/sources/s1"))
+            command = await receive(websocket)
+            self.assertEqual((command["operation"], command["id"]), ("query", "s1"))
+            text = json.dumps({"type": "api-result", "requestId": command["requestId"], "ok": True, "record": {"id": "s1", "excerpt": "x" * 3_000_000}})
+            chunks = [text[i:i + 1_000_000] for i in range(0, len(text), 1_000_000)]
+            for index, chunk in enumerate(chunks):
+                await websocket.send(json.dumps({"type": "api-result-part", "requestId": command["requestId"], "index": index, "total": len(chunks), "data": chunk}))
+            self.assertEqual(len((await record)["excerpt"]), 3_000_000)
+            # Parts out of order fail the request instead of producing garbage.
+            broken = asyncio.create_task(asyncio.to_thread(get, "/sources/s2"))
+            command = await receive(websocket)
+            await websocket.send(json.dumps({"type": "api-result-part", "requestId": command["requestId"], "index": 1, "total": 2, "data": "}"}))
+            with self.assertRaises(HTTPError) as caught:
+                await broken
+            self.assertEqual(caught.exception.code, 422)
+            caught.exception.close()
+
+
 if __name__ == "__main__":
     unittest.main()

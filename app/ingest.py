@@ -52,7 +52,7 @@ def relation_actions(subject_id: str, predicate: str, object_id: str,
 
 SUBJECT_FIELDS = ("IPAddress", "ClientIP", "SourceIp", "source_ip", "ip", "ActorIP", "actor")
 OBJECT_FIELDS = ("FilePath", "file_path", "TargetResource", "Resource", "target", "ObjectName", "resource")
-TIME_FIELDS = ("TimeGenerated", "timestamp", "Timestamp", "time", "event_time")
+TIME_FIELDS = ("TimeGenerated", "timestamp", "Timestamp", "time", "event_time", "CreatedDateTime", "EventStartTime")
 
 
 def parse_rows(content: bytes, filename: str) -> list[dict]:
@@ -82,6 +82,12 @@ def _field(rows: list[dict], explicit: str | None, candidates: tuple[str, ...], 
         if candidate in keys:
             return candidate
     raise ValueError(f"No {label} column detected. Available: {', '.join(sorted(keys))}")
+
+
+def _time(value: str | None) -> str | None:
+    """ISO UTC for the formats portals export ("9/28/2026, 10:42:07 AM"); unknown formats stay as they are."""
+    from app.tables import parse_time
+    return (parse_time(value) or value) if value else None
 
 
 def _stable(board_id: str, *parts: str) -> str:
@@ -152,8 +158,8 @@ def rows_to_actions(board_id: str, rows: list[dict], *, title: str,
                     action_id=_stable(board_id, "fact-action", fact_id), author="Import"))
         row_text = json.dumps(row, sort_keys=True, ensure_ascii=False, default=str)
         assertion_id = _stable(board_id, "assertion", source_id, fact_id, row_text)
-        timestamp = next((str(row[key]) for key in ("valid_from", "StartTime", *TIME_FIELDS) if row.get(key)), None)
-        end = next((str(row[key]) for key in ("valid_to", "EndTime") if row.get(key)), None)
+        timestamp = _time(next((str(row[key]) for key in ("valid_from", "StartTime", *TIME_FIELDS) if row.get(key)), None))
+        end = _time(next((str(row[key]) for key in ("valid_to", "EndTime") if row.get(key)), None))
         drafts.append(action("assertion.add", {"id": assertion_id, "fact_id": fact_id,
             "stance": "supports", "confidence": 1, "source_id": source_id,
             "note": row_text, "observation": f"{subject} {row_predicate} {object_name}", "locator": str(row.get("EventId") or row.get("event_id") or f"result row {row_number}"), "created_at": now, "valid_from": timestamp, "valid_to": end},
@@ -229,8 +235,8 @@ def activity_rows_to_actions(board_id: str, rows: list[dict], *, title: str, rol
                     action_id=_stable(board_id, "activity-action", activity_id), author="Import"))
         row_text = json.dumps(row, sort_keys=True, ensure_ascii=False, default=str)
         assertion_id = _stable(board_id, "assertion", source_id, activity_id, row_text)
-        timestamp = next((str(row[k]) for k in ("valid_from", "StartTime", *TIME_FIELDS) if row.get(k)), None)
-        end = next((str(row[k]) for k in ("valid_to", "EndTime") if row.get(k)), None)
+        timestamp = _time(next((str(row[k]) for k in ("valid_from", "StartTime", *TIME_FIELDS) if row.get(k)), None))
+        end = _time(next((str(row[k]) for k in ("valid_to", "EndTime") if row.get(k)), None))
         names = ", ".join(f"{m['role']} {row.get(m['field'])}" for m in roles if row.get(m["field"]))
         drafts.append(action("assertion.add", {"id": assertion_id, "fact_id": activity_id, "stance": "supports", "confidence": 1,
             "source_id": source_id, "note": row_text, "observation": f"{row_operation}: {names}",
@@ -241,3 +247,133 @@ def activity_rows_to_actions(board_id: str, rows: list[dict], *, title: str, rol
     return drafts, {"rows": len(rows), "skipped": skipped, "entities": len(seen_entities), "relations": len(seen_activities),
                     "activities": len(seen_activities), "evidence": evidence, "source_id": source_id,
                     "roles": [f"{m['field']} → {m['role']}" for m in roles]}
+
+
+# Identifiers that are unique on their own (GUIDs, hashes, resource IDs) may join entities of different types
+# (a File and a Process with the same SHA-256 are one binary); names like IPs, FQDNs or emails only within a type.
+GLOBAL_SCHEMES = {"external_id", "resource_id"}
+# One binary can be stored in several places: locations never contradict each other, only single-valued IDs do.
+MULTI_VALUED = {"device-path", "device-file"}
+
+
+def normalize_identifier(scheme: str, namespace: str, raw: str) -> str:
+    value = raw.strip()
+    if scheme in ("hostname", "fqdn", "email", "resource_id") or namespace in ("sha256", "sha1", "md5", "entra-object-id", "entra-app-id",
+                                                                                 "entra-device-id", "mde-device-id", "device-path", "device-file"):
+        value = value.rstrip(".").lower()
+    return value
+
+
+def identifier_key(kind: str, scheme: str, namespace: str, normalized: str) -> tuple[str, str, str, str]:
+    return ("" if scheme in GLOBAL_SCHEMES else kind.casefold(), scheme, namespace, normalized)
+
+
+def table_rows_to_actions(board_id: str, rows: list[dict], mapping, *, title: str, query: str = "",
+                          existing_entities: dict[tuple[str, str], str] | None = None,
+                          existing_identifiers: dict[tuple[str, str, str, str], str] | None = None,
+                          known_identifiers: set[tuple[str, str, str, str]] | None = None,
+                          existing_facts: set[str] | None = None,
+                          existing_sources: set[str] | None = None) -> tuple[list[dict], dict]:
+    """Rows of a recognised Defender XDR / Sentinel table become activities with role-tagged participants.
+
+    Entities are found by their identifiers first (DeviceId, AccountObjectId, SHA-256 …), then by type and name, so a
+    device seen in DeviceNetworkEvents and in SigninLogs is one entity. Missing identifiers are added to it. Every row
+    is its own unconfirmed evidence item with its own time and a locator such as "DeviceNetworkEvents ReportId=… DeviceId=…".
+    """
+    from app.tables import locator_of, operation_of, participants_of, time_of
+
+    if not rows:
+        raise ValueError("The file contains no result rows")
+    if len(rows) > 50_000:
+        raise ValueError("At most 50,000 rows per import; split the export or narrow the query")
+    canonical_rows = json.dumps(rows, sort_keys=True, ensure_ascii=False, default=str)
+    digest = hashlib.sha256((title + "\n" + query + "\n" + mapping.table + "\n" + canonical_rows).encode()).hexdigest()
+    source_id = _stable(board_id, "import", digest)
+    now = datetime.now(timezone.utc).isoformat()
+    drafts: list[dict] = []
+    if source_id not in (existing_sources or set()):
+        drafts.append(action("source.add", {"id": source_id, "title": title, "uri": f"import://{digest[:16]}",
+            "excerpt": canonical_rows, "query": query, "source_kind": "primary", "created_at": now},
+            action_id=_stable(board_id, "source-action", source_id), author="Import"))
+    by_name = dict(existing_entities or {})
+    by_identifier = dict(existing_identifiers or {})
+    have_identifier = set(known_identifiers or set())
+    existing_ids = set(by_name.values()) | set(by_identifier.values())
+    # Which ID namespaces each entity already has, to refuse a name match that contradicts them.
+    id_namespaces = {(owner, scheme, namespace) for owner, scheme, namespace, _ in have_identifier}
+    created: set[str] = set()
+    touched: set[str] = set()
+    activities: set[str] = set()
+    evidence = skipped = identifiers_added = 0
+    times: list[str] = []
+    for row_number, row in enumerate(rows, 1):
+        participants: list[dict] = []
+        labels: list[str] = []
+        for part in participants_of(mapping, row):
+            kind, name = part["kind"], part["name"]
+            keys = [(identifier_key(kind, i["scheme"], i["namespace"], normalize_identifier(i["scheme"], i["namespace"], i["raw"])), i)
+                    for i in part["identifiers"]]
+            def contradicts(candidate: str) -> bool:
+                # Same name or FQDN, but a different ID of the same kind (another DeviceId, another SHA-256): a different thing.
+                return any(k[1] in GLOBAL_SCHEMES and k[2] not in MULTI_VALUED and (candidate, k[1], k[2]) in id_namespaces
+                           and (candidate, *k[1:]) not in have_identifier for k, _ in keys)
+            # Strong IDs first (DeviceId, object IDs, hashes), then name-like identifiers (FQDN, IP, email), then the name.
+            # A match through one ID is vetoed by a contradicting ID of another namespace (same path, different SHA-1).
+            entity_id = next((by_identifier[k] for k, _ in keys if k[1] in GLOBAL_SCHEMES and k in by_identifier and not contradicts(by_identifier[k])), None)
+            if not entity_id:
+                weak = [by_identifier[k] for k, _ in keys if k[1] not in GLOBAL_SCHEMES and k in by_identifier]
+                # Files and processes are never joined by their name alone (two .env files on two devices are two files).
+                named = by_name.get((kind.casefold(), name.casefold())) if part.get("by_name", True) else None
+                entity_id = next((c for c in [*weak, named] if c and not contradicts(c)), None)
+            if not entity_id:
+                anchor = next((f"{k[1]}:{k[2]}:{k[3]}" for k, _ in keys if k[1] in GLOBAL_SCHEMES), name.casefold())
+                entity_id = _stable(board_id, "entity", kind, anchor)
+            if entity_id not in existing_ids and entity_id not in created:
+                created.add(entity_id)
+                drafts.append(action("entity.add", {"id": entity_id, "name": name, "kind": kind, "description": ""},
+                    action_id=_stable(board_id, "entity-action", entity_id), author="Import"))
+            touched.add(entity_id)
+            if part.get("by_name", True):
+                by_name.setdefault((kind.casefold(), name.casefold()), entity_id)
+            for key, ident in keys:
+                by_identifier.setdefault(key, entity_id)
+                owned = (entity_id, *key[1:])
+                if owned in have_identifier:
+                    continue
+                have_identifier.add(owned)
+                id_namespaces.add((entity_id, key[1], key[2]))
+                identifier_id = _stable(board_id, "identifier", entity_id, key[1], key[2], key[3])
+                drafts.append(action("identifier.add", {"id": identifier_id, "entity_id": entity_id, "scheme": ident["scheme"],
+                    "namespace": ident["namespace"], "raw_value": ident["raw"], "normalized_value": key[3], "confidence": 1,
+                    "source_id": source_id}, action_id=_stable(board_id, "identifier-action", identifier_id), author="Import"))
+                identifiers_added += 1
+            role = part["role"]
+            if not any(p["entity_id"] == entity_id and p["role"] == role for p in participants):
+                participants.append({"entity_id": entity_id, "role": role})
+                labels.append(f"{role} {name}")
+        operation = operation_of(mapping, row)
+        if len({p["entity_id"] for p in participants}) < 2 or not operation:
+            skipped += 1
+            continue
+        key = "|".join(sorted(f"{p['role']}:{p['entity_id']}" for p in participants))
+        activity_id = _stable(board_id, "activity", operation.casefold(), key)
+        if activity_id not in activities:
+            activities.add(activity_id)
+            if activity_id not in (existing_facts or set()):
+                drafts.append(action("fact.add", {"id": activity_id, "predicate": operation, "participants": participants,
+                    "valid_from": None, "valid_to": None, "created_at": now},
+                    action_id=_stable(board_id, "activity-action", activity_id), author="Import"))
+        row_text = json.dumps(row, sort_keys=True, ensure_ascii=False, default=str)
+        assertion_id = _stable(board_id, "assertion", source_id, activity_id, row_text)
+        start, end = time_of(mapping, row)
+        if start:
+            times.append(start)
+        drafts.append(action("assertion.add", {"id": assertion_id, "fact_id": activity_id, "stance": "supports", "confidence": 1,
+            "source_id": source_id, "note": row_text, "observation": f"{operation}: {', '.join(labels)}",
+            "locator": locator_of(mapping, row, row_number), "created_at": now, "valid_from": start, "valid_to": end},
+            action_id=_stable(board_id, "assertion-action", assertion_id), author="Import"))
+        evidence += 1
+    return drafts, {"rows": len(rows), "skipped": skipped, "entities": len(touched), "new_entities": len(created),
+                    "relations": len(activities), "evidence": evidence, "identifiers": identifiers_added, "source_id": source_id,
+                    "table": mapping.table, "product": mapping.product,
+                    "first_seen": min(times) if times else None, "last_seen": max(times) if times else None}

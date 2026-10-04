@@ -17,7 +17,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: '3.14'
           cache: pip
 
       - name: Install Python dependencies
@@ -35,6 +35,10 @@ jobs:
 
       - name: Build frontend
         run: npm ci && npm test && npm run build
+        working-directory: web
+
+      - name: Check performance budgets
+        run: npm run bench
         working-directory: web
 
       - name: Install browser for workflow tests

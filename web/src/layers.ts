@@ -16,13 +16,14 @@ export const LAYERS: Layer[] = [
 export const LAYER_IDS = LAYERS.map(layer => layer.id)
 
 const rules: [RegExp, string][] = [
+  [/registry/, 'endpoint'],
   [/aks|kubernetes|k8s|pod|namespace|container|workload|deployment|helm/, 'workload'],
   [/repo|repository|git|commit|pipeline|workflow|build|package/, 'code'],
   [/bucket|s3|blob|storage|database|datenbank|\bdb\b|table|datalake|share/, 'data'],
   [/key ?vault|keyvault|subscription|resource|azure|aws|gcp|cloud|tenant|function|app service|vm\b|virtual machine/, 'cloud'],
-  [/threat|attacker|adversary|actor|apt\b|user|person|account|principal|identity|group|role|credential|secret|token|password|key|certificate|benutzer|konto|angreifer/, 'identity'],
+  [/threat|attacker|adversary|actor|apt\b|user|person|account|principal|identity|group|role|credential|secret|token|password|key|certificate|mailbox|e-?mail address|benutzer|konto|angreifer/, 'identity'],
   [/\bip\b|ip address|domain|dns|url|hostname|fqdn|network|subnet|firewall|netz/, 'network'],
-  [/device|host|workstation|laptop|server|system|process|file|datei|variable|env|endpoint|computer|gerät/, 'endpoint'],
+  [/device|host|workstation|laptop|server|system|process|file|datei|variable|env|endpoint|computer|registry|gerät/, 'endpoint'],
 ]
 
 export function inferLayer(kind: string) {

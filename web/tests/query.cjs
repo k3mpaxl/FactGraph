@@ -1,0 +1,36 @@
+const assert = require('node:assert/strict')
+const { queryRecords, shorten, messageParts, actionChunks, LIST_TEXT } = require(require('node:path').resolve(process.argv[2]) + '/query.js')
+
+const long = 'x'.repeat(50_000)
+const data = { entities: [{ id: 'e1', name: 'Build host' }, { id: 'e2', name: 'secrets.yml' }], sources: [{ id: 's1', title: 'Huge', excerpt: long }],
+  facts: [{ id: 'f1', predicate: 'reads', assertions: [{ id: 'a1', note: long, observation: 'needle in the note' }] }], groups: [], views: [], entity_types: [] }
+
+// Lists: only the page, long texts shortened (also evidence inside relations); search covers the full text.
+const page = queryRecords(data, { collection: 'entities', limit: 1 })
+assert.deepEqual(page, { items: [{ id: 'e1', name: 'Build host' }], total: 2 })
+const sources = queryRecords(data, { collection: 'sources' })
+assert.equal(sources.items[0].excerpt.length, LIST_TEXT)
+assert.equal(sources.items[0].excerpt_length, 50_000)
+assert.equal(queryRecords(data, { collection: 'relations' }).items[0].assertions[0].note_truncated, true)
+assert.equal(queryRecords(data, { collection: 'evidence', q: 'NEEDLE' }).total, 1)
+// Single records are complete; unknown IDs are null; unknown collections fail.
+assert.equal(queryRecords(data, { collection: 'sources', id: 's1' }).record.excerpt.length, 50_000)
+assert.equal(queryRecords(data, { collection: 'evidence', id: 'nope' }).record, null)
+assert.throws(() => queryRecords(data, { collection: 'secrets' }))
+assert.equal(shorten({ id: 'x', note: 'short' }).note_truncated, undefined)
+
+// Large replies are split and reassemble to the same JSON.
+const payload = { ok: true, record: { excerpt: 'ü'.repeat(25_000) } }
+const parts = messageParts('r1', payload, 10_000)
+assert.ok(parts.length > 2)
+const decoded = parts.map(p => JSON.parse(p))
+assert.ok(decoded.every((p, i) => p.type === 'api-result-part' && p.index === i && p.total === parts.length))
+assert.deepEqual(JSON.parse(decoded.map(p => p.data).join('')), { type: 'api-result', requestId: 'r1', ...payload })
+assert.equal(messageParts('r2', { ok: true }).length, 1)
+
+// Actions are chunked by count and by size; a single huge action gets its own chunk.
+const actions = [{ id: 1, payload: 'a'.repeat(3_000_000) }, { id: 2, payload: 'b'.repeat(3_000_000) }, ...Array.from({ length: 150 }, (_, i) => ({ id: i + 3 }))]
+const chunks = actionChunks(actions)
+assert.deepEqual(chunks.map(c => c.length), [1, 100, 51])
+assert.deepEqual(chunks.flat().map(a => a.id), actions.map(a => a.id))
+console.log('Targeted queries, shortened lists, reply parts and size-bounded action chunks passed')

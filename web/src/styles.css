@@ -149,6 +149,7 @@ input[type=checkbox] { accent-color: var(--accent); margin: 0 }
 [data-theme='dark'] .view-tabs button.active { background: var(--surface-3) }
 .view-tabs b { font-size: 10.5px; font-weight: 600; color: var(--text-3); font-variant-numeric: tabular-nums }
 .view-tabs b.attention { color: var(--warn) }
+.view-tabs b.attention.danger { color: var(--bad) }
 .header-search { display: flex; align-items: center; gap: 6px; height: 28px; width: 220px; min-width: 120px; flex: 0 1 220px; padding: 0 6px 0 9px; border-radius: var(--radius); border: 1px solid var(--border); background: var(--surface-2); color: var(--text-3); margin-right: 4px; transition: border-color .12s, width .2s var(--ease) }
 .header-search:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); color: var(--text-2) }
 .header-search input { all: unset; flex: 1; min-width: 0; font-size: 12.5px; color: var(--text) }
@@ -558,6 +559,11 @@ footer.pager { justify-content: center; margin-top: 16px }
 .toast.error { background: var(--bad); color: #fff; cursor: pointer }
 
 /* Responsive ------------------------------------------------------------------ */
+@media (max-width: 1500px) {
+  /* Five views: counts only where they ask for attention, and a narrower search, so the tabs never collide. */
+  .view-tabs b:not(.attention) { display: none }
+  .header-search { width: 180px; flex-basis: 180px }
+}
 @media (max-width: 1180px) {
   .inspector { position: absolute; top: 0; right: 0; bottom: 0; z-index: 20; box-shadow: var(--shadow-lg) }
   .tab-text { display: none }
@@ -792,3 +798,166 @@ button.link:hover { text-decoration: underline }
 .layout-progress { position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%); z-index: 30; display: flex; align-items: center; gap: 10px;
   padding: 6px 8px 6px 12px; border-radius: 999px; background: var(--surface); border: 1px solid var(--border); box-shadow: var(--shadow); font-size: 12.5px; color: var(--text-2) }
 .layout-progress svg { color: var(--accent) }
+
+/* Bundled activities (same operation, same collapsed participants) */
+.activity-diamond { position: relative }
+.activity-count { position: absolute; top: -9px; right: -12px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; background: var(--accent); color: var(--accent-text); font-size: 9.5px; font-weight: 700; line-height: 16px; text-align: center; transform: rotate(-45deg) }
+
+/* Attack impact: markers on the canvas */
+.impact-badge { position: absolute; top: -9px; left: 10px; z-index: 2; height: 16px; padding: 0 6px; border-radius: 999px; font-size: 9.5px; font-weight: 700; letter-spacing: .02em; line-height: 16px; white-space: nowrap; pointer-events: none; background: var(--warn); color: #1a1205; box-shadow: var(--shadow-sm) }
+.impact-badge.compromised, .impact-badge.secret, .impact-badge.delete { background: var(--bad); color: #fff }
+.impact-badge.pivot { background: var(--node-bg); color: var(--bad); border: 1px dashed var(--bad); line-height: 14px }
+.impact-badge.read, .impact-badge.auth { background: color-mix(in srgb, var(--warn) 70%, var(--node-bg)) }
+.impact-badge.attempt, .impact-badge.other, .impact-badge.regular { background: var(--neutral-soft); color: var(--text-2) }
+.entity-node.mark-compromised, .group-node.mark-compromised { border-color: var(--bad); box-shadow: 0 0 0 3px var(--bad-soft), var(--shadow-sm) }
+.entity-node.mark-pivot { border: 1px dashed var(--bad) }
+.entity-node.mark-derived { border: 1.5px dashed var(--bad); box-shadow: 0 0 0 3px var(--bad-soft), var(--shadow-sm) }
+.impact-badge.derived { background: var(--bad); color: #fff }
+.entity-node.mark-impacted, .group-node.mark-impacted { border-color: var(--warn); box-shadow: 0 0 0 3px var(--warn-soft), var(--shadow-sm) }
+.entity-node.mark-impacted.effect-secret, .entity-node.mark-impacted.effect-delete { border-color: color-mix(in srgb, var(--bad) 70%, var(--warn)) }
+.entity-node.mark-impacted.effect-attempt, .entity-node.mark-impacted.effect-other { border-color: var(--border-strong); box-shadow: var(--shadow-sm) }
+.activity-node.attack .activity-diamond { border-color: var(--bad); color: var(--bad); background: color-mix(in srgb, var(--bad-soft) 60%, var(--node-bg)) }
+.activity-node.attack .activity-label strong { color: var(--bad) }
+.fg-edge.attack { stroke: var(--bad); stroke-width: 2; stroke-dasharray: none }
+.fg-edge.attack.dimmed { opacity: .25 }
+.canvas-toolbar button.impact-tool { color: var(--bad) }
+.canvas-toolbar button.impact-tool.active { color: var(--bad); background: var(--bad-soft) }
+.tool-badge.danger { background: var(--bad); color: #fff }
+
+/* Attack impact: inspector */
+.compromise-box { display: flex; flex-direction: column; gap: 8px; margin: 4px 0 12px }
+.impact-callout { display: grid; grid-template-columns: auto 1fr auto; gap: 8px; align-items: start; padding: 10px 12px; border-radius: var(--radius); font-size: 12px; line-height: 1.45 }
+.impact-callout > div { display: flex; flex-direction: column; gap: 2px; min-width: 0 }
+.impact-callout strong { font-size: 12.5px }
+.impact-callout small { color: var(--text-3) }
+.impact-callout.compromised { background: var(--bad-soft); color: var(--bad) }
+.impact-callout.compromised span, .impact-callout.impacted span, .impact-callout.pivot span { color: var(--text) }
+.impact-callout.pivot { border: 1px dashed var(--bad); color: var(--bad) }
+.impact-callout.impacted { background: var(--warn-soft); color: var(--warn) }
+.impact-callout.impacted.secret, .impact-callout.impacted.delete { background: var(--bad-soft); color: var(--bad) }
+.callout-actions { display: flex; flex-direction: column; gap: 2px }
+.compromise-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap }
+.secondary-button.danger-outline { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 45%, var(--border)) }
+.secondary-button.danger-outline:hover:not(:disabled) { background: var(--bad-soft); border-color: var(--bad) }
+.primary-button.danger-fill { background: var(--bad) }
+.primary-button.danger-fill:hover:not(:disabled) { background: color-mix(in srgb, var(--bad) 85%, #000) }
+.compromise-form { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border-radius: var(--radius); border: 1px solid color-mix(in srgb, var(--bad) 35%, var(--border)); background: var(--surface) }
+.compromise-form label { display: flex; flex-direction: column; gap: 4px; font-size: 11.5px; color: var(--text-2) }
+.compromise-form.compact { grid-column: 1 / -1 }
+.form-actions { display: flex; justify-content: flex-end; gap: 8px }
+.rotation-mini { display: flex; flex-direction: column; gap: 4px; align-items: flex-start }
+.rotation-line { display: flex; gap: 6px; align-items: center; font-size: 12px; color: var(--text-2) }
+.rotation-line.stale b { color: var(--bad) }
+
+/* Attack impact: view */
+.impact-page { max-width: 1100px }
+.impact-page .view-header .head-actions { display: flex; gap: 8px }
+.impact-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; margin-bottom: 16px }
+.impact-stat { display: flex; flex-direction: column; gap: 2px; padding: 12px 14px; border-radius: var(--radius-lg); border: 1px solid var(--border); background: var(--surface) }
+.impact-stat b { font-size: 22px; font-weight: 700; letter-spacing: -.02em }
+.impact-stat b.small-stat { font-size: 13px; font-weight: 600; letter-spacing: 0 }
+.impact-stat span { font-size: 11.5px; color: var(--text-3) }
+.impact-stat.compromised b { color: var(--bad) }
+.impact-stat.impacted b, .impact-stat.rotate b { color: var(--warn) }
+.impact-block { border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); margin-bottom: 10px; overflow: hidden }
+.impact-block > header { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 12px 0 0 }
+.impact-block-toggle { display: flex; align-items: center; gap: 8px; padding: 12px 14px; flex: 1; text-align: left; color: var(--text-2) }
+.impact-block-toggle h3 { font-size: 13.5px; font-weight: 650; color: var(--text) }
+.impact-block-toggle b { font-size: 11px; color: var(--text-3); font-weight: 600 }
+.impact-block-body { display: flex; flex-direction: column; gap: 6px; padding: 0 14px 14px }
+.impact-row { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; padding: 7px 10px; border-radius: var(--radius); background: var(--surface-2) }
+.impact-row-main { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; min-width: 0 }
+.impact-row-main small { flex-basis: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.impact-row.seed { border-left: 3px solid var(--bad) }
+.impact-row.pivot { border-left: 3px dashed var(--bad) }
+.impact-row.pivot.known { border-left-color: var(--border-strong) }
+.row-actions { display: flex; align-items: center; gap: 4px }
+.entity-chip { display: inline-flex; align-items: center; max-width: 100%; padding: 1px 7px; border-radius: 6px; background: var(--surface); border: 1px solid var(--border); font-weight: 600; font-size: 12.5px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.entity-chip:hover { border-color: var(--accent); color: var(--accent) }
+.chip-list { display: flex; flex-wrap: wrap; gap: 4px }
+.impact-window { font-size: 12px; color: var(--bad); font-weight: 550 }
+.pivot-tag { font-size: 10.5px; font-weight: 700; padding: 1px 6px; border-radius: 999px; background: var(--neutral-soft); color: var(--text-2) }
+.pivot-tag.new { background: var(--bad-soft); color: var(--bad) }
+.effect-badge { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; padding: 2px 6px; border-radius: 4px; background: var(--neutral-soft); color: var(--text-2); white-space: nowrap }
+.effect-badge.secret, .effect-badge.delete { background: var(--bad-soft); color: var(--bad) }
+.effect-badge.write { background: var(--warn-soft); color: var(--warn) }
+.effect-badge.read, .effect-badge.auth { background: var(--accent-soft); color: var(--accent) }
+.impact-search { display: flex; align-items: center; gap: 8px; padding: 0 10px; height: 34px; border-radius: var(--radius); border: 1px dashed var(--border-strong); color: var(--text-3); margin-top: 4px }
+.impact-search input { flex: 1; border: 0; background: transparent; outline: none; height: 100%; color: var(--text) }
+.impact-list { display: flex; flex-direction: column; gap: 4px; margin-top: 6px }
+.attack-steps { list-style: none; display: flex; flex-direction: column; gap: 4px; counter-reset: step }
+.attack-step { border-radius: var(--radius); background: var(--surface-2); border-left: 3px solid var(--border-strong) }
+.attack-step.secret, .attack-step.delete { border-left-color: var(--bad) }
+.attack-step.write { border-left-color: var(--warn) }
+.attack-step-head { display: grid; grid-template-columns: minmax(120px, 240px) 1fr auto auto; gap: 10px; align-items: center; width: 100%; padding: 7px 10px; text-align: left; font-size: 12.5px }
+.step-time { font-family: var(--mono); font-size: 11px; color: var(--text-3) }
+.step-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.step-actors { color: var(--text-2) }
+.step-count { font-size: 11px; color: var(--text-3); font-weight: 600 }
+.attack-step-body { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; padding: 0 10px 10px }
+.rotation-group h4 { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-3); margin: 8px 0 4px }
+.rotation-group h4 b { font-weight: 600 }
+.rotation-item { display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: start; padding: 8px 10px; border-radius: var(--radius); background: var(--surface-2); margin-bottom: 4px; cursor: pointer }
+.rotation-item input { margin-top: 3px }
+.rotation-item > span { display: flex; flex-direction: column; gap: 2px; font-size: 12.5px }
+.rotation-item small { font-size: 11.5px; color: var(--text-2) }
+.rotation-item.done strong { text-decoration: line-through; color: var(--text-3) }
+.rotation-item.stale { box-shadow: inset 3px 0 0 var(--bad) }
+.hunt-query { border-radius: var(--radius); border: 1px solid var(--border); overflow: hidden }
+.hunt-head { display: flex; justify-content: space-between; gap: 10px; align-items: flex-start; padding: 10px 12px; background: var(--surface-2) }
+.hunt-head > div { display: flex; flex-direction: column; gap: 2px; font-size: 12.5px }
+.hunt-head small { font-size: 11.5px; color: var(--text-2) }
+.code-head { display: flex; justify-content: space-between; align-items: center; font-size: 11.5px; color: var(--text-3) }
+.code-block { margin: 0; padding: 10px 12px; max-height: 260px; overflow: auto; background: var(--surface); color: var(--text); font-size: 11.5px; line-height: 1.5; white-space: pre; border-top: 1px solid var(--border) }
+.code-block.small-code { max-height: 140px; border: 1px solid var(--border); border-radius: var(--radius) }
+@media (max-width: 720px) {
+  .attack-step-head { grid-template-columns: 1fr auto; }
+  .step-time { grid-column: 1 / -1 }
+}
+.step-with { color: var(--text-3) }
+.rotation-measure { border-radius: var(--radius); background: var(--surface-2); margin-bottom: 6px; padding: 2px 0 6px }
+.rotation-measure.stale { box-shadow: inset 3px 0 0 var(--bad) }
+.rotation-measure-head { display: grid; grid-template-columns: auto 1fr 120px auto; gap: 8px; align-items: center; width: 100%; padding: 8px 10px 2px; text-align: left; font-size: 12.5px }
+.measure-progress { height: 5px; border-radius: 3px; background: var(--neutral-soft); overflow: hidden }
+.measure-progress i { display: block; height: 100%; background: var(--ok) }
+.measure-count { font-size: 11px; color: var(--text-3); font-weight: 600; white-space: nowrap }
+.measure-detail { padding: 0 10px 0 31px; font-size: 11.5px; color: var(--text-2) }
+.rotation-items { display: flex; flex-direction: column; gap: 2px; padding: 6px 8px 0 24px }
+.rotation-items .rotation-item { background: var(--surface); margin-bottom: 0; padding: 5px 8px }
+.impact-callout.derived { border: 1px dashed var(--bad) }
+.impact-callout.cleared { background: var(--ok-soft); color: var(--ok) }
+.impact-callout.cleared span { color: var(--text) }
+.impact-row.seed.derived { border-left-style: dashed }
+.cleared-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px }
+.cleared-chip { display: inline-flex; align-items: center; gap: 2px }
+.proof-line { display: inline-flex; align-items: center; gap: 4px; color: var(--ok) !important; font-weight: 600 }
+.rotation-item.proven strong { text-decoration: none; color: var(--text-2) }
+.importable-tag { color: var(--accent) !important; font-weight: 600 }
+.impact-callout.impacted.regular { background: var(--neutral-soft); color: var(--text-2) }
+.trace-mini { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; border-radius: var(--radius); background: var(--surface-2); font-size: 12px }
+.trace-mini small { color: var(--text-2) }
+.attack-events { display: flex; flex-direction: column; gap: 4px }
+.attack-events h4 { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-3); margin: 4px 0 2px }
+.attack-events h4 b { font-weight: 600 }
+.attack-event { display: flex; flex-direction: column; gap: 2px; padding: 7px 9px; border-radius: var(--radius); background: var(--surface-2); border-left: 3px solid var(--bad); font-size: 12px }
+.attack-event.regular { border-left-color: var(--border-strong) }
+.attack-event small { font-size: 11px; overflow: hidden; text-overflow: ellipsis }
+.attack-event-head { display: flex; align-items: center; gap: 6px }
+.attack-event-head b { margin-left: auto; font-size: 11px; color: var(--text-3) }
+.attack-event-actions { display: flex; gap: 4px; margin-top: 2px }
+.regular-hint { color: var(--ok) !important }
+.trace-list { list-style: none; display: flex; flex-direction: column; gap: 4px }
+.trace-entry { display: grid; grid-template-columns: 130px 1fr; gap: 10px; align-items: baseline; padding: 7px 10px; border-radius: var(--radius); background: var(--surface-2); font-size: 12.5px }
+.trace-text { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px }
+.trace-text small { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 2px 6px; align-items: baseline }
+.relation-time { font-family: var(--mono); font-size: 10.5px; color: var(--text-3); white-space: nowrap; margin-left: auto; padding-left: 6px }
+.advice { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border-radius: var(--radius); background: var(--surface-2); border-left: 3px solid var(--neutral) }
+.advice.high { border-left-color: var(--bad) }
+.advice.medium { border-left-color: var(--warn) }
+.advice p { font-size: 12px; color: var(--text-2); line-height: 1.5 }
+.advice.compact { padding: 8px 10px }
+.advice-head { display: flex; align-items: baseline; gap: 8px; font-size: 12.5px }
+.advice-level { flex: none; font-size: 9.5px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; padding: 1px 6px; border-radius: 4px; background: var(--neutral-soft); color: var(--text-2) }
+.advice-level.high { background: var(--bad-soft); color: var(--bad) }
+.advice-level.medium { background: var(--warn-soft); color: var(--warn) }
+.advice-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px }

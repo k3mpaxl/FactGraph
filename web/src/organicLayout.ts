@@ -5,7 +5,7 @@ export type LayoutEdge = { source: string; target: string }
 type SimNode = SimulationNodeDatum & { id: string; width: number; height: number; degree: number }
 
 /** Graphs above this size get the organic layout by default; flow layouts turn into unreadable columns there. */
-export const ORGANIC_THRESHOLD = 150
+export const ORGANIC_THRESHOLD = 250
 
 /**
  * Force-directed layout for large, densely connected graphs: connected entities cluster, hubs sit among their

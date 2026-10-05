@@ -168,6 +168,15 @@ export function project(boardId: string, operations: BoardAction[]): BoardProjec
           const entity = entities.get(id)
           if (entity && item.color === null) entity.color = undefined
           if (entity && typeof item.pinned === 'boolean') entity.pinned = item.pinned
+          if (entity && item.compromise === null) delete entity.compromise
+          else if (entity && item.compromise && typeof item.compromise === 'object') {
+            const c = item.compromise as Record<string, unknown>
+            const time = (value: unknown) => typeof value === 'string' && Number.isFinite(Date.parse(value)) ? new Date(value).toISOString() : null
+            entity.compromise = { from: time(c.from), to: time(c.to), note: typeof c.note === 'string' ? c.note.slice(0, 2000) : '',
+              by: operation.author, at: operation.at, ...(c.cleared === true ? { cleared: true } : {}) }
+          }
+          if (entity && item.rotated_at === null) delete entity.rotated_at
+          else if (entity && typeof item.rotated_at === 'string' && Number.isFinite(Date.parse(item.rotated_at))) entity.rotated_at = new Date(item.rotated_at).toISOString()
           if (entity && (item.layer === null || item.layer === '')) delete entity.layer
           else if (entity && typeof item.layer === 'string') entity.layer = item.layer
           if (entity) for (const field of ['name', 'kind', 'description', 'color'] as const) {
@@ -325,6 +334,8 @@ export function project(boardId: string, operations: BoardAction[]): BoardProjec
         case 'fact.position': {
           const fact = facts.get(aliases.get(id) ?? id)
           if (fact && validPosition(item.x, item.y)) fact.position = { x: item.x as number, y: item.y as number }
+          // x and y null: back to automatic placement between the participants.
+          else if (fact && item.x === null && item.y === null) delete fact.position
           break
         }
         case 'group.add':

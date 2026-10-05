@@ -34,7 +34,7 @@ export function validateDrafts(graph: GraphData, drafts: ActionDraft[]) {
       require(new Set(participants!.map(x => x.entity_id)).size >= 2, 'An activity needs at least two different participants')
       require(participants!.every(x => entities.has(x.entity_id)), 'Activity participant does not exist on this board')
     }
-    if (type === 'fact.position') { require(facts.has(id), 'Relationship does not exist'); require([p.x, p.y].every(n => typeof n === 'number' && Number.isFinite(n) && Math.abs(n) <= 100000), 'Invalid position') }
+    if (type === 'fact.position') { require(facts.has(id), 'Relationship does not exist'); require((p.x === null && p.y === null) || [p.x, p.y].every(n => typeof n === 'number' && Number.isFinite(n) && Math.abs(n) <= 100000), 'Invalid position') }
     if (type === 'group.add') {
       require(id && String(p.name ?? '').trim(), 'Group needs ID and name'); require(!groups.has(id), 'Group ID already exists')
       for (const key of ['members', 'excluded']) if (key in p) require(idList(p[key]), `${key} must be a list of entity IDs`)
@@ -62,6 +62,13 @@ export function validateDrafts(graph: GraphData, drafts: ActionDraft[]) {
     if (type === 'entity.add') { require(id && String(p.name ?? '').trim() && String(p.kind ?? '').trim(), 'Entity needs ID, name and type'); require(!entities.has(id), 'Entity ID already exists'); entities.add(id) }
     if (['entity.update', 'entity.position', 'entity.delete'].includes(type)) require(entities.has(id), 'Entity does not exist on this board')
     if (type === 'entity.update') for (const field of ['name', 'kind']) if (field in p) require(typeof p[field] === 'string' && p[field].trim(), `${field} cannot be empty`)
+    if (type === 'entity.update' && p.compromise) {
+      const c = p.compromise as Record<string, unknown>
+      require(typeof c === 'object', 'Invalid compromise')
+      for (const field of ['from', 'to']) if (c[field] !== undefined && c[field] !== null) require(typeof c[field] === 'string' && Number.isFinite(Date.parse(c[field] as string)), `Invalid compromise ${field}`)
+      if (c.from && c.to) require(Date.parse(String(c.from)) <= Date.parse(String(c.to)), 'Compromise end must be after its start')
+    }
+    if (type === 'entity.update' && p.rotated_at !== undefined && p.rotated_at !== null) require(typeof p.rotated_at === 'string' && Number.isFinite(Date.parse(p.rotated_at)), 'Invalid rotation time')
     if (type === 'entity.position' || (type === 'entity.add' && ('x' in p || 'y' in p)))
       require([p.x, p.y].every(n => typeof n === 'number' && Number.isFinite(n) && Math.abs(n) <= 100000), 'Invalid node position')
     if (type === 'entity.merge') require(p.source_id !== p.target_id && entities.has(String(p.source_id)) && entities.has(String(p.target_id)), 'Invalid merge entities')

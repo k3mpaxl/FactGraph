@@ -1,3 +1,5 @@
+import { impactReport } from './hunting'
+import { analyzeImpact, exportMarks } from './impact'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { type ActionDraft, type BoardAction, isAction, isDraft, project, sortActions, undoneActions } from './board'
 import { listBoards, loadActions, saveActions, touchBoard, type BoardMeta } from './store'
@@ -20,7 +22,8 @@ async function renderExport({ data, name }: ReturnType<typeof project>, options:
   await prepareIconMarkup()
   const theme = options.theme === 'dark' ? 'dark' : 'light'
   const title = typeof options.title === 'string' ? options.title : name
-  const result = buildGraphSvg({ nodes: view.nodes, edges: view.edges, entityTypes: data.entity_types ?? [], theme, legend: options.legend !== false,
+  const impact = analyzeImpact(data)
+  const result = buildGraphSvg({ nodes: view.nodes, edges: view.edges, entityTypes: data.entity_types ?? [], theme, legend: options.legend !== false, impact: impact.seeds.length ? exportMarks(impact, data.groups ?? []) : null,
     transparent: options.transparent === true, title: title || undefined, subtitle: [perspective ? `Perspective ${perspective.name}` : '', `exported ${new Date().toISOString().slice(0, 16).replace('T', ' ')} UTC`].filter(Boolean).join(' · '),
     measure: browserMeasure, icon: iconMarkup })
   if (options.format === 'png') {
@@ -73,6 +76,8 @@ export function useBoard(boardId: string, listener?: ChangeListener) {
   const [ready, setReady] = useState(false)
   const [connected, setConnected] = useState(false)
   const [storageError, setStorageError] = useState('')
+  /** Actions too large for the relay: kept in this browser, never shared. */
+  const [unsynced, setUnsynced] = useState<string[]>([])
   const actionsRef = useRef<BoardAction[]>([])
   const actionIdsRef = useRef<Set<string>>(new Set())
   const boardNameRef = useRef(`Board ${boardId.slice(0, 8)}`)
@@ -97,7 +102,9 @@ export function useBoard(boardId: string, listener?: ChangeListener) {
 
   const sendActions = useCallback((items: BoardAction[], target?: string, deferRender = false) => {
     // By count and by size: a few actions with large source excerpts must not form one message above the relay limit.
-    const chunks = actionChunks(items)
+    const tooLarge: BoardAction[] = []
+    const chunks = actionChunks(items, 100, 4_000_000, tooLarge)
+    if (tooLarge.length) setUnsynced(current => { const ids = new Set([...current, ...tooLarge.map(a => a.id)]); return ids.size === current.length ? current : [...ids] })
     chunks.forEach((chunk, index) => send({ type: 'actions', actions: chunk,
       deferRender: deferRender || index < chunks.length - 1,
       ...(target ? { target } : {}) }))
@@ -147,7 +154,9 @@ export function useBoard(boardId: string, listener?: ChangeListener) {
     const work = emissionQueue.current.then(async () => {
     await mergeQueue.current
     const currentGraph = projectCached(actionsRef.current).data
-    const freshDrafts = placeNew(drafts.filter(draft => !draft.id || !actionIdsRef.current.has(draft.id)),
+    // Known action IDs are skipped, and so is a repeat within the batch (stable import IDs of an identical row).
+    const inBatch = new Set<string>()
+    const freshDrafts = placeNew(drafts.filter(draft => !draft.id || (!actionIdsRef.current.has(draft.id) && !inBatch.has(draft.id) && !!inBatch.add(draft.id))),
       currentGraph.entities.map(e => e.position ?? { x: 0, y: 0 }))
     validateDrafts(currentGraph, freshDrafts)
     const batchId = uuid()
@@ -261,6 +270,8 @@ export function useBoard(boardId: string, listener?: ChangeListener) {
                   board_id: boardId, name: snapshot.name, ...snapshot.data,
                   action_count: actionsRef.current.length, revision: actionsRef.current.at(-1)?.id ?? null,
                 } })
+              } else if (message.operation === 'impact') {
+                reply(requestId, { ok: true, impact: impactReport(projectCached(actionsRef.current).data) })
               } else if (message.operation === 'query') {
                 const result = queryRecords(projectCached(actionsRef.current).data, { collection: String(message.collection ?? ''),
                   q: typeof message.q === 'string' ? message.q : '', offset: Number(message.offset ?? 0), limit: Number(message.limit ?? 100),
@@ -320,6 +331,6 @@ export function useBoard(boardId: string, listener?: ChangeListener) {
     }
   }, [actor, boardId, emitMany, merge, projectCached, reply, send, sendActions, sessionToken, undo, redo])
 
-  return { actor, name, setName, actions, boards, peers, ready, connected, storageError,
+  return { actor, name, setName, actions, boards, peers, ready, connected, storageError, unsynced,
     boardName: projection.name, data: projection.data, emit, emitMany, undo, redo, importActions, sessionToken }
 }

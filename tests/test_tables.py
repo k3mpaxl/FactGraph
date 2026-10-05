@@ -245,3 +245,179 @@ class TableEndpointTest(unittest.TestCase):
             self.assertEqual(caught.exception.detail["suggestion"]["operation_field"], "Operation")
         finally:
             main.browser_command = original
+
+
+class SentinelNestedTest(unittest.TestCase):
+    """AzureActivity, service principal sign-ins and GitLab audit events with nested JSON columns (synthetic values)."""
+    SP = "0b7f0c1e-1111-4222-8333-444444444444"
+    APP = "5a5a5a5a-1111-4222-8333-555555555555"
+    KEY = "45f3c2d1-1111-4222-8333-666666666666"
+
+    def activity(self, status, operation="MICROSOFT.COGNITIVESERVICES/ACCOUNTS/DEPLOYMENTS/WRITE", event="e1"):
+        return {"TimeGenerated [UTC]": "9/27/2026, 10:15:00.250 AM", "Caller": self.SP, "CallerIpAddress": "203.0.113.50", "OperationName": "",
+                "OperationNameValue": operation, "ActivityStatusValue": status, "ResourceGroup": "rg-ai", "CorrelationId": "c1", "EventDataId": event,
+                "_ResourceId": "/subscriptions/0/resourcegroups/rg-ai/providers/microsoft.cognitiveservices/accounts/ai-acc",
+                "Claims": json.dumps({"appid": self.APP, "idtyp": "app", "http://schemas.microsoft.com/identity/claims/objectidentifier": self.SP}),
+                "Authorization": json.dumps({"action": operation, "evidence": {"role": "Owner", "principalType": "ServicePrincipal"}}),
+                "Properties": json.dumps({"statusMessage": {"error": {"code": "InvalidTemplate"}}} if status == "Failure" else {}),
+                "Category": ""}
+
+    def test_paths_in_json_columns(self):
+        from app.tables import get
+        row = {"Claims": json.dumps({"http://schemas.microsoft.com/identity/claims/objectidentifier": "abc"}), "LocationDetails": '{"countryOrRegion": "DE"}'}
+        self.assertEqual(get(row, "Claims[http://schemas.microsoft.com/identity/claims/objectidentifier]"), "abc")
+        self.assertEqual(get(row, "LocationDetails.CountryOrRegion"), "DE")
+
+    def test_azure_activity_service_principal_and_operations(self):
+        rows = clean_rows([self.activity("Start", event="e1"), self.activity("Success", event="e2"), self.activity("Failure", event="e3")])
+        detection, drafts, _ = run(str(uuid4()), rows, {"entities": [], "facts": [], "sources": []})
+        self.assertEqual(detection.table, "AzureActivity")
+        sp = next(d["payload"] for d in drafts if d["type"] == "entity.add" and d["payload"]["kind"] == "Service Principal")
+        ids = {(d["payload"]["namespace"], d["payload"]["normalized_value"]) for d in drafts if d["type"] == "identifier.add" and d["payload"]["entity_id"] == sp["id"]}
+        self.assertEqual(ids, {("entra-object-id", self.SP), ("entra-app-id", self.APP)}, "object ID from Caller, app ID from the token claims")
+        predicates = sorted(d["payload"]["predicate"] for d in drafts if d["type"] == "fact.add")
+        self.assertEqual(predicates, ["write cognitiveservices/accounts/deployments", "write cognitiveservices/accounts/deployments (failed)"],
+                         "Start and Success are one activity; the failure is its own")
+        failed = next(d["payload"] for d in drafts if d["type"] == "assertion.add" and "Failure" in d["payload"]["observation"])
+        self.assertIn("role Owner", failed["observation"])
+        self.assertIn("error InvalidTemplate", failed["observation"])
+        note = json.loads(failed["note"])
+        self.assertEqual(note["Claims"]["appid"], self.APP, "nested JSON is stored as objects in the evidence note")
+        self.assertNotIn("Category", note, "empty columns are left out")
+        target = next(d["payload"] for d in drafts if d["type"] == "entity.add" and d["payload"]["name"] == "ai-acc")
+        self.assertEqual(target["kind"], "Azure Resource")
+
+    def test_service_principal_sign_ins_join_and_name_the_service_principal(self):
+        board, index = str(uuid4()), {"entities": [], "facts": [], "sources": []}
+        run(board, clean_rows([self.activity("Success")]), index)
+        signin = {"TimeGenerated [UTC]": "9/27/2026, 10:00:00.000 AM", "ServicePrincipalName": "deploy-bot", "ServicePrincipalId": self.SP,
+                  "AppId": self.APP, "ServicePrincipalCredentialKeyId": self.KEY, "ServicePrincipalCredentialThumbprint": "", "ClientCredentialType": "clientSecret",
+                  "IPAddress": "203.0.113.50", "ResourceDisplayName": "Azure Resource Manager", "ResourceIdentity": "797f4846-ba00-4fd7-ba43-dac1f8f63013",
+                  "ResourceServicePrincipalId": "9b9b9b9b-1111-4222-8333-777777777777", "ResultType": "0", "CorrelationId": "s1", "Id": "i1",
+                  "AutonomousSystemNumber": "64500", "Location": "DE", "UserAgent": "python-requests/2.32",
+                  "LocationDetails": json.dumps({"city": "Springfield", "state": "Testland", "countryOrRegion": "DE"}),
+                  "NetworkLocationDetails": json.dumps([{"networkType": "namedNetwork", "networkNames": ["Office"]}])}
+        detection, drafts, _ = run(board, clean_rows([signin]), index)
+        self.assertEqual(detection.table, "AADServicePrincipalSignInLogs")
+        # The service principal from AzureActivity (known only by its object ID) is the same one and gets its display name.
+        renames = [d["payload"] for d in drafts if d["type"] == "entity.update"]
+        self.assertEqual([r["name"] for r in renames], ["deploy-bot"])
+        self.assertFalse([d for d in drafts if d["type"] == "entity.add" and d["payload"]["kind"] == "Service Principal"])
+        new = {d["payload"]["kind"]: d["payload"]["name"] for d in drafts if d["type"] == "entity.add"}
+        self.assertEqual(new["Credential"], f"clientSecret {self.KEY}")
+        self.assertEqual(new["Location"], "DE")
+        credential = next(d["payload"] for d in drafts if d["type"] == "identifier.add" and d["payload"]["namespace"] == "entra-credential-key-id")
+        self.assertEqual(credential["normalized_value"], self.KEY)
+        observation = next(d["payload"]["observation"] for d in drafts if d["type"] == "assertion.add")
+        for part in ("tool clientSecret", "location Springfield, Testland", "ASN 64500", "named network Office", "user agent python-requests/2.32"):
+            self.assertIn(part, observation)
+
+    def test_gitlab_audit_events(self):
+        base = {"author_id": "4711", "author_name": "release-bot", "entity_type": "Project", "target_type": "Project", "ip_address": "198.51.100.77",
+                "created_at [UTC]": "9/27/2026, 10:15:00.250 AM", "TimeGenerated [UTC]": "9/27/2026, 10:15:00.250 AM"}
+        rows = clean_rows([
+            {**base, "id": "1", "entity_id": "101", "entity_path": "team/app", "event_type": "repository_file_accessed_api",
+             "details": json.dumps({"event_name": "repository_file_accessed_api", "file_path": "config/secrets.yml", "ref": "main",
+                                    "custom_message": "User accessed repository file 'config/secrets.yml' at ref 'main' via API"})},
+            {**base, "id": "2", "entity_id": "102", "entity_path": "team/other", "event_type": "repository_file_accessed_api",
+             "details": json.dumps({"event_name": "repository_file_accessed_api", "file_path": "config/secrets.yml", "ref": "main"})},
+            {**base, "id": "3", "entity_id": "101", "entity_path": "team/app", "event_type": "repository_git_operation",
+             "details": json.dumps({"custom_message": {"protocol": "ssh", "verb": "push", "gl_key_id": 555, "gl_key_type": "key"}})},
+            {**base, "id": "4", "entity_id": "4711", "entity_path": "release-bot", "entity_type": "User", "event_type": "personal_access_token_used_from_unseen_ip",
+             "details": json.dumps({"pat_id": 9001, "pat_name": "ci-token", "custom_message": "Personal access token used from a previously unseen IP address"})},
+        ])
+        detection, drafts, _ = run(str(uuid4()), rows, {"entities": [], "facts": [], "sources": []})
+        self.assertEqual((detection.table, detection.product), ("GitLab audit events", "GitLab"))
+        entities = [d["payload"] for d in drafts if d["type"] == "entity.add"]
+        self.assertEqual(sorted(e["name"] for e in entities if e["kind"] == "Repository"), ["team/app", "team/other"])
+        self.assertEqual(sum(e["name"] == "config/secrets.yml" for e in entities), 2, "the same file path in two repositories is two files")
+        self.assertEqual(sorted(e["name"] for e in entities if e["kind"] == "Credential"), ["SSH key 555", "access token ci-token"])
+        predicates = {d["payload"]["predicate"] for d in drafts if d["type"] == "fact.add"}
+        self.assertEqual(predicates, {"repository file accessed api", "git push (ssh)", "personal access token used from unseen ip"})
+        self.assertEqual(next(d["payload"]["valid_from"] for d in drafts if d["type"] == "assertion.add"), "2026-09-27T10:15:00.250000Z")
+
+
+class LargeExportTest(unittest.TestCase):
+    """A large export is kept in several sources, so no action outgrows the relay's 16 MiB WebSocket message limit."""
+
+    def rows(self, count):
+        return clean_rows([{"TimeGenerated [UTC]": "9/27/2026, 10:15:00.250 AM", "Caller": "0b7f0c1e-1111-4222-8333-444444444444",
+                            "CallerIpAddress": "203.0.113.50", "OperationNameValue": "MICROSOFT.COGNITIVESERVICES/ACCOUNTS/WRITE",
+                            "ActivityStatusValue": "Success", "ResourceGroup": "rg", "CorrelationId": f"c{i}", "EventDataId": f"e{i}",
+                            "_ResourceId": f"/subscriptions/0/resourcegroups/rg/providers/microsoft.cognitiveservices/accounts/acc-{i % 7}",
+                            "Properties": json.dumps({"padding": "x" * 400, "quote": 'a "quoted" value'})} for i in range(count)])
+
+    def test_large_export_becomes_source_parts_and_evidence_points_to_its_part(self):
+        from unittest import mock
+        import app.ingest as ingest
+        board, index, rows = str(uuid4()), {"entities": [], "facts": [], "sources": []}, self.rows(40)
+        with mock.patch.object(ingest, "SOURCE_PART_BYTES", 5_000):
+            _, drafts, summary = run(board, rows, index)
+        sources = [d["payload"] for d in drafts if d["type"] == "source.add"]
+        self.assertGreater(len(sources), 3)
+        self.assertEqual(summary["source_parts"], len(sources))
+        self.assertEqual([s["title"] for s in sources[:2]], [f"AzureActivity · part 1/{len(sources)}", f"AzureActivity · part 2/{len(sources)}"])
+        parts = [json.loads(s["excerpt"]) for s in sources]
+        self.assertEqual([row for part in parts for row in part], rows, "all original rows, in order, nothing twice")
+        self.assertTrue(all(len(s["excerpt"].encode()) <= 5_000 + 1_000 for s in sources), "a part ends before the row that would exceed the budget")
+        part_of = {json.dumps(row, sort_keys=True): s["id"] for s, part in zip(sources, parts) for row in part}
+        evidence = [d["payload"] for d in drafts if d["type"] == "assertion.add"]
+        self.assertEqual(len(evidence), 40)
+        by_locator = {f"c{i}": rows[i] for i in range(40)}
+        for item in evidence:
+            row = next(r for key, r in by_locator.items() if f"CorrelationId={key} " in item["locator"] + " ")
+            self.assertEqual(item["source_id"], part_of[json.dumps(row, sort_keys=True)], "evidence points to the part holding its row")
+        # The same file again: every part is known; evidence has the same action IDs, which the browser skips.
+        with mock.patch.object(ingest, "SOURCE_PART_BYTES", 5_000):
+            _, again, _ = run(board, rows, index)
+        self.assertFalse([d for d in again if d["type"] == "source.add"])
+        self.assertEqual({d["id"] for d in again if d["type"] == "assertion.add"}, {d["id"] for d in drafts if d["type"] == "assertion.add"})
+
+    def test_small_export_keeps_one_source_with_its_former_id(self):
+        import hashlib
+        from app.ingest import _stable
+        board, rows = str(uuid4()), self.rows(3)
+        _, drafts, summary = run(board, rows, {"entities": [], "facts": [], "sources": []})
+        source = next(d["payload"] for d in drafts if d["type"] == "source.add")
+        canonical = json.dumps(rows, sort_keys=True, ensure_ascii=False, default=str)
+        digest = hashlib.sha256(("AzureActivity\n\nAzureActivity\n" + canonical).encode()).hexdigest()
+        self.assertEqual(source["id"], _stable(board, "import", digest), "re-imports of files imported before the split are still recognised")
+        self.assertEqual((source["title"], source["excerpt"], summary["source_parts"]), ("AzureActivity", canonical, 1))
+
+    def test_a_single_oversized_row_is_rejected(self):
+        from unittest import mock
+        import app.ingest as ingest
+        with mock.patch.object(ingest, "MAX_ROW_BYTES", 500), self.assertRaisesRegex(ValueError, "Row 1 is larger"):
+            run(str(uuid4()), self.rows(2), {"entities": [], "facts": [], "sources": []})
+
+    def test_a_repeated_row_is_one_piece_of_evidence(self):
+        rows = self.rows(3)
+        _, drafts, summary = run(str(uuid4()), rows + [dict(rows[1])], {"entities": [], "facts": [], "sources": []})
+        ids = [d["payload"]["id"] for d in drafts if d["type"] == "assertion.add"]
+        self.assertEqual((len(ids), len(set(ids)), summary["evidence"], summary["duplicates"]), (3, 3, 3, 1))
+
+
+class CredentialChangesTest(unittest.TestCase):
+    """The output of the rotation KQL: removed keys join the credential seen in sign-ins, new keys become credentials."""
+
+    def test_removed_key_joins_the_signed_in_credential(self):
+        board, index = str(uuid4()), {"entities": [], "facts": [], "sources": []}
+        key, new_key, app = "45f3c2d1-1111-4222-8333-666666666666", "7c7c7c7c-1111-4222-8333-888888888888", "a1a1a1a1-1111-4222-8333-999999999999"
+        run(board, clean_rows([{"TimeGenerated [UTC]": "9/27/2026, 10:00:00.000 AM", "ServicePrincipalName": "deploy-bot", "ServicePrincipalId": "0b7f0c1e-1111-4222-8333-444444444444",
+            "AppId": "5a5a5a5a-1111-4222-8333-555555555555", "ServicePrincipalCredentialKeyId": key, "ClientCredentialType": "clientSecret", "IPAddress": "198.51.100.66",
+            "ResourceDisplayName": "Azure Resource Manager", "ResultType": "0", "CorrelationId": "s1", "Id": "i1"}]), index)
+        change = {"TimeGenerated [UTC]": "9/28/2026, 09:30:00.000 AM", "KeyType": "Password", "KeyName": "ci", "Application": "deploy-bot", "ApplicationObjectId": app,
+                  "Actor": "admin@contoso.example", "ActorId": "c0c0c0c0-1111-4222-8333-000000000001", "ActorIp": "203.0.113.20",
+                  "OperationName": "Update application – Certificates and secrets management ", "Result": "success", "CorrelationId": "c1"}
+        detection, drafts, _ = run(board, clean_rows([{**change, "CredentialChange": "removed", "KeyId": key}, {**change, "CredentialChange": "added", "KeyId": new_key}]), index)
+        self.assertEqual(detection.table, "Entra credential changes")
+        credentials = [e for e in index["entities"] if e["kind"] == "Credential"]
+        self.assertEqual(sorted(e["name"] for e in credentials), [f"clientSecret {key}", f"clientSecret {new_key}"], "the removed key is the one from the sign-in")
+        principals = [e for e in index["entities"] if e["kind"] == "Service Principal"]
+        self.assertEqual(len(principals), 1, "the application joins the service principal of the same name")
+        self.assertIn(("entra-application-object-id", app), {(i["namespace"], i["normalized_value"]) for i in principals[0]["identifiers"]})
+        predicates = sorted(d["payload"]["predicate"] for d in drafts if d["type"] == "fact.add")
+        self.assertEqual(predicates, ["credential added", "credential removed"])
+        removed = next(d["payload"] for d in drafts if d["type"] == "fact.add" and d["payload"]["predicate"] == "credential removed")
+        roles = {p["role"] for p in removed["participants"]}
+        self.assertEqual(roles, {"actor", "source", "target"})

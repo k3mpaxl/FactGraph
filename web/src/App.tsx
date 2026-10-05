@@ -3,7 +3,7 @@ import {
   Activity, ArrowDownToLine, ArrowLeft, ArrowRight, ChevronDown, ChevronRight, Clock, Command, Copy, CornerDownLeft,
   FileText, GitBranch, Keyboard, Link2, HardDrive, Server, Users, AlertTriangle, Lock, CircleHelp, ListTree, Merge, Moon, Pause, Pencil, Play, Plus, Plug, Search, ShieldCheck,
   SkipBack, SkipForward, Sparkles, Sun, Trash2, Undo2, Redo2, Upload, X, Crosshair, CheckCircle2, CircleDashed, Boxes, Zap, Layers, Ungroup, ImageDown,
-  RotateCcw,
+  RotateCcw, ShieldAlert,
 } from 'lucide-react'
 import { factsInWindow, timelineSteps, timelineEvents, periodLabel, evidencePeriod } from './timeline'
 import GraphView, { KindIcon, type CanvasRequest, type Lens, type Selection } from './GraphView'
@@ -14,6 +14,9 @@ import NotificationCenter from './NotificationCenter'
 import { explainTruth, GLOSSARY } from './explain'
 import { createLimiter, loadNotices, noticesFor, saveNotices, type Notice } from './notifications'
 import EvidenceReader, { EvidenceQueue } from './EvidenceReader'
+import { CompromiseBox, ImpactPanel } from './ImpactPanel'
+import { analyzeImpact, type Impact } from './impact'
+import { huntingQueries } from './hunting'
 import { demoDrafts, factKey, legacyDrafts, normalizeIdentifier, type ActionDraft, type BoardAction } from './board'
 import { useBoard, type ChangeListener } from './useBoard'
 import { uuid } from './uuid'
@@ -21,7 +24,7 @@ import { entityVisual } from './entityVisual'
 import type { Assertion, Entity, Fact, GraphData, Identifier, TruthState } from './types'
 
 type DialogKind = 'entity' | 'entity-edit' | 'entity-merge' | 'fact' | 'source' | 'identifier' | 'assertion' | 'assertion-edit' | 'activity' | null
-type WorkspaceTab = 'graph' | 'timeline' | 'activity' | 'review'
+type WorkspaceTab = 'graph' | 'timeline' | 'activity' | 'review' | 'impact'
 type Theme = 'light' | 'dark'
 
 const labels: Record<TruthState, string> = {
@@ -33,6 +36,14 @@ const customKindValue = '__custom__'
 const schemes = ['hostname', 'fqdn', 'ip', 'email', 'url', 'resource_id', 'external_id', 'other']
 const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform)
 const mod = isMac ? '⌘' : 'Ctrl'
+
+/** When an activity or relationship was observed: from the times of its evidence ("09-17 08:01 – 09-17 09:01"). */
+function factSpan(fact: Fact) {
+  let first = '', last = ''
+  for (const a of fact.assertions) if (!a.retracted_at && a.valid_from) { if (!first || a.valid_from < first) first = a.valid_from; if (!last || a.valid_from > last) last = a.valid_from }
+  const short = (t: string) => t.slice(5, 16).replace('T', ' ')
+  return !first ? '' : short(first) === short(last) ? short(first) : `${short(first)} – ${short(last)}`
+}
 
 function date(value: string | null | undefined) {
   if (!value) return 'No date'
@@ -69,8 +80,9 @@ function Section({ title, count, action, children, defaultOpen = true }: { title
   </section>
 }
 
-function Inspector({ data, selection, onAdd, onDelete, onRetract, onOpenEvidence, onCopy, onClose, onSelect, onFocus, onCommand }: {
+function Inspector({ data, selection, onAdd, onDelete, onRetract, onOpenEvidence, onCopy, onClose, onSelect, onFocus, onCommand, impact, onOpenImpact }: {
   data: GraphData; selection: NonNullable<Selection>; onAdd: (kind: DialogKind) => void; onCommand: (drafts: ActionDraft[]) => Promise<unknown>;
+  impact: Impact | null; onOpenImpact: () => void;
   onDelete: (kind: 'entity' | 'fact' | 'identifier', id: string) => void;
   onRetract: (id: string) => void; onOpenEvidence: (id: string) => void;
   onCopy: (value: string, label: string) => void; onClose: () => void;
@@ -95,6 +107,7 @@ function Inspector({ data, selection, onAdd, onDelete, onRetract, onOpenEvidence
           <button className="secondary-button small icon-only" title="Center in graph · F" aria-label="Center in graph" onClick={() => onFocus(entity.id)}><Crosshair size={14} /></button>
         </div>
         {entity.description && <p className="inspector-description">{entity.description}</p>}
+        <CompromiseBox entity={entity} impact={impact} data={data} nameOf={id => nameOf(data, id)} onCommand={onCommand} onOpenImpact={onOpenImpact} onCopy={onCopy} onOpenEvidence={onOpenEvidence} />
         {group && <div className="membership"><Boxes size={14} /><span>In {group.rule?.container_id ? 'contents of' : 'group'} <button className="link" onClick={() => onSelect({ kind: 'group', id: group.id }, true)}>{group.name}</button></span>
           <button className="text-button" onClick={() => void onCommand([{ type: 'group.update', payload: { id: group.id, exclude: [entity.id] } }]).catch(() => {})}><Ungroup size={13} /> Take out</button></div>}
         <Section title="Relationships" count={related.length}>
@@ -103,7 +116,7 @@ function Inspector({ data, selection, onAdd, onDelete, onRetract, onOpenEvidence
               const role = fact.participants.find(p => p.entity_id === entity.id)?.role ?? ''
               return <div key={fact.id} className="relation-row">
                 <button className="relation-main" onClick={() => onSelect({ kind: 'fact', id: fact.id }, true)} title="Open activity">
-                  <span className={`state-dot ${fact.truth_state}`} /><span className="relation-dir"><Zap size={13} /></span><span className="relation-predicate">{fact.predicate}</span></button>
+                  <span className={`state-dot ${fact.truth_state}`} /><span className="relation-dir"><Zap size={13} /></span><span className="relation-predicate">{fact.predicate}</span><span className="relation-time">{factSpan(fact)}</span></button>
                 <span className={`role-badge ${role}`}>{role}</span></div>
             }
             const outgoing = fact.subject_id === entity.id
@@ -112,7 +125,7 @@ function Inspector({ data, selection, onAdd, onDelete, onRetract, onOpenEvidence
               <button className="relation-main" onClick={() => onSelect({ kind: 'fact', id: fact.id }, true)} title="Open relationship">
                 <span className={`state-dot ${fact.truth_state}`} title={labels[fact.truth_state]} />
                 <span className="relation-dir" title={outgoing ? 'Outgoing' : 'Incoming'}>{outgoing ? <ArrowRight size={13} /> : <ArrowLeft size={13} />}</span>
-                <span className="relation-predicate">{fact.predicate}</span>
+                <span className="relation-predicate">{fact.predicate}</span><span className="relation-time">{factSpan(fact)}</span>
               </button>
               <button className="relation-target" onClick={() => onSelect({ kind: 'entity', id: other }, true)} title="Go to entity">{nameOf(data, other)}</button>
             </div>
@@ -299,6 +312,8 @@ function StanceSelect({ value, onChange }: { value: 'supports' | 'refutes'; onCh
 export type MappingSuggestion = { roles: { field: string; role: string; kind: string }[]; operation_field?: string | null }
 type Detected = { table: string; product: string; known_columns: number; total_columns: number; doc?: string; roles?: { field: string; role: string; kind: string; identifiers?: string[] }[] }
 
+/** Import failures that mean the browser was not reachable for a moment, not that the file is wrong. */
+const CONNECTION_ERROR = /Browser connection lost|Token is not connected|Board offline|did not confirm/
 /** Error from the import endpoint; a not recognised export carries a mapping suggestion for the dialog. */
 export class ImportProblem extends Error {
   constructor(message: string, readonly suggestion?: MappingSuggestion, readonly detection?: Detected) { super(message) }
@@ -329,7 +344,7 @@ export async function uploadImport(boardId: string, sessionToken: string, file: 
 }
 
 export const describeTableImport = (r: Record<string, unknown>) =>
-  `${r.table} (${r.product}) · ${Number(r.rows).toLocaleString('en')} rows · ${r.new_entities !== undefined ? `${Number(r.new_entities).toLocaleString('en')} new of ` : ''}${Number(r.entities).toLocaleString('en')} entities · ${Number(r.relations).toLocaleString('en')} ${r.table === 'Log rows' ? 'relationships' : 'activities'} · ${Number(r.evidence).toLocaleString('en')} evidence items${r.skipped ? ` · ${r.skipped} rows skipped` : ''}`
+  `${r.table} (${r.product}) · ${Number(r.rows).toLocaleString('en')} rows · ${r.new_entities !== undefined ? `${Number(r.new_entities).toLocaleString('en')} new of ` : ''}${Number(r.entities).toLocaleString('en')} entities · ${Number(r.relations).toLocaleString('en')} ${r.table === 'Log rows' ? 'relationships' : 'activities'} · ${Number(r.evidence).toLocaleString('en')} evidence items${r.duplicates ? ` · ${r.duplicates} repeated rows counted once` : ''}${r.skipped ? ` · ${r.skipped} rows skipped` : ''}`
 
 function LogImportDialog({ boardId, sessionToken, onClose, onApply, initialFiles, suggestion }: {
   boardId: string; sessionToken: string; onClose: () => void;
@@ -862,7 +877,7 @@ export default function App() {
   const canvas = (type: CanvasRequest['type'], extra: Partial<CanvasRequest> = {}) => setRequest(current => ({ type, n: (current?.n ?? 0) + 1, ...extra }))
   const tabFromUrl = (): WorkspaceTab => {
     const tab = new URLSearchParams(location.search).get('view')
-    return tab === 'timeline' || tab === 'review' || tab === 'activity' ? tab : 'graph'
+    return tab === 'timeline' || tab === 'review' || tab === 'activity' || tab === 'impact' ? tab : 'graph'
   }
   const [activeTab, updateActiveTab] = useState<WorkspaceTab>(tabFromUrl)
   const setActiveTab = (tab: WorkspaceTab) => {
@@ -994,6 +1009,10 @@ export default function App() {
       }, 5000)
     }
   }, [board.ready, board.connected, notify, updateNotice])
+  useEffect(() => {
+    if (board.unsynced.length) notify({ id: `unsynced:${boardId}`, kind: 'error', status: 'error', title: `${board.unsynced.length} change${board.unsynced.length === 1 ? '' : 's'} too large to share`,
+      detail: 'Larger than the 16 MiB the relay accepts per message (usually a source with a very large excerpt). It stays in this browser; colleagues and agents do not see it. Import large exports again: they are now split into source parts.' })
+  }, [board.unsynced.length, boardId, notify])
   useEffect(() => { if (board.storageError) notify({ id: `storage:${board.storageError}`, kind: 'error', status: 'error', title: 'Browser storage problem', detail: board.storageError }) }, [board.storageError, notify])
   const markNoticesRead = useCallback(() => setNotices(list => list.map(n => n.read || n.status === 'running' || n.status === 'queued' ? n : { ...n, read: true })), [])
   const openNotice = (notice: Notice) => {
@@ -1006,15 +1025,29 @@ export default function App() {
   }
   // Several log files: one after another, each with its own notice; the dialog closes right away.
   const importSlots = useMemo(() => createLimiter(1), [])
+  const connectedRef = useRef(false)
+  connectedRef.current = board.connected
+  const waitForConnection = async (ms = 60_000) => {
+    for (const until = Date.now() + ms; !connectedRef.current && Date.now() < until;) await new Promise(resolve => window.setTimeout(resolve, 300))
+  }
   const runImports = (jobs: { name: string; run: () => Promise<string> }[]) => {
     const done: Promise<unknown>[] = []
     for (const job of jobs) {
       const id = notify({ kind: 'import', status: 'queued', title: `Import ${job.name}` })
       done.push(importSlots(async () => {
-        updateNotice(id, { status: 'running', progress: 'Importing rows…' })
+        updateNotice(id, { status: 'running', progress: connectedRef.current ? 'Importing rows…' : 'Waiting for the connection…' })
         try {
-          // The import is confirmed once the browser has stored every chunk; the next file starts right away.
-          const summary = await job.run()
+          // The import is confirmed once the browser has stored every chunk; the next file starts right away. The
+          // server writes through this browser, so a file waits for the connection, and one that lost it is retried
+          // once it is back (import IDs are stable: what was already stored is skipped).
+          await waitForConnection()
+          const summary = await job.run().catch(async problem => {
+            if (!(problem instanceof Error) || !CONNECTION_ERROR.test(problem.message)) throw problem
+            updateNotice(id, { progress: 'Connection lost · retrying when it is back…' })
+            await new Promise(resolve => window.setTimeout(resolve, 1500))
+            await waitForConnection()
+            return job.run()
+          })
           updateNotice(id, { status: 'done', detail: `${summary}. New evidence is unconfirmed.`, finished: new Date().toISOString(), progress: undefined, target: { kind: 'review' }, read: false })
         } catch (problem) {
           // A table that was not recognised is no failure: the mapping dialog opened for it.
@@ -1053,12 +1086,12 @@ export default function App() {
       } })
     }
     if (!jobs.length) return
-    // On an empty board the imported graph is arranged once everything is in; otherwise new nodes keep their spots.
-    const wasEmpty = !data?.entities.length
+    // Once everything is in, similar new entities are collapsed into groups. On an empty board the result is arranged;
+    // otherwise new nodes keep their spots.
+    const existing = data?.entities.map(e => e.id) ?? []
     await runImports(jobs)
     setActiveTab('graph')
-    window.setTimeout(() => canvas(wasEmpty ? 'arrange' : 'fit'), 300)
-    if (wasEmpty) window.setTimeout(() => canvas('fit'), 1400)
+    window.setTimeout(() => canvas('group-similar', { existing, arrange: !existing.length }), 300)
   }
 
   const act = async (action: () => Promise<unknown>, message: string) => {
@@ -1203,6 +1236,11 @@ export default function App() {
   const counts = useMemo(() => Object.fromEntries(allStates.map(state => [state, timeFacts.filter(item => item.truth_state === state).length])) as Record<TruthState, number>, [timeFacts])
   const reviewCount = useMemo(() => data?.facts.reduce((sum, f) => sum + f.assertions.filter(a => !a.retracted_at && a.review_status !== 'confirmed').length, 0) ?? 0, [data])
   const timelineCount = useMemo(() => timelineEvents(filteredFacts).length, [filteredFacts])
+  // The attack impact follows every change; without a compromised entity it is a single pass over the entities.
+  const impact = useMemo(() => data ? analyzeImpact(data) : null, [data])
+  const hunting = useMemo(() => data && impact?.seeds.length && activeTab === 'impact' ? huntingQueries(data, impact) : [], [data, impact, activeTab])
+  const [impactLens, setImpactLens] = useState(false)
+  useEffect(() => { if (!impact?.seeds.length) setImpactLens(false) }, [impact?.seeds.length])
   const matchCount = useMemo(() => {
     const q = search.trim().toLowerCase()
     return q && data ? data.entities.filter(e => `${e.name} ${e.kind} ${e.identifiers.map(i => i.raw_value).join(' ')}`.toLowerCase().includes(q)).length : 0
@@ -1228,6 +1266,9 @@ export default function App() {
       { id: 'v-review', group: 'View', label: 'Evidence review', hint: '3', icon: <ShieldCheck size={15} />, run: () => setActiveTab('review') },
       { id: 'v-activity', group: 'View', label: 'Activity', hint: '4', icon: <Activity size={15} />, run: () => setActiveTab('activity') },
       { id: 'c-fit', group: 'Canvas', label: 'Fit graph to screen', hint: 'F', icon: <Crosshair size={15} />, run: () => { setActiveTab('graph'); canvas('fit') } },
+      { id: 'i-impact', group: 'Canvas', label: 'Attack impact: compromised, impacted, rotate, hunt', icon: <ShieldAlert size={15} />, run: () => setActiveTab('impact') },
+      { id: 'i-lens', group: 'Canvas', label: 'Show the attack in the graph (impact lens)', icon: <ShieldAlert size={15} />, run: () => { setImpactLens(true); setActiveTab('graph') } },
+      { id: 'c-group-similar', group: 'Canvas', label: 'Group all similar entities and arrange', icon: <Boxes size={15} />, run: () => { setActiveTab('graph'); canvas('group-similar') } },
       { id: 'c-arrange', group: 'Canvas', label: 'Auto-arrange graph', icon: <Sparkles size={15} />, run: () => { setActiveTab('graph'); canvas('arrange') } },
       { id: 'c-arrange-organic', group: 'Canvas', label: 'Arrange organically (large graphs)', icon: <Sparkles size={15} />, run: () => { setActiveTab('graph'); canvas('arrange-organic') } },
       { id: 'c-arrange-layers', group: 'Canvas', label: 'Arrange by layer (swimlanes)', icon: <Layers size={15} />, run: () => { setActiveTab('graph'); canvas('arrange-layers') } },
@@ -1263,6 +1304,7 @@ export default function App() {
     { id: 'timeline', label: 'Timeline', short: 'Timeline', icon: <Clock size={14} />, count: timelineCount },
     { id: 'review', label: 'Evidence review', short: 'Review', icon: <ShieldCheck size={14} />, count: reviewCount },
     { id: 'activity', label: 'Activity', short: 'Activity', icon: <Activity size={14} />, count: board.actions.length },
+    { id: 'impact', label: 'Attack impact', short: 'Impact', icon: <ShieldAlert size={14} />, count: impact?.impacted.length ?? 0 },
   ]
   const showInspector = !!(data && selection)
 
@@ -1296,7 +1338,7 @@ export default function App() {
       </div>
       <nav className="view-tabs" role="tablist" aria-label="Board views">
         {tabs.map(tab => <button key={tab.id} role="tab" aria-label={tab.label} aria-selected={activeTab === tab.id} className={activeTab === tab.id ? 'active' : ''} onClick={() => setActiveTab(tab.id)} title={tab.label}>
-          {tab.icon}<span className="tab-text">{tab.short}</span>{tab.count > 0 && <b className={tab.id === 'review' ? 'attention' : ''}>{tab.count > 9999 ? '9k+' : tab.count}</b>}</button>)}
+          {tab.icon}<span className="tab-text">{tab.short}</span>{tab.count > 0 && <b className={tab.id === 'review' ? 'attention' : tab.id === 'impact' ? 'attention danger' : ''}>{tab.count > 9999 ? '9k+' : tab.count}</b>}</button>)}
       </nav>
       <div className="topbar-right">
         <div className={`header-search ${search ? 'has-value' : ''}`}><Search size={14} /><input ref={searchInput} aria-label="Search graph" placeholder="Search…" value={search} onChange={e => setSearch(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && search.trim() && data) { const q = search.trim().toLowerCase(); const hit = data.entities.find(x => `${x.name} ${x.kind} ${x.identifiers.map(i => i.raw_value).join(' ')}`.toLowerCase().includes(q)); if (hit) setSelection({ kind: 'entity', id: hit.id }, true) } }} />
@@ -1345,6 +1387,7 @@ export default function App() {
             onEdit={id => { setSelection({ kind: 'entity', id }); openDialog('entity-edit') }} onMerge={id => { setSelection({ kind: 'entity', id }); openDialog('entity-merge') }}
             onCopy={(value, label) => void copyValue(value, label)}
             entities={data.entities} facts={filteredFacts} groups={data.groups ?? []} perspectives={data.views ?? []} lens={lens} onLensChange={next => setLens(next)}
+            impact={impact} impactLens={impactLens} onImpactLensChange={setImpactLens} onOpenImpact={() => setActiveTab('impact')}
             activePerspective={activePerspective} onApplyPerspective={applyPerspective}
             onSavePerspective={name => { const id = uuid(); void act(async () => { await board.emit('view.add', { id, name, layers: lens.layers ? [...lens.layers] : null, collapse_activities: lens.collapseActivities, show_lanes: lens.showLanes }); setPerspectiveParam(id) }, 'Perspective saved') }}
             onDeletePerspective={id => { void act(() => board.emit('view.delete', { id }), 'Perspective deleted'); if (id === activePerspective) setPerspectiveParam(null) }}
@@ -1367,6 +1410,9 @@ export default function App() {
         {activeTab === 'review' && data && <div className="scroll-stage"><EvidenceQueue data={data} onOpen={setReaderId} /></div>}
         {activeTab === 'timeline' && data && <div className="scroll-stage"><TimelinePanel data={data} facts={filteredFacts} selection={selection} onSelect={setSelection} /></div>}
         {activeTab === 'activity' && <div className="scroll-stage"><ActivityPanel actions={board.actions} /></div>}
+        {activeTab === 'impact' && data && impact && <div className="scroll-stage"><ImpactPanel data={data} impact={impact} queries={hunting} onCommand={board.emitMany}
+          onShow={id => setSelection({ kind: 'entity', id }, true)} onShowFact={id => setSelection({ kind: 'fact', id }, true)}
+          onLens={() => { setImpactLens(true); setActiveTab('graph') }} onCopy={(value, label) => void copyValue(value, label)} /></div>}
         {showTime && data && <EvidenceWindow facts={data.facts} from={evidenceFrom} to={evidenceTo} includeUndated={includeUndated} onIncludeUndatedChange={setIncludeUndated} onFromChange={setEvidenceFrom} onToChange={setEvidenceTo} onReset={() => { setEvidenceFrom(''); setEvidenceTo(''); setIncludeUndated(true) }} onClose={() => setShowTime(false)} />}
         {!showTime && timeActive && <button className="time-chip" onClick={() => setShowTime(true)}><Clock size={13} /> Time window active</button>}
       </main>
@@ -1374,7 +1420,8 @@ export default function App() {
         onSelect={setSelection} onFocus={id => { setActiveTab('graph'); canvas('focus', { id }) }} onClose={() => setSelection(null)} /> : null })()}
       {showInspector && selection && selection.kind !== 'group' && data && <Inspector data={data} selection={selection} onAdd={openDialog} onDelete={deleteItem} onCopy={(value, label) => void copyValue(value, label)} onCommand={board.emitMany}
         onOpenEvidence={id => setReaderId(id)} onRetract={id => void act(() => board.emit('assertion.retract', { id, retracted_at: new Date().toISOString() }), 'Evidence retracted')}
-        onClose={() => setSelection(null)} onSelect={setSelection} onFocus={id => { setActiveTab('graph'); canvas('focus', { id }) }} />}
+        onClose={() => setSelection(null)} onSelect={setSelection} onFocus={id => { setActiveTab('graph'); canvas('focus', { id }) }}
+        impact={impact} onOpenImpact={() => setActiveTab('impact')} />}
     </div>
     {readerId && data && <EvidenceReader data={data} evidenceId={readerId} actions={board.actions} onCommand={board.emitMany} onClose={() => setReaderId(null)} onCopy={(value, label) => void copyValue(value, label)} />}
     {dialog === 'activity' && data && <ActivityDialog data={data} initialEntity={selection?.kind === 'entity' ? selection.id : undefined} onClose={() => setDialog(null)} onCommand={board.emitMany}

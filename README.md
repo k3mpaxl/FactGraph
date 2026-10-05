@@ -137,7 +137,7 @@ Notes:
 
 - **Exactly one instance.** The relay keeps the list of connected browsers in memory; with several instances, analysts on different instances would not see each other. Do not scale out.
 - **Web sockets must be on**, otherwise the board stays offline. **Always On** prevents the app from idling and dropping connections.
-- Prefer a pinned version (`k3mpaxl/factgraph:0.5.0`) over `latest` during an incident, so a restart never changes the version.
+- Prefer a pinned version (`k3mpaxl/factgraph:0.5.1`) over `latest` during an incident, so a restart never changes the version.
 - App Service **HTTP logging** is off by default. If you enable it, it records request URLs, which contain board IDs.
 - **App Service Authentication** (Entra ID sign-in) can be put in front of the UI. Agents and scripts then also need an Entra token, and if the incident involves your own tenant, an identity provider you cannot trust is no protection. IP access restrictions are often the better choice there.
 - When the incident is closed: export the boards as JSON, then `az group delete -n $RG`. Nothing remains on the server side.
@@ -173,7 +173,7 @@ Notes:
 - **Jump:** `Cmd/Ctrl+K` opens the command palette; picking a result selects it and zooms to it with its neighbours.
 - **Level of detail:** labels and node details appear as you zoom in. Edges attach to the node border; parallel relationships are curved.
 - **Minimap** appears automatically from 60 nodes.
-- **Arrange:** up to 150 nodes as a directed flow (left → right, or ↓ for top → bottom), above that **organic** (force layout: connected nodes form clusters, cards never overlap; also available directly via the node icon). 1,100 nodes take about two seconds. Pinned nodes keep their position.
+- **Arrange:** up to 250 nodes as a directed flow (left → right, or ↓ for top → bottom), above that **organic** (force layout: connected nodes form clusters, cards never overlap; also available directly via the node icon). 1,100 nodes take about two seconds. Pinned nodes keep their position. For a large graph with many similar entities, **Group all similar** first: five real Sentinel and GitLab exports (8,584 rows) made 2,822 nodes, grouped 167, which the flow layout arranges readably.
 - **Status filter** and **evidence time window** (`T`) filter edges by review status and time span; the time window can be played back step by step.
 - **Performance:** one projection of the action log is shared by the canvas, the inspector and every REST/MCP request; evidence times are parsed once per change. A board with 12,000 actions (2,000 entities, 5,000 relationships) projects in about 15 ms, and moving the evidence window takes about 2 ms. `npm run bench` checks this on a synthetic board.
 
@@ -228,7 +228,9 @@ Every type belongs to a layer: **Identity & access**, **Network**, **Endpoint**,
 
 A group bundles many entities into one node, for example 699 of 700 repositories where the same thing happened. Members are explicit (multi-select, `G`) or rule-based (type and/or text pattern); new matching entities join automatically. **Take out** keeps individual entities visible outside the group, typically exactly the ones where something different happened. Edges to the group are bundled and counted (`cloned ×38`). **Groups** in the canvas toolbar suggests groups from entities of the same type with identical connections and names the outliers.
 
-Collapsed and expanded groups share one place: drag the collapsed card and the members appear there when you expand it; drag an expanded group by its frame header and all members move along. Groups and perspectives change only the view, never claims or evidence.
+**Group all similar** (Groups popover or command palette) does this for the whole board in one step (one undo): first entities of one type with the same operations and the same counterparts in the same roles (`41 Azure Resource · write cognitiveservices/accounts/deployments`), then the rest of one type that share their counterparts with different operations, then those with the same operations and the same *shared* counterparts, each with partners of its own (89 files one user read from one IP, each in its own repository; a counterpart is shared when it takes part in at least four activities, and every group needs one). At least four per group; pinned and already grouped entities stay as they are, and so does the one that differs. The groups are collapsed and the smaller graph is arranged. Dropped exports do the same for the entities they add: a hub-and-spoke export such as AzureActivity (one service principal, one IP, hundreds of resources) arrives as a few groups instead of a fan of hundreds of nodes. Activities with the same operation between the same nodes are then drawn as one diamond with a count and the time span (`delete ×12`); expand the group to see them one by one.
+
+Collapsed and expanded groups share one place: drag the collapsed card and the members appear there when you expand it; drag an expanded group by its frame header and all members move along. Members that were scattered (collected by **Group all similar** or an import from all over the board) are laid out as a grid sorted by name right next to the card, growing away from the middle of the graph so the neighbouring cards stay visible; members you arranged yourself keep their arrangement. Activities that were drawn as one while the group was collapsed are placed between their participants again. Groups and perspectives change only the view, never claims or evidence.
 
 ## Evidence and review
 
@@ -245,6 +247,27 @@ Collapsed and expanded groups share one place: drag the collapsed card and the m
 ![Evidence reader with the original GitHub audit records](docs/images/evidence-reader.png)
 
 ![Timeline across EDR, Entra ID, Key Vault and GitHub](docs/images/timeline.png)
+
+## Attack impact
+
+The **Impact** view (tab, command palette, or *Mark compromised…* in the inspector of any entity) answers the questions of an incident: what did the attacker do with what they stole, what did it reach, where to look next, and what has to be rotated.
+
+- **Mark what is compromised.** A credential *since* a time (the secret leaked on 15 September: only its use from then on counts), an IP of the attacker's infrastructure (*always*, or within a window), an identity or a device. Markings are part of the board, synced, undoable, and say who set them when.
+- **Derived compromise.** Whatever attacker infrastructure (a marked IP or host) used *successfully* inside its window is in the attacker's hands: credentials, service principals, accounts are marked *compromised (derived)*, no later than their first such use (it may have been stolen earlier, so the hunting window starts two weeks before). Failed attempts prove nothing, and it never runs the other way: an IP that used a stolen secret may be its legitimate owner. *Confirm* turns it into a marking, *Not compromised* records that it was checked and keeps it from being derived again.
+- **Advice** at the top of the view says what the evidence suggests doing next, each with the evidence it rests on and the action: mark an IP that is new since the compromise (higher priority in the same /24 or network provider as a known attacker IP; only a note when it belongs to the provider, AS number, the identity already used before the compromise: a rotating cloud or CI egress), confirm derived compromises, find where a credential was taken from, rotate again where the attacker came back, prove the rotation, look further back than the first known activity.
+- **Session tokens (UTI).** Entra records the unique token identifier of every session (`UniqueTokenIdentifier` in sign-ins, the `uti` claim in AzureActivity, `SignInActivityId` in Graph activity); FactGraph reads it from the original rows. A session used from the attacker and from another IP points at a **redirector** (the other IP came with or after the attacker: mark it) or at **token theft** (the other IP used it first: the token leaked there; investigate that system and revoke the sessions). A session from several IPs without a known attacker is a replay candidate. *Everything done with the replayed session tokens* hunts them across sign-ins, Azure and Graph.
+- **Likely regular.** An attacker activity that also happened exactly so before the compromise (same identity, credential, IP, target) is marked *likely regular*, sorted last and left out of the rotation list; an IP that used a stolen credential before it was stolen is most likely its owner, not the attacker.
+- **Trace back** lists when each compromised entity was first used by the attacker and which secrets other compromised entities had read before: where a credential was probably taken from.
+- **Attacker activities** are the activities a compromised entity drove (as actor, identity, source, tool or via) inside its window. Evidence without a time is counted separately instead of guessed.
+- **Impacted resources** are their targets, rated by what happened: *secrets exposed* (listKeys, listSecrets, listClusterAdminCredential, registry credentials, Key Vault SecretGet, GitLab CI/CD variables, `.env` / key files read), *deleted*, *changed*, *read*, *signed in to*, or only *attempted* (failed or denied).
+- **Pivot next** lists the IPs, identities and credentials that appeared together with what is compromised. *New since the compromise* is suspicious; *seen before* (with the same credential before it was stolen) is probably the legitimate owner. One click marks a pivot compromised, and everything it did joins the analysis.
+- **What the attacker did** is the attack path in time order: one step per operation and compromised entity, with the IPs and identities it used and the targets it reached (*198.51.100.66 · listclusteradmincredential on 13 targets · with deploy-bot*).
+- **Secrets and variables read.** GitLab's audit log records that a project's CI/CD variables were read, not which ones: all of them count as exposed, including those inherited from the parent groups. A ready `glab` script lists their keys.
+- **Rotate, revoke, block** groups what follows by measure (*Rotate storage account keys*, *Rotate cluster certificates*, *Revoke GitLab access tokens*, *Remove credentials the attacker added*, *Block the attacker's IPs* …) with a checklist per resource. *Rotated* is stored on the entity, or **proven by an import**: a key removed in AuditLogs or keys regenerated in AzureActivity tick the item off with a link to the evidence. A compromised service principal is done once every compromised credential seen with it is removed. If the attacker used it successfully after that, the item reopens.
+- **Prove the rotation** (service principals and app registrations): the KQL *Prove the rotation* returns every secret and certificate removed from or added to the affected apps since the attack (AuditLogs `KeyDescription`, one row per key: `CredentialChange`, `KeyId`, `KeyType`, `Application`, `Actor` …). Export it as CSV and drop it on the board: removed keys join the credentials from the sign-ins by key ID, keys added during the attack show up as backdoors. *Where else was the stolen credential used, and is it still accepted?* is importable too; after the rotation only failed attempts may remain.
+- **Hunt next (KQL)** gives Sentinel / Log Analytics queries filled with the key IDs, object and app IDs, IPs, resources and the window from the board: other use of the stolen credential, everything from the attacker's IPs, Key Vault and Graph access, persistence (new credentials, owners, role assignments), whether stolen keys and kubeconfigs were used afterwards. Run them, drop the exports on the board, and the analysis grows.
+
+In the graph, compromised nodes are red, impacted ones orange with what happened to them, attacker activities and their edges red, and group cards say how many of their members are affected. The **Impact** lens in the canvas toolbar dims everything else and zooms to the attack; exported images carry the same markers. *Copy report* puts the whole picture into Markdown for a ticket. The analysis runs in the browser in one pass over the board (about 20 ms for 8,600 evidence items) and updates with every change; agents get it from `get_impact`.
 
 ## Connecting AI agents (MCP and REST)
 
@@ -263,7 +286,7 @@ The repository also contains [.vscode/mcp.json](.vscode/mcp.json); in VS Code ru
 
 ### MCP tools
 
-By default the server exposes a **compact agent profile with 24 tools** (about 9,000 tokens of tool descriptions). Fewer tools mean less context usage and better tool choice.
+By default the server exposes a **compact agent profile with 26 tools** (about 9,400 tokens of tool descriptions). Fewer tools mean less context usage and better tool choice.
 
 | Task | MCP tool | REST (relative to `/api/boards/{id}`) |
 | --- | --- | --- |
@@ -273,6 +296,7 @@ By default the server exposes a **compact agent profile with 24 tools** (about 9
 | Activities | `create_activity`, `update_activity` | `/activities…` |
 | Sources and evidence | `create_source`, `update_source`, `add_evidence`, `update_evidence`, `review_evidence`, `retract_evidence` | `/sources…`, `/relations/{id}/evidence…` |
 | Imports | `import_rows`, `import_activities` | `/imports/activity`, `/imports/kql`, `/imports/activities` |
+| Attack impact | `get_impact`; mark with `update_entity` (`compromise: {from, to, note}`, `rotated_at`) | `GET /impact`, `PATCH /entities/{id}` |
 | Overview and export | `create_group`, `update_group`, `export_image` | `/groups…`, `/export` |
 | Undo | `undo` | `/undo` |
 
@@ -345,9 +369,10 @@ Every row becomes its own unconfirmed evidence item with its timestamp (`TimeGen
 
 Export the results of an advanced hunting query (Defender XDR) or a Log Analytics query (Microsoft Sentinel) as CSV or JSON and **drop the files onto the board**. Each file is recognised by its columns and imported in the background, one after another, with an entry under the bell; an empty board is arranged afterwards. One file is one undo step.
 
-- **Recognised tables** with a curated mapping: `DeviceProcessEvents`, `DeviceNetworkEvents`, `DeviceFileEvents`, `DeviceLogonEvents`, `DeviceRegistryEvents`, `DeviceImageLoadEvents`, `DeviceEvents`, `IdentityLogonEvents`, `IdentityDirectoryEvents`, `IdentityQueryEvents`, `EntraIdSignInEvents`, `EntraIdSpnSignInEvents`, `CloudAppEvents`, `UrlClickEvents`, `EmailEvents`, `EmailUrlInfo`, `EmailAttachmentInfo`, `AlertEvidence`; Sentinel `SigninLogs`, `AADNonInteractiveUserSignInLogs`, `AADServicePrincipalSignInLogs`, `AuditLogs`, `AzureActivity`, `AzureDiagnostics` (Key Vault), `SecurityEvent`, `CommonSecurityLog`, `OfficeActivity`, and the normalised **ASIM** fields (`SrcIpAddr`, `TargetUsername` …). Other documented advanced hunting tables (65 in total) are mapped from their column names.
+- **Recognised tables** with a curated mapping: `DeviceProcessEvents`, `DeviceNetworkEvents`, `DeviceFileEvents`, `DeviceLogonEvents`, `DeviceRegistryEvents`, `DeviceImageLoadEvents`, `DeviceEvents`, `IdentityLogonEvents`, `IdentityDirectoryEvents`, `IdentityQueryEvents`, `EntraIdSignInEvents`, `EntraIdSpnSignInEvents`, `CloudAppEvents`, `UrlClickEvents`, `EmailEvents`, `EmailUrlInfo`, `EmailAttachmentInfo`, `AlertEvidence`; Sentinel `SigninLogs`, `AADNonInteractiveUserSignInLogs`, `AADServicePrincipalSignInLogs`, `AuditLogs`, `AzureActivity`, `AzureDiagnostics` (Key Vault), `SecurityEvent`, `CommonSecurityLog`, `OfficeActivity`, the normalised **ASIM** fields (`SrcIpAddr`, `TargetUsername` …), and **GitLab audit events** (e.g. a custom table such as `GitLabAuditLogs_CL`: author, IP, repository, file, access token, SSH key, git push/pull/clone). Other documented advanced hunting tables (65 in total) are mapped from their column names.
 - **Mapping:** every row becomes evidence for an activity whose participants carry roles, for example in `DeviceNetworkEvents` the device (source), the account (actor), the initiating process (via), the remote IP and URL (target). The operation comes from `ActionType`, `OperationName` or the sign-in result (“signed in”, “sign-in failed (50126)”); the time from `Timestamp`/`TimeGenerated`; the locator names the table and the record, for example `DeviceNetworkEvents ReportId=18842 DeviceId=…`. Columns that are not mapped stay in the evidence row.
 - **The same thing stays one entity:** devices, accounts, files, apps and Azure resources are stored with their identifiers (DeviceId, AadDeviceId, Entra object ID, SID, SHA-256/SHA-1/MD5, app ID, resource ID, FQDN, UPN, IP) and found by them on later imports, so `j.doe` from `DeviceProcessEvents` and from `SigninLogs` is one user. A different ID under the same name (another DeviceId, another hash) creates a separate entity instead of a wrong merge.
+- **Nested JSON columns** are read too: the service principal's app ID from the token claims in `AzureActivity` (`Claims.appid`, object ID from the `Caller`), the RBAC role and error code, `LocationDetails.countryOrRegion` (country as a location entity; city, ASN and named network in the observation), and the credential a service principal signed in with (`ServicePrincipalCredentialKeyId`, thumbprint) as its own entity. A service principal first seen only by its object ID gets its display name from the next sign-in export. Evidence notes store the row with JSON columns as objects.
 - **Export quirks** are handled: the ` [UTC]` suffix and the US date format of Log Analytics exports, 7-digit fractions, JSON columns such as `DeviceDetail` or `InitiatedBy`, a byte-order mark.
 - **Not recognised?** A plain two-column log (`IPAddress` → `FilePath`) is imported as relationships as before. Anything else opens the import dialog with the columns FactGraph could guess; adjust the roles and import.
 - **Agents and scripts:** `POST /imports/table` with the rows (MCP `import_defender_rows`), or `POST /imports/file` with `auto=true`; both support `dry_run`.
@@ -405,8 +430,8 @@ cd web && npm run build && DOCS_SCREENSHOTS=1 npx playwright test e2e/docs-scree
 - **Publish Docker image** builds the image for `linux/amd64` and `linux/arm64` on a version tag (`v*.*.*`) or via **Run workflow**, and publishes it as `latest` and with the version number. It requires the repository secrets `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` (a Docker Hub access token with write permission).
 
 ```bash
-git tag v0.5.0
-git push origin v0.5.0
+git tag v0.5.1
+git push origin v0.5.1
 ```
 
 A manual multi-arch build is possible with `./deploy/publish-multiarch.sh` (`FACTGRAPH_IMAGE` and `FACTGRAPH_VERSION` override namespace and version).

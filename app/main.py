@@ -53,9 +53,9 @@ Workflow
 Editing: update tools change only the fields you pass; explicit null clears nullable fields. Pass expected_revision for sources and evidence; HTTP 409 means someone changed it — re-read and retry. undo reverts your session's last change batch. Content changes reset affected reviews.
 Tool profile: this server shows a compact agent tool set by default; with FACTGRAPH_MCP_TOOLS=full it exposes one rest_<operation> tool per REST endpoint instead.
 """
-mcp = FastMCP("FactGraph Browser Boards", version="0.5.0", instructions=MCP_INSTRUCTIONS)
+mcp = FastMCP("FactGraph Browser Boards", version="0.5.1", instructions=MCP_INSTRUCTIONS)
 mcp_app = mcp.http_app(path="/")
-app = FastAPI(title="FactGraph API", version="0.5.0", lifespan=mcp_app.lifespan)
+app = FastAPI(title="FactGraph API", version="0.5.1", lifespan=mcp_app.lifespan)
 
 
 @dataclass
@@ -353,6 +353,12 @@ async def get_graph(board_id: str):
     return (await browser_command(board_id, "snapshot"))["graph"]
 
 
+@app.get("/api/boards/{board_id}/impact")
+async def get_impact(board_id: str):
+    """Attack impact of entities marked compromised: attacker steps, impacted resources, new pivots, what to rotate, KQL to hunt."""
+    return (await browser_command(board_id, "impact"))["impact"]
+
+
 @app.post("/api/boards/{board_id}/entities", status_code=201)
 async def create_entity(board_id: str, body: EntityInput):
     try:
@@ -377,7 +383,7 @@ async def update_entity(board_id: str, entity_id: str, body: EntityUpdate):
     index = (await browser_command(board_id, "index"))["index"]
     if entity_id not in {entity["id"] for entity in index["entities"]}:
         raise HTTPException(404, "Entity does not exist on this board")
-    values = body.model_dump(exclude_unset=True)
+    values = body.model_dump(exclude_unset=True, by_alias=True)
     if not values:
         raise HTTPException(422, "At least one entity field is required")
     if any(not isinstance(values[key], str) or not values[key].strip() for key in ("name", "kind") if key in values):

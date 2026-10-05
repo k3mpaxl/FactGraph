@@ -33,4 +33,13 @@ const actions = [{ id: 1, payload: 'a'.repeat(3_000_000) }, { id: 2, payload: 'b
 const chunks = actionChunks(actions)
 assert.deepEqual(chunks.map(c => c.length), [1, 100, 51])
 assert.deepEqual(chunks.flat().map(a => a.id), actions.map(a => a.id))
+// An action that alone is larger than the relay accepts is left out instead of closing the connection; UTF-8 counts.
+{
+  const tooLarge = []
+  const ascii = { id: 'a', text: 'x'.repeat(6_000_000) }, umlauts = { id: 'u', text: 'ü'.repeat(6_000_000) }, euros = { id: 'e', text: '€'.repeat(6_000_000) }
+  const chunks = actionChunks([{ id: 's' }, ascii, umlauts, euros, { id: 't' }], 100, 4_000_000, tooLarge)
+  assert.deepEqual(chunks.map(c => c.map(i => i.id)), [['s'], ['a'], ['u'], ['t']], '6 MB and 12 MB fit, 18 MB of three-byte characters does not')
+  assert.deepEqual(tooLarge.map(i => i.id), ['e'])
+  assert.deepEqual(actionChunks([euros]), [], 'without a collector it is still left out')
+}
 console.log('Targeted queries, shortened lists, reply parts and size-bounded action chunks passed')

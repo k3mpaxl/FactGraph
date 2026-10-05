@@ -760,3 +760,106 @@ test('organic layout runs in a worker: canvas stays responsive, cancel saves not
   await expect(progress).toHaveCount(0,{timeout:60000})
   await expect.poll(async()=>(await positions()).get(ids[5])).toBe('12340,5670')
 })
+
+test('large graphs: a dropped export collapses similar resources into groups, activities are bundled, undo and "Group all similar"',async({page,request})=>{
+  const {graph}=await setup(page,request)
+  const sp='0b7f0c1e-1111-4222-8333-444444444444'
+  const row=(op:string,account:string,event:string)=>`"9/27/2026, 10:15:00.250 AM",${sp},203.0.113.50,MICROSOFT.COGNITIVESERVICES/ACCOUNTS/${op},Success,rg-ai,c-${event},${event},/subscriptions/0/resourcegroups/rg-ai/providers/microsoft.cognitiveservices/accounts/${account}`
+  const rows=['"TimeGenerated [UTC]",Caller,CallerIpAddress,OperationNameValue,ActivityStatusValue,ResourceGroup,CorrelationId,EventDataId,_ResourceId']
+  for(let i=0;i<6;i++) rows.push(row('DEPLOYMENTS/WRITE',`acc-${i}`,`w${i}`))
+  for(let i=0;i<5;i++) rows.push(row('DELETE',`old-${i}`,`d${i}`))
+  // The one that differs stays on its own.
+  rows.push(row('DEPLOYMENTS/WRITE','odd','o1'),row('DELETE','odd','o2'))
+  const transfer=await page.evaluateHandle(text=>{const dt=new DataTransfer();dt.items.add(new File([text],'AzureActivity.csv',{type:'text/csv'}));return dt},rows.join('\n'))
+  for(const type of ['dragenter','dragover','drop']) await page.locator('.workspace').dispatchEvent(type,{dataTransfer:transfer})
+  await expect.poll(async()=>(await graph()).groups?.length??0,{timeout:15000}).toBe(2)
+  const board=await graph()
+  expect(board.groups.map((g:any)=>[g.name,g.collapsed]).sort()).toEqual([['5 Azure Resource · delete cognitiveservices/accounts',true],['6 Azure Resource · write cognitiveservices/accounts/deployments',true]])
+  expect(board.groups.some((g:any)=>g.member_ids.includes(board.entities.find((e:any)=>e.name==='odd').id))).toBe(false)
+  // One diamond per operation and group, with the number of events it stands for.
+  const canvas=page.locator('.react-flow')
+  await expect.poll(async()=>(await canvas.locator('.activity-count').allInnerTexts()).sort(),{timeout:10000}).toEqual(['5','6'])
+  await expect(canvas.locator('.react-flow__node-activity')).toHaveCount(4)
+  // The import arranged the result (empty board), then: undo the layout, undo the grouping.
+  await page.getByRole('button',{name:'Undo',exact:true}).click()
+  await page.getByRole('button',{name:'Undo',exact:true}).click()
+  await expect.poll(async()=>(await graph()).groups?.length??0).toBe(0)
+  await page.keyboard.press('f')
+  await expect(canvas.locator('.react-flow__node-activity')).toHaveCount(13)
+  await page.getByRole('button',{name:'Group suggestions'}).click()
+  await page.getByRole('button',{name:'Group all similar (2 groups) and arrange'}).click()
+  await expect.poll(async()=>(await graph()).groups?.length??0).toBe(2)
+  await expect(page.getByText('2 groups · 11 similar entities collapsed')).toBeVisible()
+  await expect(canvas.locator('.react-flow__node-activity')).toHaveCount(4)
+})
+
+test('attack impact: mark a stolen secret since a time, pivot to the new IP, see impacted resources, rotate, hunt (UI, REST, MCP)',async({page,request})=>{
+  const {id,token,call}=await setup(page,request)
+  const e=(name:string,kind:string,x:number,y:number,ids:[string,string,string][]=[])=>{const entity=randomUUID();return {id:entity,actions:[{type:'entity.add',payload:{id:entity,name,kind,x,y}},
+    ...ids.map(([scheme,namespace,value])=>({type:'identifier.add',payload:{id:randomUUID(),entity_id:entity,scheme,namespace,raw_value:value,normalized_value:value}}))]}}
+  const cred=e('clientSecret k-123','Credential',0,0,[['external_id','entra-credential-key-id','k-123']]),sp=e('deploy-bot','Service Principal',0,150,[['external_id','entra-object-id','oid-9'],['external_id','entra-app-id','app-9']])
+  const usual=e('203.0.113.10','IP',0,300,[['ip','','203.0.113.10']]),evil=e('198.51.100.66','IP',0,450,[['ip','','198.51.100.66']])
+  const st=e('stacc','Azure Resource',600,0,[['resource_id','','/subscriptions/0/resourcegroups/rg/providers/microsoft.storage/storageaccounts/stacc']]),arm=e('Azure Resource Manager','Service',600,300)
+  const act=(predicate:string,parts:[{id:string},string][],time:string)=>{const fact=randomUUID();return [{type:'fact.add',payload:{id:fact,predicate,participants:parts.map(([x,role])=>({entity_id:x.id,role}))}},
+    {type:'assertion.add',payload:{id:randomUUID(),fact_id:fact,stance:'supports',note:'row',valid_from:time}}]}
+  await call('POST','/actions',{actions:[...[cred,sp,usual,evil,st,arm].flatMap(x=>x.actions),
+    ...act('signed in',[[sp,'identity'],[usual,'source'],[cred,'tool'],[arm,'target']],'2026-09-10T10:00:00Z'),
+    ...act('signed in',[[sp,'identity'],[evil,'source'],[cred,'tool'],[arm,'target']],'2026-09-17T08:00:00Z'),
+    ...act('listkeys storage/storageaccounts',[[sp,'identity'],[evil,'source'],[st,'target']],'2026-09-17T08:20:00Z')]})
+  // Nothing marked: the impact view explains what to do.
+  await page.getByRole('tab',{name:'Attack impact'}).click()
+  await expect(page.getByText('Nothing is marked yet.')).toBeVisible()
+  await page.getByLabel('Find entity to mark compromised').fill('k-123')
+  await page.getByRole('button',{name:'Mark compromised…'}).click()
+  await page.getByLabel('Compromised since, clientSecret k-123').fill('2026-09-15T00:00')
+  await page.locator('.compromise-form button.primary-button').click()
+  await expect(page.locator('.impact-row.seed')).toContainText('since 2026-09-15 00:00 UTC')
+  // The sign-in from the new IP is the attacker's; the service principal was seen with the secret before (probably legitimate).
+  await expect(page.locator('.impact-row.pivot',{hasText:'198.51.100.66'})).toContainText('new since compromise')
+  await expect(page.locator('.impact-row.pivot',{hasText:'deploy-bot'})).toContainText('seen 1× before')
+  await expect(page.locator('.impact-row.pivot',{hasText:'203.0.113.10'})).toHaveCount(0)
+  // Pivot: mark the new IP; its listKeys becomes attacker activity, the storage account is impacted and has to be rotated.
+  await page.locator('.impact-row.pivot',{hasText:'198.51.100.66'}).getByRole('button',{name:'Mark compromised'}).click()
+  await expect(page.locator('.impact-row.impacted',{hasText:'stacc'})).toContainText('Secrets exposed')
+  await expect(page.locator('.rotation-measure',{hasText:'Rotate storage account keys'})).toContainText('0/1 done')
+  await expect(page.locator('.rotation-measure',{hasText:'Remove stolen client secrets'})).toBeVisible()
+  await page.locator('.rotation-measure',{hasText:'Rotate storage account keys'}).getByRole('checkbox',{name:/Rotate storage keys of stacc/}).click()
+  await expect(page.locator('.rotation-measure',{hasText:'Rotate storage account keys'})).toContainText('1/1 done')
+  await expect(page.locator('.hunt-query',{hasText:'Where else was the stolen credential used'}).locator('pre')).toContainText('"k-123"')
+  await expect(page.locator('.hunt-query',{hasText:'Was the storage key used?'}).locator('pre')).toContainText('"stacc"')
+  // The attacker's IP signed in as the service principal: derived compromise from that first use.
+  await expect(page.locator('.impact-row.seed.derived',{hasText:'deploy-bot'})).toContainText('no later than 2026-09-17 08:00 UTC')
+  await expect(page.locator('.hunt-query',{hasText:'Prove the rotation'})).toContainText('Importable')
+  // Proof of rotation: the exported AuditLogs result of "Prove the rotation" is dropped on the board.
+  const changes=['"TimeGenerated [UTC]",CredentialChange,KeyId,KeyType,KeyName,Application,ApplicationObjectId,Actor,ActorId,ActorIp,OperationName,Result,CorrelationId',
+    '"9/25/2026, 10:00:00.000 AM",removed,k-123,Password,ci,deploy-bot,a1a1a1a1-1111-4222-8333-999999999999,admin@contoso.example,c0c0c0c0-1111-4222-8333-000000000001,203.0.113.20,Update application – Certificates and secrets management,success,c1',
+    '"9/25/2026, 10:00:00.000 AM",added,k-456,Password,ci-new,deploy-bot,a1a1a1a1-1111-4222-8333-999999999999,admin@contoso.example,c0c0c0c0-1111-4222-8333-000000000001,203.0.113.20,Update application – Certificates and secrets management,success,c1'].join('\n')
+  const transfer=await page.evaluateHandle(text=>{const dt=new DataTransfer();dt.items.add(new File([text],'credential-changes.csv',{type:'text/csv'}));return dt},changes)
+  for(const type of ['dragenter','dragover','drop']) await page.locator('.workspace').dispatchEvent(type,{dataTransfer:transfer})
+  await page.getByRole('tab',{name:'Attack impact'}).click()
+  const secrets=page.locator('.rotation-measure',{hasText:'Remove stolen client secrets'})
+  await expect(secrets).toContainText('1/1 done',{timeout:15000})
+  await expect(secrets.locator('.proof-line')).toContainText('Proven: credential removed 2026-09-25 10:00 UTC')
+  await expect(page.locator('.rotation-measure',{hasText:'Rotate all credentials of compromised identities'})).toContainText('1/1 done')
+  // Not compromised after all: never derived again, listed as checked.
+  await page.locator('.impact-row.seed.derived',{hasText:'deploy-bot'}).getByRole('button',{name:'Not compromised'}).click()
+  await expect(page.locator('.impact-row.seed',{hasText:'deploy-bot'})).toHaveCount(0)
+  await expect(page.locator('.cleared-line')).toContainText('deploy-bot')
+  // In the graph: the lens shows only the attack; the inspector tells the story of a node.
+  await page.getByRole('button',{name:'Show in graph'}).click()
+  await expect(page.getByRole('button',{name:'Impact lens'})).toHaveAttribute('aria-pressed','true')
+  await expect(page.locator('.fg-edge.attack').first()).toBeAttached()
+  await expect(page.locator('.react-flow__node').filter({hasText:'stacc'}).locator('.impact-badge')).toHaveText('Secrets exposed')
+  await page.locator('.react-flow__node').filter({hasText:'203.0.113.10'}).locator('.entity-node').click({force:true})
+  await expect(page.locator('.react-flow__node').filter({hasText:'203.0.113.10'}).locator('.entity-node')).toHaveClass(/dimmed/)
+  // REST and MCP: the same analysis; bad windows are rejected.
+  const report=await call('GET','/impact')
+  expect(report.seeds.filter((s:any)=>!s.derived).map((s:any)=>s.name).sort()).toEqual(['198.51.100.66','clientSecret k-123'])
+  expect(report.rotate.find((r:any)=>/storage keys/.test(r.title)).rotated_at).toBeTruthy()
+  const viaMcp=await mcp(token,'get_impact',{board_id:id})
+  expect(viaMcp.impacted_total).toBe(report.impacted_total)
+  const bad=await request.fetch(`${base}/api/boards/${id}/entities/${sp.id}`,{method:'PATCH',data:{compromise:{from:'2026-09-20T00:00:00Z',to:'2026-09-01T00:00:00Z'}},headers:{'X-FactGraph-Token':token}})
+  expect(bad.status()).toBe(422)
+  await mcp(token,'update_entity',{board_id:id,entity_id:sp.id,body:{compromise:{from:'2026-09-15T00:00:00Z',note:'agent'}}})
+  await expect.poll(async()=>(await call('GET','/impact')).seeds.find((s:any)=>s.name==='deploy-bot')?.note).toBe('agent')
+})

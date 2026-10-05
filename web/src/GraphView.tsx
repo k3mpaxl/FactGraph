@@ -5,7 +5,7 @@ import { ReactFlow, ReactFlowProvider, Background, BackgroundVariant, Controls, 
 import '@xyflow/react/dist/style.css'
 import { Layers, Plus, Search, X, Pin, Sparkles, Copy, ArrowDown,
   Grid3x3, Map as MapIcon, Crosshair, Pencil, Merge, Trash2, PinOff, Settings2, Boxes, Zap, ChevronRight, ChevronDown,
-  FolderTree, Group as GroupIcon, Ungroup, EyeOff, Save, Columns3, Workflow, Download, ClipboardCopy, ImageDown, Waypoints, Loader2 } from 'lucide-react'
+  FolderTree, Group as GroupIcon, Ungroup, EyeOff, Save, Columns3, Workflow, Download, ClipboardCopy, ImageDown, Waypoints, Loader2, ShieldAlert } from 'lucide-react'
 import type { Entity, EntityType, Fact, Group, Perspective, TruthState } from './types'
 import { CONTAINS_PREDICATES, type ActionDraft } from './board'
 import { snapPosition } from './layout'
@@ -13,17 +13,23 @@ import { KindIcon, iconMarkup, prepareIconMarkup, typeIcons } from './KindIcon'
 import { browserMeasure, buildGraphSvg, downloadBlob, exportFilename, svgToPng } from './exportGraph'
 import { createWheelClassifier, zoomAround, zoomFactor } from './wheel'
 import { ORGANIC_THRESHOLD } from './organicLayout'
+import { exportMarks, type Effect, type Impact } from './impact'
+import { EFFECT_SHORT } from './ImpactPanel'
 import { LayoutCancelled, organicLayoutAsync } from './layoutClient'
 
 const MIN_ZOOM = 0.05
 const MAX_ZOOM = 2.5
 import { entityVisual } from './entityVisual'
 import { LAYERS, layerOf } from './layers'
-import { buildViewModel, groupShiftDrafts, groupToggleDrafts, groupSuggestions, activityNodeId, groupNodeId, edgeGeometry, edgeOffsets, edgeWidth, NODE_H, NODE_W, type NodeBox, type VNode } from './viewModel'
+import { buildViewModel, groupShiftDrafts, groupToggleDrafts, groupSuggestions, autoGroups, autoGroupDrafts, activityNodeId, groupNodeId, edgeGeometry, edgeOffsets, edgeWidth, NODE_H, NODE_W, type NodeBox, type VNode } from './viewModel'
 import { uuid } from './uuid'
 
 export type Selection = { kind: 'entity' | 'fact' | 'group'; id: string } | null
-export type CanvasRequest = { type: 'focus' | 'fit' | 'arrange' | 'arrange-layers' | 'arrange-organic' | 'place' | 'export'; id?: string; kind?: string; n: number }
+/**
+ * group-similar: collapse entities with the same characteristics into groups. After an import, `existing` lists the
+ * entities that were there before (only the new ones are grouped) and `arrange` says whether to lay out the result.
+ */
+export type CanvasRequest = { type: 'focus' | 'fit' | 'arrange' | 'arrange-layers' | 'arrange-organic' | 'place' | 'export' | 'group-similar'; id?: string; kind?: string; existing?: string[]; arrange?: boolean; n: number }
 type ExportSettings = { format: 'png' | 'svg'; area: 'all' | 'visible' | 'selection'; theme: 'current' | 'light' | 'dark'; scale: number; title: boolean; legend: boolean; transparent: boolean }
 const defaultExport: ExportSettings = { format: 'png', area: 'all', theme: 'current', scale: 2, title: true, legend: true, transparent: false }
 export type Lens = { layers: Set<string> | null; collapseActivities: boolean; showLanes: boolean }
@@ -34,6 +40,8 @@ type Props = {
   onApplyPerspective: (id: string | null) => void; onSavePerspective: (name: string) => void; onDeletePerspective: (id: string) => void;
   onSelect: (value: Selection) => void;
   onCommand: (drafts: ActionDraft[]) => Promise<unknown>;
+  /** Attack impact: marks compromised, pivot and impacted nodes and attacker activities; the lens dims everything else. */
+  impact?: Impact | null; impactLens?: boolean; onImpactLensChange?: (on: boolean) => void; onOpenImpact?: () => void;
   onEdit: (id: string) => void; onMerge: (id: string) => void;
   onCopy: (value: string, label: string) => void;
   boardName: string; filterSummary: string; onNotice: (message: string) => void;
@@ -51,9 +59,11 @@ export { KindIcon }
 // Callbacks live in a ref so node data stays referentially stable and memoised cards do not re-render on every parent render.
 type Handlers = { rename: (id: string, name: string) => void; cancelSelect: () => void; toggleGroup: (groupId: string, collapsed: boolean) => void }
 type HandlerRef = { current: Handlers }
-type EntityData = { v: Extract<VNode, { kind: 'entity' }>; icon?: string; color: string; dimmed: boolean; match: boolean; handlers: HandlerRef }
-type GroupData = { v: Extract<VNode, { kind: 'group' }>; dimmed: boolean; match: boolean; handlers: HandlerRef }
-type ActivityData = { v: Extract<VNode, { kind: 'activity' }>; dimmed: boolean }
+type Mark = 'compromised' | 'derived' | 'pivot' | 'impacted'
+type EntityData = { v: Extract<VNode, { kind: 'entity' }>; icon?: string; color: string; dimmed: boolean; match: boolean; handlers: HandlerRef; mark?: Mark; effect?: Effect; regular?: boolean }
+/** marks: "compromised|impacted" member counts, a string so unchanged nodes keep their identity. */
+type GroupData = { v: Extract<VNode, { kind: 'group' }>; dimmed: boolean; match: boolean; handlers: HandlerRef; marks?: string }
+type ActivityData = { v: Extract<VNode, { kind: 'activity' }>; dimmed: boolean; attack?: boolean }
 type FrameData = { v: Extract<VNode, { kind: 'frame' }>; handlers: HandlerRef }
 type AnyData = EntityData | GroupData | ActivityData | FrameData
 
@@ -68,7 +78,8 @@ const EntityCard = memo(function EntityCard({ data, selected }: NodeProps<Node<E
   const [name, setName] = useState(entity.name)
   useEffect(() => setName(entity.name), [entity.name])
   const hint = entity.identifiers[0]?.raw_value
-  return <div className={`entity-node${selected ? ' selected' : ''}${data.dimmed ? ' dimmed' : ''}${data.match ? ' match' : ''}`} style={{ '--entity-color': data.color } as CSSProperties}>
+  return <div className={`entity-node${selected ? ' selected' : ''}${data.dimmed ? ' dimmed' : ''}${data.match ? ' match' : ''}${data.mark ? ` mark-${data.mark}${data.regular ? ' effect-attempt' : data.effect ? ` effect-${data.effect}` : ''}` : ''}`} style={{ '--entity-color': data.color } as CSSProperties}>
+    {data.mark && <span className={`impact-badge ${data.mark}${data.regular ? ' regular' : data.effect ? ` ${data.effect}` : ''}`}>{data.mark === 'compromised' ? 'Compromised' : data.mark === 'derived' ? 'Compromised (derived)' : data.mark === 'pivot' ? 'New with attacker' : data.regular ? 'Likely regular' : EFFECT_SHORT[data.effect ?? 'other']}</span>}
     <Handle type="target" position={Position.Left} id="in" aria-label={`Connect to ${entity.name}`} />
     <div className="node-icon"><KindIcon kind={entity.kind} icon={data.icon} /></div>
     <div className="node-copy">
@@ -91,8 +102,10 @@ const EntityCard = memo(function EntityCard({ data, selected }: NodeProps<Node<E
 const GroupCard = memo(function GroupCard({ data, selected }: NodeProps<Node<GroupData>>) {
   const { group, count, kinds, states, internal } = data.v
   const total = states.supported + states.disputed + states.refuted + states.unknown
-  return <div className={`group-node${selected ? ' selected' : ''}${data.dimmed ? ' dimmed' : ''}${data.match ? ' match' : ''}`} style={{ '--entity-color': group.color || 'var(--accent)' } as CSSProperties}>
+  const [compromised, impacted] = (data.marks ?? '0|0').split('|').map(Number)
+  return <div className={`group-node${selected ? ' selected' : ''}${data.dimmed ? ' dimmed' : ''}${data.match ? ' match' : ''}${compromised ? ' mark-compromised' : impacted ? ' mark-impacted' : ''}`} style={{ '--entity-color': group.color || 'var(--accent)' } as CSSProperties}>
     {hiddenHandles}
+    {(compromised > 0 || impacted > 0) && <span className={`impact-badge ${compromised ? 'compromised' : 'impacted'}`}>{[compromised && `${compromised} compromised`, impacted && `${impacted} impacted`].filter(Boolean).join(' · ')}</span>}
     <div className="group-stack" />
     <div className="group-body">
       <div className="node-icon"><Boxes size={16} /></div>
@@ -106,12 +119,16 @@ const GroupCard = memo(function GroupCard({ data, selected }: NodeProps<Node<Gro
 })
 
 const ActivityHub = memo(function ActivityHub({ data, selected }: NodeProps<Node<ActivityData>>) {
-  const { fact } = data.v
-  const when = fact.assertions.map(a => a.valid_from).filter(Boolean).sort()[0] ?? fact.valid_from
-  return <div className={`activity-node ${fact.truth_state}${selected ? ' selected' : ''}${data.dimmed ? ' dimmed' : ''}`} title={`${fact.predicate}${fact.technique ? ` · ${fact.technique}` : ''}`}>
+  const { fact, count, facts } = data.v
+  // A bundle shows the span from its first to its last event.
+  const times = facts.flatMap(f => { const own = f.assertions.map(a => a.valid_from).filter(Boolean) as string[]; return own.length ? own : f.valid_from ? [f.valid_from] : [] }).sort()
+  const short = (iso: string) => new Date(iso).toISOString().slice(5, 16).replace('T', ' ')
+  const when = times.length ? short(times[0]) + (short(times[times.length - 1]) !== short(times[0]) ? ` – ${short(times[times.length - 1])}` : '') : ''
+  return <div className={`activity-node ${fact.truth_state}${selected ? ' selected' : ''}${data.dimmed ? ' dimmed' : ''}${count > 1 ? ' bundled' : ''}${data.attack ? ' attack' : ''}`}
+    title={`${fact.predicate}${fact.technique ? ` · ${fact.technique}` : ''}${count > 1 ? ` · ${count} activities with the same operation and participants (expand the group to see them one by one)` : ''}`}>
     {hiddenHandles}
-    <div className="activity-diamond"><Zap size={13} /></div>
-    <div className="activity-label"><strong>{fact.predicate}</strong>{(when || fact.technique) && <small>{when ? new Date(when).toISOString().slice(5, 16).replace('T', ' ') : ''}{fact.technique ? ` ${fact.technique}` : ''}</small>}</div>
+    <div className="activity-diamond"><Zap size={13} />{count > 1 && <b className="activity-count">{count}</b>}</div>
+    <div className="activity-label"><strong>{fact.predicate}{count > 1 ? ` ×${count}` : ''}</strong>{(when || fact.technique) && <small>{when}{fact.technique ? ` ${fact.technique}` : ''}</small>}</div>
   </div>
 })
 
@@ -128,7 +145,7 @@ const boxOf = (node: InternalNode): NodeBox => {
   const w = node.measured.width ?? 200, h = node.measured.height ?? 56
   return { x: node.internals.positionAbsolute.x + w / 2, y: node.internals.positionAbsolute.y + h / 2, w, h }
 }
-type EdgeData = { state: TruthState; offset: number; dimmed: boolean; count: number; spoke: boolean; onPick: (id: string) => void; onEdit: (id: string) => void }
+type EdgeData = { state: TruthState; offset: number; dimmed: boolean; count: number; spoke: boolean; attack?: boolean; onPick: (id: string) => void; onEdit: (id: string) => void }
 const FloatingEdge = memo(function FloatingEdge({ id, source, target, label, selected, data }: EdgeProps<Edge<EdgeData>>) {
   const s = useInternalNode(source), t = useInternalNode(target)
   const showLabel = useStore(store => store.transform[2] >= 0.55)
@@ -137,7 +154,7 @@ const FloatingEdge = memo(function FloatingEdge({ id, source, target, label, sel
   const width = data.count > 1 ? edgeWidth(data.count) : undefined
   return <>
     <BaseEdge id={id} path={path} interactionWidth={16} markerEnd={`url(#fg-arrow-${selected ? 'selected' : data.state})`} style={width ? { strokeWidth: width } : undefined}
-      className={`fg-edge ${data.state}${selected ? ' selected' : ''}${data.dimmed ? ' dimmed' : ''}${data.spoke ? ' spoke' : ''}`} />
+      className={`fg-edge ${data.state}${selected ? ' selected' : ''}${data.dimmed ? ' dimmed' : ''}${data.spoke ? ' spoke' : ''}${data.attack ? ' attack' : ''}`} />
     {(showLabel || selected) && label && <EdgeLabelRenderer>
       <button type="button" className={`edge-label nodrag nopan ${data.state}${selected ? ' selected' : ''}${data.dimmed ? ' dimmed' : ''}${data.spoke ? ' spoke' : ''}`}
         style={{ transform: `translate(-50%, -50%) translate(${lx}px, ${ly}px)` }} title={String(label)}
@@ -160,7 +177,7 @@ function sameV(a: VNode, b: VNode) {
   if (a.kind !== b.kind || a.position.x !== b.position.x || a.position.y !== b.position.y) return false
   if (a.kind === 'entity' && b.kind === 'entity') return a.entity === b.entity && a.hidden === b.hidden && a.inGroup === b.inGroup && a.container?.count === b.container?.count && a.container?.collapsed === b.container?.collapsed
   if (a.kind === 'group' && b.kind === 'group') return a.group === b.group && a.count === b.count && a.internal === b.internal && (['supported', 'disputed', 'refuted', 'unknown'] as const).every(s => a.states[s] === b.states[s])
-  if (a.kind === 'activity' && b.kind === 'activity') return a.fact === b.fact
+  if (a.kind === 'activity' && b.kind === 'activity') return a.fact === b.fact && a.count === b.count && a.facts.every((f, i) => f === b.facts[i])
   if (a.kind === 'frame' && b.kind === 'frame') return a.label === b.label && a.width === b.width && a.height === b.height
   return false
 }
@@ -250,8 +267,12 @@ function Canvas(props: Props) {
   const [minimapPref, setMinimapPref] = useState<boolean | null>(() => { try { const v = localStorage.getItem('factgraph:minimap'); return v === null ? null : v === 'true' } catch { return null } })
   const minimap = minimapPref ?? entities.length > 60
   const [focusMode, setFocusMode] = useState(() => pref('focus', true))
+  /** Hide instead of dim what the impact lens or the focus on a selection leaves out. */
+  const [hideUnrelated, setHideUnrelated] = useState(() => pref('hideUnrelated', false))
   const [perspectiveName, setPerspectiveName] = useState('')
   const pendingFit = useRef(false)
+  /** Groups that are being created; once all are on the canvas it is arranged (or fitted). */
+  const pendingGroups = useRef<{ ids: string[]; arrange: boolean } | null>(null)
   // Locally expanded groups get focused once their members are on the canvas; remote changes never move the viewport.
   const pendingFocus = useRef<string | null>(null)
   const far = useStore(store => store.transform[2] < 0.45)
@@ -264,18 +285,52 @@ function Canvas(props: Props) {
   handlers.current = {
     rename: (id, name) => { void run([{ type: 'entity.update', payload: { id, name } }]).catch(() => {}) },
     cancelSelect,
-    toggleGroup: (groupId, collapsed) => { const group = groups.find(g => g.id === groupId); if (!group) return; void run(groupToggleDrafts(group, entities, collapsed)).then(() => { if (!collapsed) pendingFocus.current = groupId }).catch(() => {}) },
+    toggleGroup: (groupId, collapsed) => {
+      const group = groups.find(g => g.id === groupId); if (!group) return
+      // Set before the batch: the canvas may already show the members when run() resolves; the focus waits for them.
+      if (!collapsed) pendingFocus.current = groupId
+      void run(groupToggleDrafts(group, entities, collapsed, { groups, facts })).catch(() => { pendingFocus.current = null })
+    },
   }
 
   const typeByName = useMemo(() => new Map(entityTypes.map(t => [t.name, t])), [entityTypes])
   const view = useMemo(() => buildViewModel(entities, facts, groups, { visibleLayers: lens.layers, collapseActivities: lens.collapseActivities, showLanes: lens.showLanes, entityTypes }),
     [entities, facts, groups, lens, entityTypes])
+  const impact = props.impact ?? null
+  const impactEffects = useMemo(() => new Map((impact?.impacted ?? []).map(i => [i.entity.id, i.effect])), [impact])
+  const impactRegular = useMemo(() => new Set((impact?.impacted ?? []).filter(i => i.regular).map(i => i.entity.id)), [impact])
+  const groupMarks = useMemo(() => {
+    const marks = new Map<string, string>()
+    if (!impact?.marks.size) return marks
+    for (const group of groups) {
+      let compromised = 0, impacted = 0
+      for (const id of group.member_ids) { const mark = impact.marks.get(id); if (mark === 'compromised' || mark === 'derived') compromised++; else if (mark === 'impacted') impacted++ }
+      if (compromised || impacted) marks.set(group.id, `${compromised}|${impacted}`)
+    }
+    return marks
+  }, [impact, groups])
+  // Impact lens: the attacker activities, everything they connect, and every marked node; the rest is dimmed.
+  const lensIds = useMemo(() => {
+    if (!props.impactLens || !impact?.seeds.length) return null
+    const ids = new Set<string>()
+    for (const edge of view.edges) if (edge.factIds.some(id => impact.facts.has(id))) { ids.add(edge.source); ids.add(edge.target) }
+    for (const id of impact.marks.keys()) { const rep = view.repOf(id); if (rep) ids.add(rep) }
+    return ids
+  }, [props.impactLens, impact, view])
+  // Turning the lens on (also from the impact view, which mounts the canvas) zooms to the attack.
+  const lensShown = useRef(false)
+  useEffect(() => {
+    const on = !!props.impactLens && !!lensIds?.size
+    if (on && !lensShown.current) { const ids = [...lensIds!]; window.setTimeout(() => void flow.fitView({ nodes: ids.map(id => ({ id })), padding: 0.15, maxZoom: 1.1, duration: 450 }), 150) }
+    lensShown.current = on
+  }, [props.impactLens, lensIds])
   const layerCounts = useMemo(() => {
     const counts = new Map<string, number>()
     for (const e of entities) { const l = layerOf(e, entityTypes); counts.set(l, (counts.get(l) ?? 0) + 1) }
     return counts
   }, [entities, entityTypes])
   const suggestions = useMemo(() => groupSuggestions(entities, facts, groups), [entities, facts, groups])
+  const autoCount = useMemo(() => popover === 'suggest' ? autoGroups(entities, facts, groups).length : 0, [popover, entities, facts, groups])
   const containers = useMemo(() => {
     const set = new Set<string>()
     for (const f of facts) if (CONTAINS_PREDICATES.includes(f.predicate.trim().toLowerCase())) set.add(f.subject_id)
@@ -324,22 +379,35 @@ function Canvas(props: Props) {
         if (v.kind === 'entity') {
           const type = typeByName.get(v.entity.kind)
           const match = !!needle && matches(v.entity)
-          data = { v, icon: type?.icon, color: v.entity.color || type?.color || entityVisual(v.entity.kind).border, match, dimmed: (!!needle && !match) || dimmedByFocus, handlers }
+          const mark = impact?.marks.get(v.entity.id)
+          data = { v, icon: type?.icon, color: v.entity.color || type?.color || entityVisual(v.entity.kind).border, match, dimmed: (!!needle && !match) || dimmedByFocus || (!!lensIds && !lensIds.has(v.id)), handlers,
+            mark, effect: mark === 'impacted' ? impactEffects.get(v.entity.id) : undefined, regular: mark === 'impacted' && impactRegular.has(v.entity.id) }
         } else if (v.kind === 'group') {
           const match = !!needle && v.group.member_ids.some(id => { const e = entities.find(x => x.id === id); return !!e && matches(e) })
-          data = { v, match, dimmed: (!!needle && !match) || dimmedByFocus, handlers }
-        } else if (v.kind === 'activity') data = { v, dimmed: !!needle || dimmedByFocus }
+          data = { v, match, dimmed: (!!needle && !match) || dimmedByFocus || (!!lensIds && !lensIds.has(v.id)), handlers, marks: groupMarks.get(v.group.id) }
+        } else if (v.kind === 'activity') {
+          const attack = !!impact?.facts.size && v.facts.some(f => impact.facts.has(f.id))
+          data = { v, dimmed: !!needle || dimmedByFocus || (!!lensIds && !attack), attack }
+        }
         else data = { v, handlers }
+        const unrelated = v.kind !== 'frame' && hideUnrelated && (dimmedByFocus || (!!lensIds && (v.kind === 'activity' ? !(data as ActivityData).attack : !lensIds.has(v.id))))
         const sameData = old && old.type === (v.kind === 'group' ? 'bundle' : v.kind) && Object.keys(data).every(k => k === 'v' ? sameV(old.data.v, v) : (old.data as Record<string, unknown>)[k] === (data as Record<string, unknown>)[k])
-        if (old && sameData && old.selected === selected && old.position.x === base.position.x && old.position.y === base.position.y) return old
-        return { ...base, type: v.kind === 'group' ? 'bundle' : v.kind, data: sameData ? old!.data : data,
+        if (old && sameData && old.selected === selected && !!old.hidden === unrelated && old.position.x === base.position.x && old.position.y === base.position.y) return old
+        return { ...base, hidden: unrelated, type: v.kind === 'group' ? 'bundle' : v.kind, data: sameData ? old!.data : data,
           draggable: v.kind === 'frame' ? v.tone === 'group' : v.kind === 'entity' ? !v.entity.pinned : true,
           ...(v.kind === 'frame' && v.tone === 'group' ? { dragHandle: '.frame-head' } : {}),
           selectable: v.kind !== 'frame', zIndex: v.kind === 'frame' ? -1 : undefined, ...(v.kind === 'frame' ? { width: v.width, height: v.height } : {}) } as Node<AnyData>
       })
     })
-  }, [view, selectedNodeId, needle, typeByName, focusIds])
+  }, [view, selectedNodeId, needle, typeByName, focusIds, impact, lensIds, impactEffects, impactRegular, groupMarks, hideUnrelated])
   useEffect(() => { if (pendingFocus.current && groups.some(g => g.id === pendingFocus.current && !g.collapsed)) { const id = pendingFocus.current; pendingFocus.current = null; requestAnimationFrame(() => focusOn(id)) } }, [view])
+  // Arrange once the new groups are on the canvas (React Flow has the nodes after this render).
+  useEffect(() => {
+    const pending = pendingGroups.current
+    if (!pending || !pending.ids.every(id => nodes.some(n => n.id === id))) return
+    pendingGroups.current = null
+    requestAnimationFrame(() => { if (pending.arrange) void align(); else void flow.fitView({ padding: 0.2, maxZoom: 1.1, duration: 400 }) })
+  }, [nodes])
   useEffect(() => { if (pendingFit.current) { pendingFit.current = false; requestAnimationFrame(() => void flow.fitView({ padding: 0.2, maxZoom: 1.1, duration: 400 })) } }, [view])
   useEffect(() => { if (!fitted.current && nodes.length) { fitted.current = true; if (!props.initialViewport) requestAnimationFrame(() => void flow.fitView({ padding: 0.2, maxZoom: 1.1 })) } }, [nodes.length, flow, props.initialViewport])
 
@@ -366,11 +434,13 @@ function Canvas(props: Props) {
     return view.edges.map(edge => {
       const selected = selectedEdgeIds.has(edge.id) || (!!edge.activityId && selection?.kind === 'fact' && selection.id === edge.activityId)
       const incident = !focusIds || (selectedNodeId ? edge.source === selectedNodeId || edge.target === selectedNodeId || (focusIds.has(edge.source) && focusIds.has(edge.target) && (edge.source.startsWith('act:') || edge.target.startsWith('act:'))) : selected)
-      return { id: edge.id, source: edge.source, target: edge.target, sourceHandle: 'out', targetHandle: 'in', type: 'floating', label: edge.label,
+      const attack = !!impact?.facts.size && edge.factIds.some(id => impact.facts.has(id))
+      const unrelated = hideUnrelated && ((!!focusIds && !incident) || (!!lensIds && !attack))
+      return { hidden: unrelated, id: edge.id, source: edge.source, target: edge.target, sourceHandle: 'out', targetHandle: 'in', type: 'floating', label: edge.label,
         reconnectable: !edge.activityId && edge.count === 1 && !edge.source.includes(':') && !edge.target.includes(':') && !confirmedFacts.has(edge.factIds[0]), selected,
-        data: { state: edge.state, offset: offsets.get(edge.id) ?? 0, dimmed: !incident, count: edge.count, spoke: !!edge.role, ...edgeCallbacks } }
+        data: { state: edge.state, offset: offsets.get(edge.id) ?? 0, dimmed: !incident || (!!lensIds && !attack), count: edge.count, spoke: !!edge.role, attack, ...edgeCallbacks } }
     })
-  }, [view, selection, selectedEdgeIds, selectedNodeId, focusIds, edgeCallbacks, confirmedFacts])
+  }, [view, selection, selectedEdgeIds, selectedNodeId, focusIds, edgeCallbacks, confirmedFacts, impact, lensIds, hideUnrelated])
 
   const center = () => flow.screenToFlowPosition({ x: window.innerWidth / 2, y: window.innerHeight / 2 })
   const beginConnection = (connection: Connection) => {
@@ -396,6 +466,7 @@ function Canvas(props: Props) {
     if (request.type === 'focus' && request.id) focusOn(request.id)
     else if (request.type === 'fit') void flow.fitView({ padding: 0.2, maxZoom: 1.1, duration: 400 })
     else if (request.type === 'arrange') void align()
+    else if (request.type === 'group-similar') void groupSimilar(request.existing, request.arrange ?? true)
     else if (request.type === 'arrange-layers') void align('RIGHT', true)
     else if (request.type === 'arrange-organic') void align('RIGHT', false, 'organic')
     else if (request.type === 'export') void runExport({ ...exportSettings, format: request.kind === 'svg' ? 'svg' : 'png', area: 'all' }, 'download')
@@ -448,6 +519,33 @@ function Canvas(props: Props) {
       setGroupDraft(null); onSelect({ kind: 'group', id })
     } catch { /* shown as canvas error */ }
   }
+  /** Where a canvas node goes: a bundled activity moves every activity it stands for, so they stay together when it splits. */
+  const positionDrafts = (id: string, position: { x: number; y: number }): ActionDraft[] => {
+    if (id.startsWith('group:')) return [{ type: 'group.update', payload: { id: id.slice(6), ...position } }]
+    if (id.startsWith('act:')) {
+      const node = view.nodes.find(v => v.id === id)
+      return (node?.kind === 'activity' ? node.facts.map(f => f.id) : [id.slice(4)]).map(fact => ({ type: 'fact.position' as const, payload: { id: fact, ...position } }))
+    }
+    return [{ type: 'entity.position', payload: { id, ...position } }]
+  }
+  /** Collapse entities with the same characteristics into groups (one undo step), then arrange the smaller graph or fit it. */
+  const groupSimilar = async (existing?: string[], arrange = true) => {
+    const before = existing && new Set(existing)
+    const found = autoGroups(entities, facts, groups, { only: before ? new Set(entities.filter(e => !before.has(e.id)).map(e => e.id)) : undefined })
+    if (!found.length) {
+      if (!before) props.onNotice('Nothing to group · no four entities of one type share their connections')
+      if (arrange) void align(); else void flow.fitView({ padding: 0.2, maxZoom: 1.1, duration: 400 })
+      return
+    }
+    const drafts = autoGroupDrafts(found, entities, uuid)
+    // Set before the batch: the canvas may already show the groups when run() resolves.
+    pendingGroups.current = { ids: drafts.map(d => groupNodeId(d.payload.id)), arrange }
+    try {
+      await run(drafts)
+      const members = found.reduce((sum, g) => sum + g.members.length, 0)
+      props.onNotice(`${found.length} group${found.length === 1 ? '' : 's'} · ${members} similar entities collapsed · undo with ⌘Z`)
+    } catch { pendingGroups.current = null /* shown as canvas error */ }
+  }
   /** flow = directed ELK layers (readable for small graphs); organic = clustered force layout (large graphs); auto picks by size. */
   const align = async (direction = 'RIGHT', byLayer = false, mode: 'auto' | 'flow' | 'organic' = 'auto') => {
     setBusy(true); setError('')
@@ -494,16 +592,16 @@ function Canvas(props: Props) {
         const kept = movable.length - untouched.length
         pendingFit.current = true
         // One batch: the whole layout is one undo step.
-        await run(untouched.map(n => {
-          const position = snapPosition(positions.get(n.id)!)
-          if (n.id.startsWith('group:')) return { type: 'group.update' as const, payload: { id: n.id.slice(6), ...position } }
-          if (n.id.startsWith('act:')) return { type: 'fact.position' as const, payload: { id: n.id.slice(4), ...position } }
-          return { type: 'entity.position' as const, payload: { id: n.id, ...position } }
-        }))
+        await run(untouched.flatMap(n => positionDrafts(n.id, snapPosition(positions.get(n.id)!))))
         // Layer lanes only make sense for the layer layout; in an organic layout they would overlap.
         if (lens.showLanes) props.onLensChange({ ...lens, showLanes: false })
         if (kept) props.onNotice(`Organic layout for ${untouched.length} nodes · ${kept} changed meanwhile and kept their place`)
-        else if (mode === 'auto') props.onNotice(`Organic layout for ${movable.length} nodes · use ↓ or Layers for a flow layout`)
+        else if (mode === 'auto') {
+          // A hub-and-spoke import is far easier to read once similar entities are collapsed; say so instead of leaving a hairball.
+          const similar = autoGroups(entities, facts, groups).reduce((sum, g) => sum + g.members.length, 0)
+          props.onNotice(similar ? `Organic layout for ${movable.length} nodes · Groups → “Group all similar” collapses ${similar} similar entities`
+            : `Organic layout for ${movable.length} nodes · use ↓ or Layers for a flow layout`)
+        }
         return
       }
       const pane = shellRef.current?.getBoundingClientRect()
@@ -516,12 +614,7 @@ function Canvas(props: Props) {
       const pinned = chosen.filter(isPinned)
       const offsetX = pinned.length ? Math.max(...pinned.map(n => n.position.x + 350)) : 0
       pendingFit.current = true
-      await run((result.children ?? []).map(n => {
-        const position = snapPosition({ x: (n.x ?? 0) + offsetX, y: n.y ?? 0 })
-        if (n.id.startsWith('group:')) return { type: 'group.update' as const, payload: { id: n.id.slice(6), ...position } }
-        if (n.id.startsWith('act:')) return { type: 'fact.position' as const, payload: { id: n.id.slice(4), ...position } }
-        return { type: 'entity.position' as const, payload: { id: n.id, ...position } }
-      }))
+      await run((result.children ?? []).flatMap(n => positionDrafts(n.id, snapPosition({ x: (n.x ?? 0) + offsetX, y: n.y ?? 0 }))))
       if (byLayer && !lens.showLanes) props.onLensChange({ ...lens, showLanes: true })
     } catch (e) { setError(String(e)) } finally { setBusy(false) }
   }
@@ -546,7 +639,7 @@ function Canvas(props: Props) {
         for (const edge of view.edges) if (edge.activityId && (only.has(edge.source) || only.has(edge.target))) only.add(edge.source.startsWith('act:') ? edge.source : edge.target)
       }
       const theme = settings.theme === 'current' ? props.theme : settings.theme
-      const result = buildGraphSvg({ nodes: view.nodes, edges: view.edges, entityTypes, theme, sizes, area, only, legend: settings.legend,
+      const result = buildGraphSvg({ nodes: view.nodes, edges: view.edges, entityTypes, theme, sizes, area, only, legend: settings.legend, impact: impact?.seeds.length ? exportMarks(impact, groups) : null,
         transparent: settings.transparent, measure: browserMeasure, icon: iconMarkup,
         title: settings.title ? props.boardName : undefined,
         subtitle: settings.title ? [props.filterSummary, `exported ${new Date().toLocaleString('en-GB')}`].filter(Boolean).join(' · ') : undefined })
@@ -585,12 +678,7 @@ function Canvas(props: Props) {
     if (grid) { const snapped = snapPosition({ x: dx, y: dy }); dx = snapped.x; dy = snapped.y }
     return dx || dy ? groupShiftDrafts(group, entities, dx, dy) : []
   })
-  const moveDrafts = (moved: Node<AnyData>[]): ActionDraft[] => moved.filter(n => n.type !== 'frame').map(n => {
-    const position = grid ? snapPosition(n.position) : n.position
-    if (n.type === 'bundle') return { type: 'group.update', payload: { id: n.id.slice(6), ...position } }
-    if (n.type === 'activity') return { type: 'fact.position', payload: { id: n.id.slice(4), ...position } }
-    return { type: 'entity.position', payload: { id: n.id, ...position } }
-  })
+  const moveDrafts = (moved: Node<AnyData>[]): ActionDraft[] => moved.filter(n => n.type !== 'frame').flatMap(n => positionDrafts(n.id, grid ? snapPosition(n.position) : n.position))
   const toggle = (key: string, value: boolean, set: (v: boolean) => void) => { set(value); savePref(key, value) }
   const setLayer = (id: string, on: boolean) => {
     const current = new Set(lens.layers ?? LAYERS.map(l => l.id))
@@ -652,9 +740,11 @@ function Canvas(props: Props) {
       <button className="icon-only" onClick={() => void align('RIGHT', false, 'organic')} disabled={busy} title="Organic layout: clusters connected entities, best for large graphs" aria-label="Arrange organically"><Waypoints size={15} /></button>
       <span className="tool-sep" />
       <button className={`${popover === 'layers' || hiddenLayers || lens.showLanes || lens.collapseActivities ? 'active' : ''}`} onClick={() => setPopover(popover === 'layers' ? null : 'layers')} title="Layers & perspectives" aria-label="Layers"><Layers size={15} /><span>{props.activePerspective ? props.perspectives.find(p => p.id === props.activePerspective)?.name ?? 'Layers' : hiddenLayers ? `${LAYERS.length - hiddenLayers}/${LAYERS.length} layers` : 'Layers'}</span></button>
+      {!!impact?.seeds.length && <button className={`impact-tool${props.impactLens ? ' active' : ''}`} onClick={() => props.onImpactLensChange?.(!props.impactLens)} title="Impact lens: only the attack (compromised, attacker activities, impacted)" aria-label="Impact lens" aria-pressed={!!props.impactLens}><ShieldAlert size={15} /><span>Impact</span><b className="tool-badge danger">{impact.impacted.length}</b></button>}
       <button className={`${popover === 'suggest' ? 'active' : ''}`} onClick={() => setPopover(popover === 'suggest' ? null : 'suggest')} title="Group suggestions" aria-label="Group suggestions"><Boxes size={15} /><span>Groups</span>{suggestions.length > 0 && <b className="tool-badge">{suggestions.length}</b>}</button>
       <span className="tool-sep" />
       <button className={`icon-only${focusMode ? ' active' : ''}`} aria-pressed={focusMode} onClick={() => toggle('focus', !focusMode, setFocusMode)} title="Focus: highlight neighbours of the selection"><Crosshair size={15} /></button>
+      <button className={`icon-only${hideUnrelated ? ' active' : ''}`} aria-pressed={hideUnrelated} aria-label="Hide unrelated" onClick={() => toggle('hideUnrelated', !hideUnrelated, setHideUnrelated)} title="Hide instead of dim what the impact lens or the focus on a selection leaves out"><EyeOff size={15} /></button>
       <button className={`icon-only${grid ? ' active' : ''}`} aria-pressed={grid} onClick={() => toggle('snap', !grid, setGrid)} title="Snap to grid"><Grid3x3 size={15} /></button>
       <button className={`icon-only${minimap ? ' active' : ''}`} aria-pressed={minimap} onClick={() => { setMinimapPref(!minimap); savePref('minimap', !minimap) }} title="Minimap"><MapIcon size={15} /></button>
       <span className="tool-sep" />
@@ -715,6 +805,7 @@ function Canvas(props: Props) {
     {popover === 'suggest' && <div className="suggest-popover popover" role="dialog" aria-label="Group suggestions">
       <div className="popover-head"><strong>Group suggestions</strong><button className="icon-button" aria-label="Close suggestions" onClick={() => setPopover(null)}><X size={15} /></button></div>
       <p className="hint">Entities of one type with identical connections. Those that differ stay separate — they are usually the interesting ones.</p>
+      {autoCount > 0 && <button className="primary-button small group-all" onClick={() => { setPopover(null); void groupSimilar() }}><Boxes size={13} /> Group all similar ({autoCount} groups) and arrange</button>}
       <div className="suggest-list">
         {suggestions.map(s => <div key={s.id} className="suggest-item">
           <div><strong>{s.name}</strong><small>{s.reason}</small>

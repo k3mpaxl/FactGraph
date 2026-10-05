@@ -11,6 +11,10 @@ export type Entity = {
   pinned?: boolean;
   /** Explicit layer override; otherwise the type's layer or an inferred one applies. */
   layer?: string;
+  /** Compromised (a stolen credential, an attacker's IP), optionally only from/until a time; drives the impact analysis. */
+  compromise?: { from?: string | null; to?: string | null; note?: string; by?: string; at?: string; cleared?: boolean } | null;
+  /** When the credential or the exposed secrets were last rotated; earlier than the attacker's last use means: again. */
+  rotated_at?: string | null;
 }
 export type Source = {
   id: string; title: string; uri: string; excerpt: string; created_at: string;

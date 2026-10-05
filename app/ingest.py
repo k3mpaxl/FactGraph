@@ -9,6 +9,7 @@ import csv
 import hashlib
 import io
 import json
+import re
 from datetime import datetime, timezone
 from uuid import UUID, uuid4, uuid5
 
@@ -94,6 +95,45 @@ def _stable(board_id: str, *parts: str) -> str:
     return str(uuid5(UUID(board_id), "\x1f".join(parts)))
 
 
+# Every action travels as one WebSocket message and the relay accepts at most 16 MiB per message, so the original rows
+# of a large export are kept in several sources of at most this size (JSON escaping can roughly double it on the wire).
+SOURCE_PART_BYTES = 3_000_000
+MAX_ROW_BYTES = 6_000_000
+
+
+def import_sources(board_id: str, rows: list[dict], *, title: str, query: str, digest: str,
+                   existing: set[str] | None, now: str) -> tuple[list[dict], list[str]]:
+    """Source drafts holding the original rows, and the source of every row.
+
+    An export up to SOURCE_PART_BYTES is one source with the ID it always had, so a re-import is still recognised; a
+    larger one becomes "title · part 2/7" sources of consecutive rows, and each evidence item points to the part with its row.
+    """
+    sizes = [len(json.dumps(row, sort_keys=True, ensure_ascii=False, default=str).encode()) + 2 for row in rows]
+    for number, size in enumerate(sizes, 1):
+        if size > MAX_ROW_BYTES:
+            raise ValueError(f"Row {number} is larger than {MAX_ROW_BYTES // 1_000_000} MB; leave out large columns in the query")
+    bounds, start, total = [], 0, 0
+    for index, size in enumerate(sizes):
+        if index > start and total + size > SOURCE_PART_BYTES:
+            bounds.append((start, index))
+            start, total = index, 0
+        total += size
+    bounds.append((start, len(rows)))
+    drafts: list[dict] = []
+    row_sources: list[str] = []
+    for part, (first, last) in enumerate(bounds, 1):
+        single = len(bounds) == 1
+        source_id = _stable(board_id, "import", digest) if single else _stable(board_id, "import", digest, str(part))
+        row_sources += [source_id] * (last - first)
+        if source_id in (existing or set()):
+            continue
+        drafts.append(action("source.add", {"id": source_id, "title": title if single else f"{title} · part {part}/{len(bounds)}",
+            "uri": f"import://{digest[:16]}" if single else f"import://{digest[:16]}/part-{part}",
+            "excerpt": json.dumps(rows[first:last], sort_keys=True, ensure_ascii=False, default=str), "query": query,
+            "source_kind": "primary", "created_at": now}, action_id=_stable(board_id, "source-action", source_id), author="Import"))
+    return drafts, row_sources
+
+
 def rows_to_actions(board_id: str, rows: list[dict], *, title: str,
                     query: str = "", subject_field: str | None = None,
                     object_field: str | None = None, predicate: str = "accessed",
@@ -116,18 +156,16 @@ def rows_to_actions(board_id: str, rows: list[dict], *, title: str,
 
     canonical_rows = json.dumps(rows, sort_keys=True, ensure_ascii=False, default=str)
     digest = hashlib.sha256((title + "\n" + query + "\n" + canonical_rows).encode()).hexdigest()
-    source_id = _stable(board_id, "import", digest)
     now = datetime.now(timezone.utc).isoformat()
-    drafts = []
-    if source_id not in (existing_sources or set()):
-        drafts.append(action("source.add", {"id": source_id, "title": title,
-            "uri": f"import://{digest[:16]}", "excerpt": canonical_rows, "query": query, "source_kind": "primary",
-            "created_at": now}, action_id=_stable(board_id, "source-action", source_id), author="Import"))
+    drafts, row_sources = import_sources(board_id, rows, title=title, query=query, digest=digest, existing=existing_sources, now=now)
+    seen_evidence: set[str] = set()
+    duplicates = 0
     seen_entities: set[str] = set()
     seen_facts: set[str] = set()
     assertions = 0
     skipped = 0
     for row_number, row in enumerate(rows, 1):
+        source_id = row_sources[row_number - 1]
         subject = str(row.get(subject_field) or "").strip()
         object_name = str(row.get(object_field) or "").strip()
         if not subject or not object_name:
@@ -158,6 +196,11 @@ def rows_to_actions(board_id: str, rows: list[dict], *, title: str,
                     action_id=_stable(board_id, "fact-action", fact_id), author="Import"))
         row_text = json.dumps(row, sort_keys=True, ensure_ascii=False, default=str)
         assertion_id = _stable(board_id, "assertion", source_id, fact_id, row_text)
+        # An export can repeat a row verbatim; it is one piece of evidence.
+        if assertion_id in seen_evidence:
+            duplicates += 1
+            continue
+        seen_evidence.add(assertion_id)
         timestamp = _time(next((str(row[key]) for key in ("valid_from", "StartTime", *TIME_FIELDS) if row.get(key)), None))
         end = _time(next((str(row[key]) for key in ("valid_to", "EndTime") if row.get(key)), None))
         drafts.append(action("assertion.add", {"id": assertion_id, "fact_id": fact_id,
@@ -167,7 +210,7 @@ def rows_to_actions(board_id: str, rows: list[dict], *, title: str,
         assertions += 1
     return drafts, {"rows": len(rows), "skipped": skipped, "entities": len(seen_entities),
                     "relations": len(seen_facts), "evidence": assertions,
-                    "source_id": source_id, "subject_field": subject_field,
+                    "source_id": row_sources[0], "source_parts": len(set(row_sources)), "duplicates": duplicates, "subject_field": subject_field,
                     "object_field": object_field}
 
 
@@ -195,17 +238,15 @@ def activity_rows_to_actions(board_id: str, rows: list[dict], *, title: str, rol
         raise ValueError(f"Column {operation_field!r} is missing. Available: {', '.join(sorted(keys))}")
     canonical_rows = json.dumps(rows, sort_keys=True, ensure_ascii=False, default=str)
     digest = hashlib.sha256((title + "\n" + query + "\n" + json.dumps(roles, sort_keys=True) + "\n" + canonical_rows).encode()).hexdigest()
-    source_id = _stable(board_id, "import", digest)
     now = datetime.now(timezone.utc).isoformat()
-    drafts: list[dict] = []
-    if source_id not in (existing_sources or set()):
-        drafts.append(action("source.add", {"id": source_id, "title": title, "uri": f"import://{digest[:16]}",
-            "excerpt": canonical_rows, "query": query, "source_kind": "primary", "created_at": now},
-            action_id=_stable(board_id, "source-action", source_id), author="Import"))
+    drafts, row_sources = import_sources(board_id, rows, title=title, query=query, digest=digest, existing=existing_sources, now=now)
+    seen_evidence: set[str] = set()
+    duplicates = 0
     seen_entities: set[str] = set()
     seen_activities: set[str] = set()
     evidence = skipped = 0
     for row_number, row in enumerate(rows, 1):
+        source_id = row_sources[row_number - 1]
         participants = []
         for mapping in roles:
             value = str(row.get(mapping["field"]) or "").strip()
@@ -235,6 +276,11 @@ def activity_rows_to_actions(board_id: str, rows: list[dict], *, title: str, rol
                     action_id=_stable(board_id, "activity-action", activity_id), author="Import"))
         row_text = json.dumps(row, sort_keys=True, ensure_ascii=False, default=str)
         assertion_id = _stable(board_id, "assertion", source_id, activity_id, row_text)
+        # An export can repeat a row verbatim; it is one piece of evidence.
+        if assertion_id in seen_evidence:
+            duplicates += 1
+            continue
+        seen_evidence.add(assertion_id)
         timestamp = _time(next((str(row[k]) for k in ("valid_from", "StartTime", *TIME_FIELDS) if row.get(k)), None))
         end = _time(next((str(row[k]) for k in ("valid_to", "EndTime") if row.get(k)), None))
         names = ", ".join(f"{m['role']} {row.get(m['field'])}" for m in roles if row.get(m["field"]))
@@ -245,9 +291,11 @@ def activity_rows_to_actions(board_id: str, rows: list[dict], *, title: str, rol
             action_id=_stable(board_id, "assertion-action", assertion_id), author="Import"))
         evidence += 1
     return drafts, {"rows": len(rows), "skipped": skipped, "entities": len(seen_entities), "relations": len(seen_activities),
-                    "activities": len(seen_activities), "evidence": evidence, "source_id": source_id,
+                    "activities": len(seen_activities), "evidence": evidence, "source_id": row_sources[0], "source_parts": len(set(row_sources)), "duplicates": duplicates,
                     "roles": [f"{m['field']} → {m['role']}" for m in roles]}
 
+
+GUID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 
 # Identifiers that are unique on their own (GUIDs, hashes, resource IDs) may join entities of different types
 # (a File and a Process with the same SHA-256 are one binary); names like IPs, FQDNs or emails only within a type.
@@ -280,7 +328,7 @@ def table_rows_to_actions(board_id: str, rows: list[dict], mapping, *, title: st
     device seen in DeviceNetworkEvents and in SigninLogs is one entity. Missing identifiers are added to it. Every row
     is its own unconfirmed evidence item with its own time and a locator such as "DeviceNetworkEvents ReportId=… DeviceId=…".
     """
-    from app.tables import locator_of, operation_of, participants_of, time_of
+    from app.tables import details_of, locator_of, operation_of, participants_of, structured, time_of
 
     if not rows:
         raise ValueError("The file contains no result rows")
@@ -288,14 +336,13 @@ def table_rows_to_actions(board_id: str, rows: list[dict], mapping, *, title: st
         raise ValueError("At most 50,000 rows per import; split the export or narrow the query")
     canonical_rows = json.dumps(rows, sort_keys=True, ensure_ascii=False, default=str)
     digest = hashlib.sha256((title + "\n" + query + "\n" + mapping.table + "\n" + canonical_rows).encode()).hexdigest()
-    source_id = _stable(board_id, "import", digest)
     now = datetime.now(timezone.utc).isoformat()
-    drafts: list[dict] = []
-    if source_id not in (existing_sources or set()):
-        drafts.append(action("source.add", {"id": source_id, "title": title, "uri": f"import://{digest[:16]}",
-            "excerpt": canonical_rows, "query": query, "source_kind": "primary", "created_at": now},
-            action_id=_stable(board_id, "source-action", source_id), author="Import"))
+    drafts, row_sources = import_sources(board_id, rows, title=title, query=query, digest=digest, existing=existing_sources, now=now)
+    seen_evidence: set[str] = set()
+    duplicates = 0
     by_name = dict(existing_entities or {})
+    # Current name per entity, to replace a bare GUID (AzureActivity knows only the object ID) by a display name.
+    names = {entity_id: name for (_, name), entity_id in by_name.items()}
     by_identifier = dict(existing_identifiers or {})
     have_identifier = set(known_identifiers or set())
     existing_ids = set(by_name.values()) | set(by_identifier.values())
@@ -307,6 +354,7 @@ def table_rows_to_actions(board_id: str, rows: list[dict], mapping, *, title: st
     evidence = skipped = identifiers_added = 0
     times: list[str] = []
     for row_number, row in enumerate(rows, 1):
+        source_id = row_sources[row_number - 1]
         participants: list[dict] = []
         labels: list[str] = []
         for part in participants_of(mapping, row):
@@ -330,8 +378,14 @@ def table_rows_to_actions(board_id: str, rows: list[dict], mapping, *, title: st
                 entity_id = _stable(board_id, "entity", kind, anchor)
             if entity_id not in existing_ids and entity_id not in created:
                 created.add(entity_id)
+                names[entity_id] = name
                 drafts.append(action("entity.add", {"id": entity_id, "name": name, "kind": kind, "description": ""},
                     action_id=_stable(board_id, "entity-action", entity_id), author="Import"))
+            elif GUID.fullmatch(names.get(entity_id, "")) and not GUID.fullmatch(name):
+                # Known so far only by its ID; this export has the display name.
+                names[entity_id] = name
+                drafts.append(action("entity.update", {"id": entity_id, "name": name},
+                    action_id=_stable(board_id, "entity-rename", entity_id, name), author="Import"))
             touched.add(entity_id)
             if part.get("by_name", True):
                 by_name.setdefault((kind.casefold(), name.casefold()), entity_id)
@@ -363,17 +417,24 @@ def table_rows_to_actions(board_id: str, rows: list[dict], mapping, *, title: st
                 drafts.append(action("fact.add", {"id": activity_id, "predicate": operation, "participants": participants,
                     "valid_from": None, "valid_to": None, "created_at": now},
                     action_id=_stable(board_id, "activity-action", activity_id), author="Import"))
-        row_text = json.dumps(row, sort_keys=True, ensure_ascii=False, default=str)
+        # The note holds the row with JSON columns as objects (readable in the evidence reader) and without empty columns.
+        row_text = json.dumps(structured(row), sort_keys=True, ensure_ascii=False, default=str)
         assertion_id = _stable(board_id, "assertion", source_id, activity_id, row_text)
+        # An export can repeat a row verbatim; it is one piece of evidence.
+        if assertion_id in seen_evidence:
+            duplicates += 1
+            continue
+        seen_evidence.add(assertion_id)
         start, end = time_of(mapping, row)
+        context = details_of(mapping, row)
         if start:
             times.append(start)
         drafts.append(action("assertion.add", {"id": assertion_id, "fact_id": activity_id, "stance": "supports", "confidence": 1,
-            "source_id": source_id, "note": row_text, "observation": f"{operation}: {', '.join(labels)}",
+            "source_id": source_id, "note": row_text, "observation": f"{operation}: {', '.join(labels)}" + "".join(f" · {c}" for c in context),
             "locator": locator_of(mapping, row, row_number), "created_at": now, "valid_from": start, "valid_to": end},
             action_id=_stable(board_id, "assertion-action", assertion_id), author="Import"))
         evidence += 1
     return drafts, {"rows": len(rows), "skipped": skipped, "entities": len(touched), "new_entities": len(created),
-                    "relations": len(activities), "evidence": evidence, "identifiers": identifiers_added, "source_id": source_id,
+                    "relations": len(activities), "evidence": evidence, "identifiers": identifiers_added, "source_id": row_sources[0], "source_parts": len(set(row_sources)), "duplicates": duplicates,
                     "table": mapping.table, "product": mapping.product,
                     "first_seen": min(times) if times else None, "last_seen": max(times) if times else None}

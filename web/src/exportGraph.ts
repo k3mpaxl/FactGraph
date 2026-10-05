@@ -15,6 +15,8 @@ export type ExportOptions = {
   title?: string; subtitle?: string; legend?: boolean; transparent?: boolean;
   measure?: (text: string, size: number, weight: number) => number;
   icon?: (kind: string, icon: string | undefined, color: string) => string;
+  /** Attack impact: badges by entity ID (groups as "group:<id>") and the attacker's fact IDs, drawn like on the canvas. */
+  impact?: { badges: Map<string, { tone: 'bad' | 'warn' | 'pivot' | 'muted'; label: string }>; attack: Set<string> } | null;
 }
 
 type Palette = Record<'canvas' | 'node' | 'border' | 'text' | 'text2' | 'text3' | 'accent' | 'labelBg' | 'lane' | TruthState, string>
@@ -88,7 +90,7 @@ export function buildGraphSvg(options: ExportOptions) {
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
   for (const node of nodes) {
     const b = boxes.get(node.id)!
-    const extraW = node.kind === 'activity' ? Math.max(0, measure(node.fact.predicate, 11, 650) / 2 - 14) : 0
+    const extraW = node.kind === 'activity' ? Math.max(0, measure(node.count > 1 ? `${node.fact.predicate} ×${node.count}` : node.fact.predicate, 11, 650) / 2 - 14) : 0
     minX = Math.min(minX, b.x - extraW); minY = Math.min(minY, b.y); maxX = Math.max(maxX, b.x + b.w + extraW); maxY = Math.max(maxY, b.y + b.h + (node.kind === 'activity' ? 32 : 0) + (node.kind === 'entity' && (node.container || node.hidden) ? 10 : 0))
   }
   if (!nodes.length) { minX = 0; minY = 0; maxX = 320; maxY = 120 }
@@ -127,9 +129,10 @@ export function buildGraphSvg(options: ExportOptions) {
   const labels: string[] = []
   for (const edge of edges) {
     const geometry = edgeGeometry(center(edge.source), center(edge.target), offsets.get(edge.id) ?? 0)
-    const color = p[edge.state]
-    const dash = edge.state === 'unknown' ? ' stroke-dasharray="5 4"' : ''
-    out.push(`<path d="${geometry.path.replace(/-?\d+\.\d+/g, v => String(n(Number(v))))}" fill="none" stroke="${color}" stroke-width="${edge.role ? 1.2 : edgeWidth(edge.count)}"${dash} marker-end="url(#arrow-${edge.state})"/>`)
+    const attack = !!options.impact?.attack.size && edge.factIds.some(id => options.impact!.attack.has(id))
+    const color = attack ? p.refuted : p[edge.state]
+    const dash = edge.state === 'unknown' && !attack ? ' stroke-dasharray="5 4"' : ''
+    out.push(`<path d="${geometry.path.replace(/-?\d+\.\d+/g, v => String(n(Number(v))))}" fill="none" stroke="${color}" stroke-width="${attack ? 2 : edge.role ? 1.2 : edgeWidth(edge.count)}"${dash} marker-end="url(#arrow-${attack ? 'refuted' : edge.state})"/>`)
     if (!edge.label) continue
     const { x, y } = geometry.label
     if (edge.role) {
@@ -146,15 +149,24 @@ export function buildGraphSvg(options: ExportOptions) {
     }
   }
 
+  const tones = { bad: [p.refuted, '#ffffff'], warn: [p.disputed, '#1a1205'], pivot: [p.node, p.refuted], muted: [mix(p.text3, p.node, 0.25), p.text2] } as const
   for (const node of nodes) {
     const b = boxes.get(node.id)!
+    const badge = (node.kind === 'entity' || node.kind === 'group') ? options.impact?.badges.get(node.id) : undefined
+    if (badge) {
+      const [fill, ink] = tones[badge.tone]
+      const w = measure(badge.label, 9.5, 700) + 12
+      labels.push(`<rect x="${n(b.x + 10)}" y="${n(b.y - 9)}" width="${n(w)}" height="16" rx="8" fill="${fill}"${badge.tone === 'pivot' ? ` stroke="${p.refuted}" stroke-dasharray="3 2"` : ''}/>`
+        + `<text x="${n(b.x + 16)}" y="${n(b.y + 2.5)}" font-size="9.5" font-weight="700" fill="${ink}">${text(badge.label)}</text>`)
+    }
     if (node.kind === 'entity') {
       const color = colorOf(node.entity.kind, node.entity.color)
       const type = typeByName.get(node.entity.kind)
       const tile = mix(color, p.node, 0.18), glyph = mix(color, p.text, 0.82)
       const hint = node.entity.identifiers[0]?.raw_value
       const maxText = b.w - 62
-      out.push(`<g filter="url(#shadow)"><rect x="${n(b.x)}" y="${n(b.y)}" width="${n(b.w)}" height="${n(b.h)}" rx="10" fill="${p.node}" stroke="${p.border}"/></g>`)
+      const ring = badge ? (badge.tone === 'pivot' ? p.refuted : badge.tone === 'muted' ? p.border : tones[badge.tone][0]) : p.border
+      out.push(`<g filter="url(#shadow)"><rect x="${n(b.x)}" y="${n(b.y)}" width="${n(b.w)}" height="${n(b.h)}" rx="10" fill="${p.node}" stroke="${ring}"${badge && badge.tone !== 'muted' ? ` stroke-width="1.6"${badge.tone === 'pivot' ? ' stroke-dasharray="4 3"' : ''}` : ''}/></g>`)
       out.push(`<rect x="${n(b.x - 0.5)}" y="${n(b.y + 10)}" width="3" height="${n(b.h - 20)}" rx="1.5" fill="${color}"/>`)
       out.push(`<rect x="${n(b.x + 8)}" y="${n(b.y + b.h / 2 - 15)}" width="30" height="30" rx="8" fill="${tile}"/>`)
       const icon = options.icon?.(node.entity.kind, type?.icon, glyph)
@@ -174,7 +186,7 @@ export function buildGraphSvg(options: ExportOptions) {
     } else if (node.kind === 'group') {
       const color = node.group.color || p.accent
       for (const shift of [10, 5]) out.push(`<rect x="${n(b.x + shift)}" y="${n(b.y + shift)}" width="${n(b.w)}" height="${n(b.h)}" rx="12" fill="${shift === 10 ? mix(p.node, p.text, 0.9) : mix(p.node, p.text, 0.95)}" stroke="${p.border}"/>`)
-      out.push(`<g filter="url(#shadow)"><rect x="${n(b.x)}" y="${n(b.y)}" width="${n(b.w)}" height="${n(b.h)}" rx="12" fill="${p.node}" stroke="${mix(color, p.border, 0.45)}"/></g>`)
+      out.push(`<g filter="url(#shadow)"><rect x="${n(b.x)}" y="${n(b.y)}" width="${n(b.w)}" height="${n(b.h)}" rx="12" fill="${p.node}" stroke="${badge ? tones[badge.tone][0] : mix(color, p.border, 0.45)}"${badge ? ' stroke-width="1.6"' : ''}/></g>`)
       out.push(`<rect x="${n(b.x + 10)}" y="${n(b.y + 10)}" width="30" height="30" rx="8" fill="${mix(color, p.node, 0.18)}"/>`)
       out.push(options.icon ? `<svg x="${n(b.x + 17)}" y="${n(b.y + 17)}" width="16" height="16" viewBox="0 0 24 24">${options.icon('__group__', undefined, color)}</svg>` : '')
       const summary = `${node.count} members · ${node.kinds.length === 1 ? node.kinds[0][0] : `${node.kinds.length} types`}${node.internal ? ` · ${node.internal} internal` : ''}`
@@ -191,14 +203,16 @@ export function buildGraphSvg(options: ExportOptions) {
         }
       }
     } else if (node.kind === 'activity') {
-      const color = p[node.fact.truth_state]
+      const attack = !!options.impact?.attack.size && node.facts.some(f => options.impact!.attack.has(f.id))
+      const color = attack ? p.refuted : p[node.fact.truth_state]
       const cx = b.x + 14, cy = b.y + 14
       out.push(`<rect x="${n(cx - 12)}" y="${n(cy - 12)}" width="24" height="24" rx="6" transform="rotate(45 ${n(cx)} ${n(cy)})" fill="${p.node}" stroke="${color}" stroke-width="1.5"${node.fact.truth_state === 'unknown' ? ' stroke-dasharray="3 2"' : ''}/>`)
       out.push(`<path d="M ${n(cx + 1)} ${n(cy - 6)} L ${n(cx - 4)} ${n(cy + 1)} L ${n(cx)} ${n(cy + 1)} L ${n(cx - 1)} ${n(cy + 6)} L ${n(cx + 4)} ${n(cy - 1)} L ${n(cx)} ${n(cy - 1)} Z" fill="${color}"/>`)
       const when = node.fact.assertions.map(a => a.valid_from).filter(Boolean).sort()[0] ?? node.fact.valid_from
       const sub = `${when ? new Date(when).toISOString().slice(5, 16).replace('T', ' ') : ''}${node.fact.technique ? ` ${node.fact.technique}` : ''}`.trim()
-      const w = measure(node.fact.predicate, 11, 650) + 8
-      labels.push(`<rect x="${n(cx - w / 2)}" y="${n(b.y + 33)}" width="${n(w)}" height="15" rx="4" fill="${p.canvas}"/><text x="${n(cx)}" y="${n(b.y + 44)}" text-anchor="middle" font-size="11" font-weight="650" fill="${p.text}">${text(node.fact.predicate)}</text>`
+      const label = node.count > 1 ? `${node.fact.predicate} ×${node.count}` : node.fact.predicate
+      const w = measure(label, 11, 650) + 8
+      labels.push(`<rect x="${n(cx - w / 2)}" y="${n(b.y + 33)}" width="${n(w)}" height="15" rx="4" fill="${p.canvas}"/><text x="${n(cx)}" y="${n(b.y + 44)}" text-anchor="middle" font-size="11" font-weight="650" fill="${p.text}">${text(label)}</text>`
         + (sub ? `<text x="${n(cx)}" y="${n(b.y + 57)}" text-anchor="middle" font-size="10" fill="${p.text3}">${text(sub)}</text>` : ''))
     }
   }

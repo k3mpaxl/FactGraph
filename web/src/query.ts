@@ -62,13 +62,23 @@ export function messageParts(requestId: string, payload: Record<string, unknown>
     JSON.stringify({ type: 'api-result-part', requestId, index, total, data: text.slice(index * size, (index + 1) * size) }))
 }
 
-/** Split actions for the relay by size as well as count, so a few very large actions never form one oversized message. */
-export function actionChunks<T>(items: T[], maxCount = 100, maxChars = 4_000_000): T[][] {
+/** Uvicorn closes a connection on a message above 16 MiB; an action alone above this (with room for the envelope) cannot be sent. */
+export const RELAY_LIMIT = 15 * 1024 * 1024
+
+/**
+ * Split actions for the relay by size as well as count, so a few very large actions never form one oversized message.
+ * An action that alone exceeds RELAY_LIMIT is left out (and collected in `tooLarge`): sending it would close the
+ * connection, and on reconnect the browser would send it again and again.
+ */
+export function actionChunks<T>(items: T[], maxCount = 100, maxChars = 4_000_000, tooLarge?: T[]): T[][] {
   const chunks: T[][] = []
   let current: T[] = []
   let size = 0
   for (const item of items) {
-    const length = JSON.stringify(item).length
+    const text = JSON.stringify(item)
+    const length = text.length
+    // UTF-8 takes at most three bytes per UTF-16 unit, so only long texts need the exact count.
+    if (length * 3 > RELAY_LIMIT && new TextEncoder().encode(text).length > RELAY_LIMIT) { tooLarge?.push(item); continue }
     if (current.length && (current.length >= maxCount || size + length > maxChars)) { chunks.push(current); current = []; size = 0 }
     current.push(item)
     size += length

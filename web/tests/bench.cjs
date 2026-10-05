@@ -2,7 +2,8 @@
 const path = require('node:path').resolve(process.argv[2])
 const { project } = require(path + '/board.js')
 const { validateDrafts } = require(path + '/validation.js')
-const { buildViewModel, groupSuggestions } = require(path + '/viewModel.js')
+const { buildViewModel, groupSuggestions, autoGroups } = require(path + '/viewModel.js')
+const { analyzeImpact } = require(path + '/impact.js')
 const { factsInWindow, timelineSteps } = require(path + '/timeline.js')
 const { placeNew } = require(path + '/layout.js')
 
@@ -23,6 +24,9 @@ const steps = [
   ['project', 200, () => project('b', ops)],
   ['buildViewModel', 120, data => buildViewModel(data.entities, data.facts, data.groups, { visibleLayers: null, collapseActivities: false, showLanes: false, entityTypes: [] })],
   ['groupSuggestions', 120, data => groupSuggestions(data.entities, data.facts, data.groups)],
+  ['autoGroups', 120, data => autoGroups(data.entities, data.facts, data.groups)],
+  // A tenth of the entities compromised from mid-September: every fact and evidence item is checked.
+  ['analyzeImpact', 120, data => analyzeImpact({ entities: data.entities.map((e, i) => i % 10 ? e : { ...e, compromise: { from: '2026-09-15T00:00:00Z' } }), facts: data.facts })],
   ['timeline window', 60, data => { timelineSteps(data.facts); return factsInWindow(data.facts, '2026-09-05T00:00:00Z', '2026-09-12T00:00:00Z', true) }],
   ['validateDrafts', 40, data => validateDrafts(data, [{ type: 'fact.add', payload: { id: 'fx', subject_id: 'e1', predicate: 'p', object_id: 'e2' } }])],
   ['placeNew (1,000 new)', 60, data => placeNew([...Array(1000).keys()].map(i => ({ type: 'entity.add', payload: { id: `n${i}` } })), data.entities.map(e => e.position))],

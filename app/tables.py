@@ -68,33 +68,69 @@ def parse_time(value) -> str | None:
     return moment.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+PATH_PART = re.compile(r"\[([^\]]+)\]|([^.\[]+)")
+
+
+def split_path(path: str) -> list[str]:
+    """ "Claims[http://schemas.microsoft.com/identity/claims/objectidentifier]" → ["Claims", "http://…/objectidentifier"]:
+    keys that contain dots are written in brackets."""
+    return [bracket or plain for bracket, plain in PATH_PART.findall(path)]
+
+
+def lookup(mapping: dict, key: str):
+    """Exact key, else the same key in another case (exports write countryOrRegion, docs CountryOrRegion)."""
+    if key in mapping:
+        return mapping[key]
+    folded = key.casefold()
+    return next((v for k, v in mapping.items() if isinstance(k, str) and k.casefold() == folded), None)
+
+
 def get(row: Row, path: str, cache: dict | None = None):
-    """A column, or a value inside a JSON column: "DeviceDetail.displayName", "TargetResources.0.userPrincipalName"."""
+    """A column, or a value inside a JSON column: "DeviceDetail.displayName", "TargetResources.0.userPrincipalName",
+    "LocationDetails.countryOrRegion", "Claims[http://schemas.microsoft.com/identity/claims/objectidentifier]"."""
     if path in row:
         return row[path]
-    head, _, rest = path.partition(".")
-    if not rest or head not in row:
+    parts = split_path(path)
+    if len(parts) < 2:
+        return lookup(row, path) if parts else None
+    head, rest = parts[0], parts[1:]
+    value = lookup(row, head)
+    if value is None:
         return None
-    value = row[head]
     if isinstance(value, str):
         key = (id(row), head)
         if cache is not None and key in cache:
             value = cache[key]
         else:
-            try:
-                value = json.loads(value) if value.strip()[:1] in "[{" else None
-            except ValueError:
-                value = None
+            value = parse_json(value)
             if cache is not None:
                 cache[key] = value
-    for part in rest.split("."):
+    for part in rest:
         if isinstance(value, list) and part.isdigit():
             value = value[int(part)] if int(part) < len(value) else None
         elif isinstance(value, dict):
-            value = value.get(part)
+            value = lookup(value, part)
         else:
             return None
     return value
+
+
+def parse_json(value: str):
+    try:
+        return json.loads(value) if value.strip()[:1] in "[{" else None
+    except ValueError:
+        return None
+
+
+def structured(row: Row) -> dict:
+    """The row for the evidence note: JSON columns as objects instead of escaped text, empty columns left out."""
+    out = {}
+    for key, value in row.items():
+        if value in (None, "", "[]", "{}"):
+            continue
+        parsed = parse_json(value) if isinstance(value, str) else None
+        out[key] = parsed if parsed not in (None, [], {}) else value
+    return out
 
 
 def text(value) -> str:
@@ -161,6 +197,8 @@ class Mapping:
     time: tuple[str, ...] = ("Timestamp", "TimeGenerated")
     end: tuple[str, ...] = ()
     locator: tuple[str, ...] = ("ReportId", "DeviceId")
+    # Context for the observation text ("status Failure · role Owner"): label and column/path or function.
+    details: tuple[tuple[str, object], ...] = ()
 
 
 def url_kind(value: str) -> str:
@@ -220,6 +258,61 @@ def initiating_process(role="via") -> Part:
 def sign_in(row: Row, g: Callable, result="ResultType", error="ErrorCode") -> str:
     code = text(g(result)) or text(g(error))
     return "signed in" if code in ("", "0") else f"sign-in failed ({code})"
+
+
+OBJECT_CLAIM = "Claims[http://schemas.microsoft.com/identity/claims/objectidentifier]"
+
+
+def place(row: Row, g: Callable) -> str:
+    """City and state from LocationDetails (Entra sign-ins) or City/State (Defender XDR)."""
+    return ", ".join(v for v in (text(g("LocationDetails.city")) or text(g("City")), text(g("LocationDetails.state")) or text(g("State"))) if v)
+
+
+def arm_phrase(value: str) -> str:
+    """MICROSOFT.COGNITIVESERVICES/ACCOUNTS/DEPLOYMENTS/WRITE → "write cognitiveservices/accounts/deployments"."""
+    if "/" not in value:
+        return value
+    parts = value.lower().split("/")
+    verb, body = parts[-1], parts[:-1]
+    if verb == "action" and len(body) > 1:
+        verb, body = body[-1], body[:-1]
+    provider = body[0].removeprefix("microsoft.")
+    return f"{verb} {'/'.join([provider, *(p for p in body[1:] if p != 'subscriptions')])}"
+
+
+def arm_operation(row: Row, g: Callable) -> str:
+    """Start, Accept and Success of one Azure operation are one activity; failures are their own."""
+    operation = text(g("OperationName")) or arm_phrase(text(g("OperationNameValue")))
+    return f"{operation} (failed)" if text(g("ActivityStatusValue")).lower() == "failure" else operation
+
+
+def credential_name(row: Row, g: Callable) -> str:
+    key = text(g("ServicePrincipalCredentialKeyId")) or text(g("ServicePrincipalCredentialThumbprint"))
+    return f"{text(g('ClientCredentialType')) or 'credential'} {key}" if key else ""
+
+
+def key_name(row: Row, g: Callable) -> str:
+    """Named like the credential in sign-ins (ClientCredentialType + key ID), so both read the same on the board."""
+    key, kind = text(g("KeyId")), text(g("KeyType")).lower()
+    label = "clientSecret" if kind == "password" else "certificate" if "cert" in kind else "credential"
+    return f"{label} {key}" if key else ""
+
+
+def gitlab_operation(row: Row, g: Callable) -> str:
+    event = text(g("event_type")) or text(g("details.event_name"))
+    if event == "repository_git_operation":
+        verb, protocol = text(g("details.custom_message.verb")), text(g("details.custom_message.protocol"))
+        return f"git {verb} ({protocol})" if verb and protocol else f"git {verb}" if verb else "git operation"
+    return event.replace("_", " ")
+
+
+SIGN_IN_DETAILS = (("location", place), ("ASN", "AutonomousSystemNumber"), ("named network", "NetworkLocationDetails.0.networkNames.0"),
+                   ("conditional access", "ConditionalAccessStatus"), ("user agent", "UserAgent"), ("session", "UniqueTokenIdentifier"))
+
+
+def location(fields=("LocationDetails.countryOrRegion", "Location", "Country")) -> Part:
+    """The country of a sign-in (LocationDetails.countryOrRegion); city and state go into the observation."""
+    return Part("source", "Location", fields)
 
 
 MAPPINGS: tuple[Mapping, ...] = (
@@ -282,15 +375,35 @@ MAPPINGS: tuple[Mapping, ...] = (
     Mapping("EntraIdSignInEvents", "Defender XDR", ("AccountUpn", "Application", "ErrorCode", "LogonType"), (
         Part("actor", "User", ("AccountUpn",), (Ident("AccountObjectId", namespace="entra-object-id"), Ident("AccountUpn", "email")), lower=True),
         Part("source", "IP", ("IPAddress",), (Ident("IPAddress", "ip"),)),
+        location(("Country",)),
         Part("target", "Service", ("Application",), (Ident("ApplicationId", namespace="entra-app-id"),)),
         device("via", ("DeviceName",), (Ident("AadDeviceId", namespace="entra-device-id"),))),
-        operation=lambda r, g: sign_in(r, g, "ErrorCode"), locator=("ReportId", "RequestId", "CorrelationId")),
+        operation=lambda r, g: sign_in(r, g, "ErrorCode"), locator=("ReportId", "RequestId", "CorrelationId"),
+        details=(("location", place), ("user agent", "UserAgent"))),
+    Mapping("AADSignInEventsBeta", "Defender XDR", ("AccountUpn", "Application", "ErrorCode", "LogonType"), (
+        Part("actor", "User", ("AccountUpn",), (Ident("AccountObjectId", namespace="entra-object-id"), Ident("AccountUpn", "email")), lower=True),
+        Part("source", "IP", ("IPAddress",), (Ident("IPAddress", "ip"),)),
+        location(("Country",)),
+        Part("target", "Service", ("Application",), (Ident("ApplicationId", namespace="entra-app-id"),)),
+        device("via", ("DeviceName",), (Ident("AadDeviceId", namespace="entra-device-id"),))),
+        operation=lambda r, g: sign_in(r, g, "ErrorCode"), locator=("ReportId", "RequestId", "CorrelationId"),
+        details=(("location", place), ("user agent", "UserAgent"))),
     Mapping("EntraIdSpnSignInEvents", "Defender XDR", ("ServicePrincipalName", "ServicePrincipalId", "ErrorCode"), (
         Part("identity", "Service Principal", ("ServicePrincipalName",), (Ident("ServicePrincipalId", namespace="entra-object-id"),
              Ident("ApplicationId", namespace="entra-app-id"))),
         Part("source", "IP", ("IPAddress",), (Ident("IPAddress", "ip"),)),
+        location(("Country",)),
         Part("target", "Service", ("ResourceDisplayName", "Application"), (Ident("ResourceId", namespace="entra-app-id"),))),
-        operation=lambda r, g: sign_in(r, g, "ErrorCode"), locator=("ReportId", "RequestId", "CorrelationId")),
+        operation=lambda r, g: sign_in(r, g, "ErrorCode"), locator=("ReportId", "RequestId", "CorrelationId"),
+        details=(("location", place),)),
+    Mapping("AADSpnSignInEventsBeta", "Defender XDR", ("ServicePrincipalName", "ServicePrincipalId", "ErrorCode"), (
+        Part("identity", "Service Principal", ("ServicePrincipalName",), (Ident("ServicePrincipalId", namespace="entra-object-id"),
+             Ident("ApplicationId", namespace="entra-app-id"))),
+        Part("source", "IP", ("IPAddress",), (Ident("IPAddress", "ip"),)),
+        location(("Country",)),
+        Part("target", "Service", ("ResourceDisplayName", "Application"), (Ident("ResourceId", namespace="entra-app-id"),))),
+        operation=lambda r, g: sign_in(r, g, "ErrorCode"), locator=("ReportId", "RequestId", "CorrelationId"),
+        details=(("location", place),)),
     Mapping("CloudAppEvents", "Defender XDR", ("Application", "ActionType", "AccountObjectId", "ObjectName"), (
         Part("actor", "User", ("AccountDisplayName", "AccountId"), (Ident("AccountObjectId", namespace="entra-object-id"),)),
         Part("source", "IP", ("IPAddress",), (Ident("IPAddress", "ip"),)),
@@ -331,20 +444,31 @@ MAPPINGS: tuple[Mapping, ...] = (
     Mapping("SigninLogs", "Sentinel", ("UserPrincipalName", "AppDisplayName", "ResultType", "IPAddress", "ConditionalAccessStatus"), (
         Part("actor", "User", ("UserPrincipalName",), (Ident("UserId", namespace="entra-object-id"), Ident("UserPrincipalName", "email")), lower=True),
         Part("source", "IP", ("IPAddress",), (Ident("IPAddress", "ip"),)),
+        location(),
         Part("target", "Service", ("AppDisplayName",), (Ident("AppId", namespace="entra-app-id"),)),
         Part("via", "Device", ("DeviceDetail.displayName",), (Ident("DeviceDetail.deviceId", namespace="entra-device-id"),), lower=True)),
-        operation=sign_in, time=("TimeGenerated", "CreatedDateTime"), locator=("CorrelationId", "Id")),
+        operation=sign_in, time=("TimeGenerated", "CreatedDateTime"), locator=("CorrelationId", "Id"), details=SIGN_IN_DETAILS),
     Mapping("AADNonInteractiveUserSignInLogs", "Sentinel", ("UserPrincipalName", "AppDisplayName", "ResultType", "IPAddress", "IsInteractive"), (
         Part("actor", "User", ("UserPrincipalName",), (Ident("UserId", namespace="entra-object-id"), Ident("UserPrincipalName", "email")), lower=True),
         Part("source", "IP", ("IPAddress",), (Ident("IPAddress", "ip"),)),
+        location(),
         Part("target", "Service", ("AppDisplayName",), (Ident("AppId", namespace="entra-app-id"),)),
         Part("via", "Device", ("DeviceDetail.displayName",), (Ident("DeviceDetail.deviceId", namespace="entra-device-id"),), lower=True)),
-        operation=lambda r, g: sign_in(r, g).replace("signed in", "signed in (non-interactive)"), time=("TimeGenerated", "CreatedDateTime"), locator=("CorrelationId", "Id")),
+        operation=lambda r, g: sign_in(r, g).replace("signed in", "signed in (non-interactive)"), time=("TimeGenerated", "CreatedDateTime"),
+        locator=("CorrelationId", "Id"), details=SIGN_IN_DETAILS),
+    # Service principal sign-ins: name, object ID and app ID are one service principal; the credential (secret or
+    # certificate) it used is its own entity, so a newly added and then used credential stands out.
     Mapping("AADServicePrincipalSignInLogs", "Sentinel", ("ServicePrincipalName", "ServicePrincipalId", "ResourceDisplayName", "ResultType"), (
         Part("identity", "Service Principal", ("ServicePrincipalName",), (Ident("ServicePrincipalId", namespace="entra-object-id"), Ident("AppId", namespace="entra-app-id"))),
+        Part("tool", "Credential", ("ServicePrincipalCredentialKeyId", "ServicePrincipalCredentialThumbprint"),
+             (Ident("ServicePrincipalCredentialKeyId", namespace="entra-credential-key-id"), Ident("ServicePrincipalCredentialThumbprint", namespace="certificate-thumbprint")),
+             name=credential_name),
         Part("source", "IP", ("IPAddress",), (Ident("IPAddress", "ip"),)),
-        Part("target", "Service", ("ResourceDisplayName",), (Ident("ResourceIdentity", namespace="entra-app-id"),))),
-        operation=sign_in, locator=("CorrelationId", "Id")),
+        location(),
+        Part("target", "Service", ("ResourceDisplayName",), (Ident("ResourceIdentity", namespace="entra-app-id"), Ident("ResourceServicePrincipalId", namespace="entra-object-id")))),
+        operation=sign_in, time=("TimeGenerated", "CreatedDateTime"), locator=("CorrelationId", "Id"),
+        details=(("location", place), ("ASN", "AutonomousSystemNumber"), ("named network", "NetworkLocationDetails.0.networkNames.0"),
+                 ("credential", "ClientCredentialType"), ("user agent", "UserAgent"), ("session", "UniqueTokenIdentifier"))),
     Mapping("AuditLogs", "Sentinel", ("OperationName", "InitiatedBy", "TargetResources", "Category"), (
         Part("actor", "User", ("InitiatedBy.user.userPrincipalName",), (Ident("InitiatedBy.user.id", namespace="entra-object-id"),
              Ident("InitiatedBy.user.userPrincipalName", "email")), lower=True),
@@ -352,13 +476,19 @@ MAPPINGS: tuple[Mapping, ...] = (
         Part("source", "IP", ("InitiatedBy.user.ipAddress",), (Ident("InitiatedBy.user.ipAddress", "ip"),)),
         Part("target", "User", ("TargetResources.0.userPrincipalName", "TargetResources.0.displayName"), (Ident("TargetResources.0.id", namespace="entra-object-id"),))),
         operation=lambda r, g: text(g("OperationName")), time=("TimeGenerated", "ActivityDateTime"), locator=("CorrelationId", "Id")),
+    # Azure Resource Manager operations. The caller is a UPN for users and the object ID for service principals; the
+    # token claims add the app ID (service principal) or object ID (user), so both join the sign-in logs.
     Mapping("AzureActivity", "Sentinel", ("Caller", "OperationNameValue", "ResourceGroup", "CallerIpAddress"), (
-        Part("actor", "User", ("Caller",), (Ident("Caller", "email"),), lower=True,
-             kind_of=lambda v: "User" if "@" in v else "Service Principal"),
-        Part("source", "IP", ("CallerIpAddress",), (Ident("CallerIpAddress", "ip"),)),
+        Part("actor", "User", ("Caller",), (Ident("Caller", "email"), Ident(OBJECT_CLAIM, namespace="entra-object-id")), lower=True,
+             name=lambda r, g: text(g("Caller")) if "@" in text(g("Caller")) else ""),
+        Part("identity", "Service Principal", ("Caller",), (Ident("Caller", namespace="entra-object-id"), Ident("Claims.appid", namespace="entra-app-id")),
+             name=lambda r, g: text(g("Caller")) if "@" not in text(g("Caller")) else ""),
+        Part("source", "IP", ("CallerIpAddress", "HTTPRequest.clientIpAddress"), (Ident("CallerIpAddress", "ip"),)),
         Part("target", "Azure Resource", ("_ResourceId",), (Ident("_ResourceId", "resource_id"), Ident("ResourceId", "resource_id")),
              name=resource_name, kind_of=resource_kind)),
-        operation=lambda r, g: text(g("OperationName")) or text(g("OperationNameValue")), locator=("CorrelationId", "EventDataId")),
+        operation=arm_operation, locator=("CorrelationId", "EventDataId"),
+        details=(("status", "ActivityStatusValue"), ("role", "Authorization.evidence.role"), ("error", "Properties.statusMessage.error.code"),
+                 ("policy", "Properties.policies.0.policyDefinitionDisplayName"), ("session", "Claims.uti"))),
     Mapping("AzureDiagnostics (Key Vault)", "Sentinel", ("OperationName", "CallerIPAddress", "ResourceProvider", "identity_claim_appid_g"), (
         Part("actor", "User", ("identity_claim_http_schemas_xmlsoap_org_ws_2005_05_identity_claims_upn_s", "identity_claim_upn_s"),
              (Ident("identity_claim_http_schemas_microsoft_com_identity_claims_objectidentifier_g", namespace="entra-object-id"),), lower=True),
@@ -389,6 +519,34 @@ MAPPINGS: tuple[Mapping, ...] = (
              name=lambda r, g: re.sub(r"^\[?([^\]]+?)\]?(?::\d+)?$", r"\1", text(g("ClientIP")) or text(g("Client_IPAddress")))),
         Part("target", "Other", ("OfficeObjectId", "ObjectId", "Site_Url"))),
         operation=lambda r, g: text(g("Operation")), locator=("OfficeId", "Id")),
+    # Output of FactGraph's "Prove the rotation" KQL (AuditLogs: secrets and certificates added to or removed from app
+    # registrations and service principals, one row per key). Removed keys join the credentials seen in sign-ins by key ID.
+    Mapping("Entra credential changes", "Entra ID", ("CredentialChange", "KeyId", "ApplicationObjectId"), (
+        Part("actor", "User", ("Actor",), (Ident("Actor", "email"), Ident("ActorId", namespace="entra-object-id")), lower=True,
+             name=lambda r, g: text(g("Actor")) if "@" in text(g("Actor")) else ""),
+        Part("actor", "Service Principal", ("Actor",), (Ident("ActorId", namespace="entra-object-id"),),
+             name=lambda r, g: text(g("Actor")) if "@" not in text(g("Actor")) else ""),
+        Part("source", "IP", ("ActorIp",), (Ident("ActorIp", "ip"),)),
+        Part("target", "Credential", ("KeyId",), (Ident("KeyId", namespace="entra-credential-key-id"),), name=key_name),
+        Part("target", "Service Principal", ("Application",), (Ident("ApplicationObjectId", namespace="entra-application-object-id"),))),
+        operation=lambda r, g: f"credential {text(g('CredentialChange')).lower() or 'changed'}" + ("" if text(g("Result")).lower() in ("", "success") else " (failed)"),
+        time=("TimeGenerated",), locator=("CorrelationId", "KeyId"), details=(("key name", "KeyName"), ("operation", "OperationName"))),
+    # GitLab audit events (standard GitLab audit event format, e.g. a Sentinel custom table such as GitLabAuditLogs_CL).
+    Mapping("GitLab audit events", "GitLab", ("author_id", "author_name", "entity_path", "entity_type", "target_type", "details"), (
+        Part("actor", "User", ("author_name", "details.author_name"), (Ident("author_id", namespace="gitlab-user-id"),)),
+        Part("source", "IP", ("ip_address", "details.ip_address"), (Ident("ip_address", "ip"),)),
+        Part("target", "Repository", ("entity_path",), (Ident("entity_id", namespace="gitlab-project-id"),),
+             name=lambda r, g: text(g("entity_path")) if text(g("entity_type")) == "Project" else ""),
+        Part("target", "User", ("entity_path",), (Ident("entity_id", namespace="gitlab-user-id"),),
+             name=lambda r, g: text(g("entity_path")) if text(g("entity_type")) == "User" else ""),
+        Part("target", "File", ("details.file_path",), path=("details.file_path",), scope=("entity_path",)),
+        Part("tool", "Credential", ("details.pat_name",), (Ident("details.pat_id", namespace="gitlab-access-token-id"),),
+             name=lambda r, g: f"access token {text(g('details.pat_name'))}" if text(g("details.pat_name")) else ""),
+        Part("tool", "Credential", ("details.custom_message.gl_key_id",), (Ident("details.custom_message.gl_key_id", namespace="gitlab-ssh-key-id"),),
+             name=lambda r, g: f"SSH key {text(g('details.custom_message.gl_key_id'))}" if text(g("details.custom_message.gl_key_id")) else "")),
+        operation=gitlab_operation, time=("created_at", "TimeGenerated"), locator=("id",),
+        details=(("ref", "details.ref"), ("user agent", "details.user_agent"),
+                 ("message", lambda r, g: text(g("details.custom_message"))))),
 )
 
 # ASIM (normalised Sentinel parsers, e.g. _Im_Authentication): the same fields for every source.
@@ -561,6 +719,17 @@ def operation_of(mapping: Mapping, row: Row) -> str:
     if " " in mapping.operation:
         return mapping.operation
     return phrase(g(mapping.operation)) or "observed"
+
+
+def details_of(mapping: Mapping, row: Row) -> list[str]:
+    cache: dict = {}
+    g = lambda path: get(row, path, cache)  # noqa: E731
+    out = []
+    for label, source in mapping.details:
+        value = text(source(row, g)) if callable(source) else text(g(source))
+        if value:
+            out.append(f"{label} {value}")
+    return out
 
 
 def time_of(mapping: Mapping, row: Row) -> tuple[str | None, str | None]:

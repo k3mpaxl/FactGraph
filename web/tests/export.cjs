@@ -54,4 +54,23 @@ assert.equal(escapeXml(`<a href="x">&'</a>`), '&lt;a href=&quot;x&quot;&gt;&amp;
 assert.equal(mix('#ff0000', '#0000ff', 0.5), '#800080')
 const empty = buildGraphSvg({ ...base, only: new Set(['nope']) })
 assert.equal(empty.nodeCount, 0)
+// Attack impact: the same markers as on the canvas, red attacker edges and diamonds.
+{
+  const { analyzeImpact, exportMarks } = require(path + '/impact.js')
+  clock = 0
+  const attack = [act('entity.add', { id: 'cred', name: 'stolen secret', kind: 'Credential', x: 0, y: 0 }), act('entity.add', { id: 'vault', name: 'kv-prod', kind: 'Key Vault', x: 400, y: 0 }),
+    act('entity.add', { id: 'calm', name: 'unrelated', kind: 'Device', x: 0, y: 300 }), act('entity.add', { id: 'other', name: 'other', kind: 'Device', x: 400, y: 300 }),
+    act('fact.add', { id: 'f', predicate: 'secret get', participants: [{ entity_id: 'cred', role: 'tool' }, { entity_id: 'vault', role: 'target' }] }),
+    act('assertion.add', { id: 'e', fact_id: 'f', stance: 'supports', note: 'row', valid_from: '2026-09-20T00:00:00Z' }),
+    act('fact.add', { id: 'g', subject_id: 'calm', predicate: 'connects to', object_id: 'other' }),
+    act('entity.update', { id: 'cred', compromise: { from: '2026-09-15T00:00:00Z' } })]
+  const data = project('b', attack).data
+  const view = buildViewModel(data.entities, data.facts, data.groups, { visibleLayers: null, collapseActivities: false, showLanes: false, entityTypes: [] })
+  const marks = exportMarks(analyzeImpact(data), data.groups)
+  assert.deepEqual([...marks.badges.values()].map(b => b.label).sort(), ['Compromised', 'Secrets exposed'])
+  const svg = buildGraphSvg({ nodes: view.nodes, edges: view.edges, entityTypes: [], theme: 'light', measure: (t, s) => t.length * s * 0.55, impact: marks }).svg
+  assert.match(svg, />Compromised</); assert.match(svg, />Secrets exposed</)
+  assert.equal((svg.match(/marker-end="url\(#arrow-refuted\)"/g) ?? []).length, 2, 'both spokes of the attacker activity are red; the unrelated relation is not')
+  assert.ok(!buildGraphSvg({ nodes: view.nodes, edges: view.edges, entityTypes: [], theme: 'light', measure: (t, s) => t.length * s * 0.55 }).svg.includes('Compromised'), 'without impact: no markers')
+}
 console.log('SVG export: escaping, bundled groups, activities, lanes, legend, area/selection, themes and PNG size limits passed')

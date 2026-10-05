@@ -353,6 +353,12 @@ async def get_graph(board_id: str):
     return (await browser_command(board_id, "snapshot"))["graph"]
 
 
+@app.get("/api/boards/{board_id}/impact")
+async def get_impact(board_id: str):
+    """Attack impact of entities marked compromised: attacker steps, impacted resources, new pivots, what to rotate, KQL to hunt."""
+    return (await browser_command(board_id, "impact"))["impact"]
+
+
 @app.post("/api/boards/{board_id}/entities", status_code=201)
 async def create_entity(board_id: str, body: EntityInput):
     try:
@@ -377,7 +383,7 @@ async def update_entity(board_id: str, entity_id: str, body: EntityUpdate):
     index = (await browser_command(board_id, "index"))["index"]
     if entity_id not in {entity["id"] for entity in index["entities"]}:
         raise HTTPException(404, "Entity does not exist on this board")
-    values = body.model_dump(exclude_unset=True)
+    values = body.model_dump(exclude_unset=True, by_alias=True)
     if not values:
         raise HTTPException(422, "At least one entity field is required")
     if any(not isinstance(values[key], str) or not values[key].strip() for key in ("name", "kind") if key in values):

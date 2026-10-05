@@ -20,7 +20,7 @@ class StrictModel(BaseModel):
     @model_validator(mode="after")
     def field_invariants(self):
         nullable = {'id', 'source_id', 'valid_from', 'valid_to', 'color', 'x', 'y', 'subject_field', 'object_field', 'predicate_field', 'expected_source_revision', 'expected_revision',
-                    'layer', 'rule', 'technique', 'container_id', 'operation_field', 'layers'}
+                    'layer', 'rule', 'technique', 'container_id', 'operation_field', 'layers', 'since', 'until', 'compromise', 'rotated_at'}
         for key in self.model_fields_set:
             value = getattr(self, key)
             if value is None and key not in nullable:
@@ -98,8 +98,32 @@ class RowsInput(StrictModel):
     subject_kind: str = "IP"
     object_kind: str = "File"
 
+class CompromiseInput(StrictModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+    since: str | None = Field(default=None, alias="from")
+    until: str | None = Field(default=None, alias="to")
+    note: str = Field(default="", max_length=2000)
+    cleared: bool = False
+
+    @model_validator(mode="after")
+    def window(self):
+        if self.since and self.until and as_utc(self.since) > as_utc(self.until):
+            raise ValueError("Compromise end must be after its start")
+        for value in (self.since, self.until):
+            if value:
+                as_utc(value)
+        return self
+
 class EntityUpdate(StrictModel):
+    compromise: CompromiseInput | None = Field(default=None, description="Stolen credential / attacker IP, ISO from/to optional; null clears.")
+    rotated_at: str | None = None
     pinned: bool | None = None
+
+    @model_validator(mode="after")
+    def rotation_time(self):
+        if self.rotated_at:
+            as_utc(self.rotated_at)
+        return self
     layer: Layer | None = Field(default=None, description=LAYER_HELP + " Explicit null returns to the inferred layer.")
     name: str | None = Field(default=None, min_length=1)
     kind: str | None = Field(default=None, min_length=1)

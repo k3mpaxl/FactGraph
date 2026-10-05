@@ -33,7 +33,7 @@ const act = (type, payload = {}, extra = {}) => ({ id: `a${++n}`, boardId: 'b', 
   const afterRead = noticesFor(new Map([['b3', [act('entity.add', {}, { channel: 'MCP', author: 'Claude', batch_id: 'b3' })]]]), 'me', [{ ...next.updates[0], read: true }])
   assert.equal(afterRead.created.length, 0)
   assert.equal(afterRead.updates[0].read, false, 'new changes make it unread again')
-  const later = noticesFor(new Map([['b4', [act('entity.add', {}, { channel: 'MCP', author: 'Claude', batch_id: 'b4' })]]]), 'me', next.updates, '2026-10-04T12:00:00Z')
+  const later = noticesFor(new Map([['b4', [act('entity.add', {}, { channel: 'MCP', author: 'Claude', batch_id: 'b4' })]]]), 'me', next.updates, new Date(Date.now() + 3 * 60_000).toISOString())
   assert.equal(later.created.length, 1, 'older than two minutes: new notice')
   // A single new entity points to itself; colleague notices are quiet; moves alone say nothing.
   const one = noticesFor(new Map([['c', [act('entity.add', { id: 'e9' }, { actor: 'other', author: 'Ben', batch_id: 'c' })]], ['d', [act('entity.position', {}, { actor: 'other', batch_id: 'd' })]]]), 'me', [])

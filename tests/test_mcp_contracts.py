@@ -49,7 +49,7 @@ class ParityContracts(unittest.IsolatedAsyncioTestCase):
 
 
 class AgentGuidance(unittest.IsolatedAsyncioTestCase):
-    AGENT_TOOLS = {'get_graph', 'import_defender_rows', 'find_entities', 'create_entity', 'update_entity', 'merge_entities', 'delete_entity', 'add_identifier',
+    AGENT_TOOLS = {'get_graph', 'get_impact', 'import_defender_rows', 'find_entities', 'create_entity', 'update_entity', 'merge_entities', 'delete_entity', 'add_identifier',
                    'create_relation', 'update_relation', 'delete_relation', 'create_activity', 'update_activity', 'create_source', 'update_source',
                    'add_evidence', 'update_evidence', 'review_evidence', 'retract_evidence', 'import_rows', 'import_activities',
                    'create_group', 'update_group', 'export_image', 'undo'}
@@ -60,8 +60,9 @@ class AgentGuidance(unittest.IsolatedAsyncioTestCase):
         self.assertEqual({t.name for t in tools}, self.AGENT_TOOLS)
         # Tool definitions are loaded into every agent session; keep them lean.
         size = sum(len(json.dumps(t.model_dump(exclude_none=True))) for t in tools)
-        # 9,300: import_defender_rows (about 250 tokens) was added in v0.5.0; keep further growth deliberate.
-        self.assertLess(size // 4, 9300, f'agent tool definitions use about {size // 4} tokens')
+        # 9,300: import_defender_rows (about 250 tokens) was added in v0.5.0; 9,500: get_impact and the compromise
+        # marking on update_entity (about 250 tokens) for attack impact. Keep further growth deliberate.
+        self.assertLess(size // 4, 9500, f'agent tool definitions use about {size // 4} tokens')
         for tool in tools:
             self.assertGreater(len(tool.description or ''), 30, tool.name)
             self.assertNotIn('REST equivalent', tool.description, tool.name)

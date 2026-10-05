@@ -13,6 +13,7 @@ from mcp.types import ToolAnnotations
 # REST endpoint function name -> agent tool name, with an optional sharper purpose text.
 AGENT_TOOLS: dict[str, tuple[str, str | None]] = {
     'get_graph': ('get_graph', None),
+    'get_impact': ('get_impact', None),
     'list_entities': ('find_entities', 'Find existing entities by name, identifier or type (q) before creating new ones; returns IDs and identifiers. Paginate with offset/limit.'),
     'create_entity': ('create_entity', None),
     'update_entity': ('update_entity', None),

@@ -137,7 +137,7 @@ Notes:
 
 - **Exactly one instance.** The relay keeps the list of connected browsers in memory; with several instances, analysts on different instances would not see each other. Do not scale out.
 - **Web sockets must be on**, otherwise the board stays offline. **Always On** prevents the app from idling and dropping connections.
-- Prefer a pinned version (`k3mpaxl/factgraph:0.5.0`) over `latest` during an incident, so a restart never changes the version.
+- Prefer a pinned version (`k3mpaxl/factgraph:0.5.1`) over `latest` during an incident, so a restart never changes the version.
 - App Service **HTTP logging** is off by default. If you enable it, it records request URLs, which contain board IDs.
 - **App Service Authentication** (Entra ID sign-in) can be put in front of the UI. Agents and scripts then also need an Entra token, and if the incident involves your own tenant, an identity provider you cannot trust is no protection. IP access restrictions are often the better choice there.
 - When the incident is closed: export the boards as JSON, then `az group delete -n $RG`. Nothing remains on the server side.
@@ -430,8 +430,8 @@ cd web && npm run build && DOCS_SCREENSHOTS=1 npx playwright test e2e/docs-scree
 - **Publish Docker image** builds the image for `linux/amd64` and `linux/arm64` on a version tag (`v*.*.*`) or via **Run workflow**, and publishes it as `latest` and with the version number. It requires the repository secrets `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` (a Docker Hub access token with write permission).
 
 ```bash
-git tag v0.5.0
-git push origin v0.5.0
+git tag v0.5.1
+git push origin v0.5.1
 ```
 
 A manual multi-arch build is possible with `./deploy/publish-multiarch.sh` (`FACTGRAPH_IMAGE` and `FACTGRAPH_VERSION` override namespace and version).

@@ -7,11 +7,12 @@ let n = 0
 const act = (type, payload = {}, extra = {}) => ({ id: `a${++n}`, boardId: 'b', actor: 'me', author: 'Ana', clock: n, at: '2026-10-04T10:00:00.000Z', type, payload: { id: `p${n}`, ...payload }, channel: 'UI', batch_id: 'x', ...extra })
 
 ;(async () => {
-  // Who changed it: own canvas is silent; agents, GTIEnricher and colleagues are told apart.
+  // Who changed it: own canvas is silent; agents, Enricher and colleagues are told apart.
   assert.equal(classify([act('entity.add')], 'me'), null)
   assert.deepEqual(classify([act('entity.add', {}, { channel: 'MCP', author: 'Claude' })], 'me'), { kind: 'agent', author: 'Claude (MCP)' })
   assert.deepEqual(classify([act('entity.add', {}, { channel: 'REST', author: 'REST' })], 'me'), { kind: 'agent', author: 'Agent via REST' })
-  assert.equal(classify([act('entity.add', {}, { channel: 'REST', author: 'GTIEnricher' })], 'me').kind, 'gtienricher')
+  assert.equal(classify([act('entity.add', {}, { channel: 'REST', author: 'Enricher' })], 'me').kind, 'enricher')
+  assert.equal(classify([act('entity.add', {}, { channel: 'Import', author: 'GTIEnricher' })], 'me').author, 'Enricher', 'exports from before the rename')
   assert.equal(classify([act('entity.add', {}, { actor: 'other', author: 'Ben' })], 'me').kind, 'colleague')
 
   // Counts and wording; new evidence leads to the review.

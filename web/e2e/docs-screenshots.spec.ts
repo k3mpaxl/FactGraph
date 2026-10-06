@@ -126,9 +126,9 @@ test('README screenshots',async({page,browser,request})=>{
   await fit(page)
   await shot(page,'graph-dark')
 
-  // Notifications: GTIEnricher and an agent wrote while the analyst looked elsewhere.
+  // Notifications: Enricher and an agent wrote while the analyst looked elsewhere.
   await page.getByRole('button',{name:'Light theme'}).click()
-  await call('POST','/actions',{actions:[{type:'entity.add',payload:{id:randomUUID(),name:'198.51.100.23',kind:'IP'},author:'GTIEnricher'}]})
+  await call('POST','/actions',{actions:[{type:'entity.add',payload:{id:randomUUID(),name:'198.51.100.23',kind:'IP'},author:'Enricher'}]})
   await call('POST','/actions',{actions:[{type:'entity.add',payload:{id:randomUUID(),name:'gh-runner-07',kind:'Device'},author:'Claude'}]})
   await page.waitForTimeout(1200)
   await page.getByRole('button',{name:'Notifications'}).click()

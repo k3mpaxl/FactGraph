@@ -154,10 +154,10 @@ Notes:
 - Light mode is the default; the moon icon switches to dark mode and the choice is remembered.
 - On the first visit FactGraph asks for a display name, which other analysts see in the presence list and in the history.
 - The **?** (top right) explains where data is stored, shows the storage used, can ask the browser for persistent storage, offers the JSON export and shows the app and server versions. The second tab lists all keyboard shortcuts, the third is a **glossary** of statuses, review, stance, confidence, layers and the other terms.
-- The **bell** collects what happened on the board: changes by agents (REST/MCP; the calls of one agent within two minutes become one entry), intelligence sent by GTIEnricher, colleagues' changes (listed, but they do not raise the badge), your own imports and exports with progress and result, and connection or storage problems. Each entry leads to the review, the item or the change log. The badge turns red on errors; the history is kept per board in this browser.
+- The **bell** collects what happened on the board: changes by agents (REST/MCP; the calls of one agent within two minutes become one entry), intelligence sent by Enricher (formerly GTIEnricher), colleagues' changes (listed, but they do not raise the badge), your own imports and exports with progress and result, and connection or storage problems. Each entry leads to the review, the item or the change log. The badge turns red on errors; the history is kept per board in this browser.
 - **Your view stays yours:** status filter, evidence window, layers, selection and zoom are remembered per board in this browser and restored on reload. They are never synced, so colleagues keep their own view. Board menu → **Reset my view** clears them. A shared perspective link still takes precedence.
 
-![Notifications: an agent, GTIEnricher and your own imports](docs/images/notifications.png)
+![Notifications: an agent, Enricher and your own imports](docs/images/notifications.png)
 
 ![Dark mode](docs/images/graph-dark.png)
 

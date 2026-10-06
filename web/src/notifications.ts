@@ -1,10 +1,10 @@
 import type { BoardAction } from './board'
 
 /**
- * Notifications: what agents, GTIEnricher and colleagues changed on the board, the analyst's own imports and exports,
+ * Notifications: what agents, Enricher and colleagues changed on the board, the analyst's own imports and exports,
  * and connection or storage problems. Kept per board in this browser (never synced), newest first.
  */
-export type NoticeKind = 'agent' | 'gtienricher' | 'colleague' | 'import' | 'export' | 'connection' | 'error'
+export type NoticeKind = 'agent' | 'enricher' | 'colleague' | 'import' | 'export' | 'connection' | 'error'
 export type NoticeStatus = 'queued' | 'running' | 'done' | 'error' | 'info'
 export type NoticeTarget = { kind: 'entity' | 'fact' | 'review' | 'activity'; id?: string }
 export type Counts = { entities: number; relationships: number; evidence: number; reviewed: number; merged: number; deleted: number; other: number }
@@ -48,11 +48,12 @@ export function describe(c: Counts) {
 }
 
 /** Who made a batch of changes that did not come from this analyst's own canvas. */
-export function classify(actions: BoardAction[], me: string): { kind: 'agent' | 'gtienricher' | 'colleague'; author: string } | null {
+export function classify(actions: BoardAction[], me: string): { kind: 'agent' | 'enricher' | 'colleague'; author: string } | null {
   const first = actions[0]
   if (!first) return null
   if (actions.every(a => a.actor === me && (a.channel ?? 'UI') === 'UI')) return null
-  if (actions.some(a => a.author === 'GTIEnricher')) return { kind: 'gtienricher', author: 'GTIEnricher' }
+  // Enricher was called GTIEnricher before its 0.2 release; its earlier exports carry that name.
+  if (actions.some(a => a.author === 'Enricher' || a.author === 'GTIEnricher')) return { kind: 'enricher', author: 'Enricher' }
   const channel = first.channel ?? 'UI'
   if (channel === 'MCP' || channel === 'REST') return { kind: 'agent', author: first.author && first.author !== channel ? `${first.author} (${channel})` : `Agent via ${channel}` }
   return { kind: 'colleague', author: first.author || 'A colleague' }
@@ -109,7 +110,7 @@ export function noticesFor(batches: Map<string, BoardAction[]>, me: string, exis
     const counts = count(actions)
     if (counts.entities + counts.relationships + counts.evidence + counts.reviewed + counts.merged + counts.deleted + counts.other === 0) continue  // moves only
     created.push({ id: `batch:${batchId}`, batchIds: [batchId], kind: who.kind, status: 'info', author: who.author, counts, quiet: who.kind === 'colleague',
-      title: who.kind === 'gtienricher' ? 'GTIEnricher sent intelligence' : `${who.author} changed the board`,
+      title: who.kind === 'enricher' ? 'Enricher sent intelligence' : `${who.author} changed the board`,
       detail: describe(counts), target: targetOf(actions, counts), at: now })
   }
   for (const [, group] of folded) {
@@ -135,7 +136,8 @@ export function loadNotices(boardId: string): Notice[] {
     const parsed = JSON.parse(localStorage.getItem(key(boardId)) ?? '[]') as Notice[]
     if (!Array.isArray(parsed)) return []
     // Work that was running when the page went away did not finish here.
-    return parsed.filter(n => n && typeof n.id === 'string' && typeof n.title === 'string').map(n => isActive(n)
+    // Notices kept from before the rename of GTIEnricher to Enricher.
+    return parsed.filter(n => n && typeof n.id === 'string' && typeof n.title === 'string').map(n => (n.kind as string) === 'gtienricher' ? { ...n, kind: 'enricher' as const } : n).map(n => isActive(n)
       ? { ...n, status: 'error' as const, finished: n.finished ?? new Date().toISOString(), detail: 'Interrupted by a reload. Check the board before running it again.' }
       : n)
   } catch { return [] }

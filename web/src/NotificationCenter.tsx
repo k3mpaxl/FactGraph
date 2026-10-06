@@ -8,7 +8,7 @@ type Props = {
   onOpen: (notice: Notice) => void
 }
 
-const KIND_ICON: Record<Notice['kind'], typeof Bell> = { agent: Bot, gtienricher: Radar, colleague: Users, import: Upload, export: Download, connection: Wifi, error: CircleAlert }
+const KIND_ICON: Record<Notice['kind'], typeof Bell> = { agent: Bot, enricher: Radar, colleague: Users, import: Upload, export: Download, connection: Wifi, error: CircleAlert }
 
 function ago(at: string) {
   const seconds = Math.max(0, (Date.now() - Date.parse(at)) / 1000)
@@ -21,7 +21,7 @@ function ago(at: string) {
 const action = (n: Notice) => !n.target ? '' : n.target.kind === 'review' ? 'Review' : n.target.kind === 'activity' ? 'Change log' : 'Show'
 
 /**
- * Bell with badge and a panel: what agents, GTIEnricher and colleagues changed, own imports and exports with progress,
+ * Bell with badge and a panel: what agents, Enricher and colleagues changed, own imports and exports with progress,
  * and connection or storage problems. The badge counts unread entries except quiet colleague changes; red on errors.
  */
 export default function NotificationCenter({ notices, onDismiss, onClearFinished, onMarkRead, onOpen }: Props) {
@@ -65,7 +65,7 @@ export default function NotificationCenter({ notices, onDismiss, onClearFinished
     {open && <div className="menu-content popover right notifications-panel" role="dialog" aria-label="Notifications">
       <div className="notifications-head"><span className="menu-label">Notifications</span>
         {notices.some(n => !isActive(n)) && <button className="secondary-button small" onClick={onClearFinished}><Trash2 size={12} /> Clear</button>}</div>
-      {!notices.length && <p className="menu-note">Nothing yet. Changes by agents, GTIEnricher and colleagues, your imports and exports, and connection problems show up here.</p>}
+      {!notices.length && <p className="menu-note">Nothing yet. Changes by agents, Enricher and colleagues, your imports and exports, and connection problems show up here.</p>}
       {running.length > 0 && <ul className="notice-list">{running.map(row)}</ul>}
       {notices.some(n => !isActive(n)) && <ul className="notice-list">{notices.filter(n => !isActive(n)).map(row)}</ul>}
     </div>}

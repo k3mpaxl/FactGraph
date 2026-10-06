@@ -20,14 +20,14 @@ def action(action_type: str, payload: dict, *, action_id: str | None = None,
             "payload": payload, "author": author}
 
 
-def entity_actions(name: str, kind: str = "Sonstiges", description: str = "",
+def entity_actions(name: str, kind: str = "Other", description: str = "",
                    entity_id: str | None = None) -> tuple[str, list[dict]]:
     name = name.strip()
     if not name:
         raise ValueError("Entity name must not be empty")
     entity_id = entity_id or str(uuid4())
     return entity_id, [action("entity.add", {"id": entity_id, "name": name,
-        "kind": kind.strip() or "Sonstiges", "description": description.strip()})]
+        "kind": kind.strip() or "Other", "description": description.strip()})]
 
 
 def relation_actions(subject_id: str, predicate: str, object_id: str,
@@ -86,27 +86,36 @@ def _field(rows: list[dict], explicit: str | None, candidates: tuple[str, ...], 
 
 
 def _time(value: str | None) -> str | None:
-    """ISO UTC for the formats portals export ("9/28/2026, 10:42:07 AM"); unknown formats stay as they are."""
+    """ISO UTC for the formats portals export ("9/28/2026, 10:42:07 AM"). An unknown format leaves the row undated
+    instead of failing the import: the browser rejects a whole chunk of actions for one time it cannot read."""
     from app.tables import parse_time
-    return (parse_time(value) or value) if value else None
+    return parse_time(value) if value else None
+
+
+def _time_field(rows: list[dict]) -> str | None:
+    """The column the event time is read from, for the import preview."""
+    return next((key for key in ("valid_from", "StartTime", *TIME_FIELDS) if any(row.get(key) for row in rows[:200])), None)
 
 
 def _stable(board_id: str, *parts: str) -> str:
     return str(uuid5(UUID(board_id), "\x1f".join(parts)))
 
 
-# Every action travels as one WebSocket message and the relay accepts at most 16 MiB per message, so the original rows
-# of a large export are kept in several sources of at most this size (JSON escaping can roughly double it on the wire).
+# Every action travels as one WebSocket message and the relay accepts at most 16 MiB per message. Every evidence item
+# keeps its own original row (its note), so a large export does not need all of its rows a second time in the source:
+# above SOURCE_PART_BYTES the source keeps a sample of SOURCE_SAMPLE_BYTES and says how many rows the export had.
 SOURCE_PART_BYTES = 3_000_000
+SOURCE_SAMPLE_BYTES = 1_000_000
 MAX_ROW_BYTES = 6_000_000
 
 
 def import_sources(board_id: str, rows: list[dict], *, title: str, query: str, digest: str,
                    existing: set[str] | None, now: str) -> tuple[list[dict], list[str]]:
-    """Source drafts holding the original rows, and the source of every row.
+    """Source drafts for an export, and the source of every row.
 
-    An export up to SOURCE_PART_BYTES is one source with the ID it always had, so a re-import is still recognised; a
-    larger one becomes "title · part 2/7" sources of consecutive rows, and each evidence item points to the part with its row.
+    Up to SOURCE_PART_BYTES: one source with all rows and the ID it always had, so a re-import is still recognised.
+    Larger: one source with the first rows as a sample (the rest is in the evidence items). Exports imported before as
+    "title · part 2/7" sources keep those parts, so importing the same file again still adds nothing.
     """
     sizes = [len(json.dumps(row, sort_keys=True, ensure_ascii=False, default=str).encode()) + 2 for row in rows]
     for number, size in enumerate(sizes, 1):
@@ -119,6 +128,18 @@ def import_sources(board_id: str, rows: list[dict], *, title: str, query: str, d
             start, total = index, 0
         total += size
     bounds.append((start, len(rows)))
+    legacy = len(bounds) > 1 and _stable(board_id, "import", digest, "1") in (existing or set())
+    if len(bounds) > 1 and not legacy:
+        source_id = _stable(board_id, "import", digest, "sample")
+        kept, budget = 0, 0
+        while kept < len(rows) and budget + sizes[kept] <= SOURCE_SAMPLE_BYTES:
+            budget += sizes[kept]
+            kept += 1
+        drafts = [] if source_id in (existing or set()) else [action("source.add", {"id": source_id,
+            "title": f"{title} · first {kept:,} of {len(rows):,} rows (each evidence item keeps its own row)",
+            "uri": f"import://{digest[:16]}", "excerpt": json.dumps(rows[:kept], sort_keys=True, ensure_ascii=False, default=str), "query": query,
+            "source_kind": "primary", "created_at": now}, action_id=_stable(board_id, "source-action", source_id), author="Import")]
+        return drafts, [source_id] * len(rows)
     drafts: list[dict] = []
     row_sources: list[str] = []
     for part, (first, last) in enumerate(bounds, 1):
@@ -163,7 +184,7 @@ def rows_to_actions(board_id: str, rows: list[dict], *, title: str,
     seen_entities: set[str] = set()
     seen_facts: set[str] = set()
     assertions = 0
-    skipped = 0
+    skipped = undated = 0
     for row_number, row in enumerate(rows, 1):
         source_id = row_sources[row_number - 1]
         subject = str(row.get(subject_field) or "").strip()
@@ -203,6 +224,7 @@ def rows_to_actions(board_id: str, rows: list[dict], *, title: str,
         seen_evidence.add(assertion_id)
         timestamp = _time(next((str(row[key]) for key in ("valid_from", "StartTime", *TIME_FIELDS) if row.get(key)), None))
         end = _time(next((str(row[key]) for key in ("valid_to", "EndTime") if row.get(key)), None))
+        undated += timestamp is None
         drafts.append(action("assertion.add", {"id": assertion_id, "fact_id": fact_id,
             "stance": "supports", "confidence": 1, "source_id": source_id,
             "note": row_text, "observation": f"{subject} {row_predicate} {object_name}", "locator": str(row.get("EventId") or row.get("event_id") or f"result row {row_number}"), "created_at": now, "valid_from": timestamp, "valid_to": end},
@@ -211,7 +233,7 @@ def rows_to_actions(board_id: str, rows: list[dict], *, title: str,
     return drafts, {"rows": len(rows), "skipped": skipped, "entities": len(seen_entities),
                     "relations": len(seen_facts), "evidence": assertions,
                     "source_id": row_sources[0], "source_parts": len(set(row_sources)), "duplicates": duplicates, "subject_field": subject_field,
-                    "object_field": object_field}
+                    "object_field": object_field, "undated": undated, "time_field": _time_field(rows)}
 
 
 def activity_rows_to_actions(board_id: str, rows: list[dict], *, title: str, roles: list[dict],
@@ -244,7 +266,7 @@ def activity_rows_to_actions(board_id: str, rows: list[dict], *, title: str, rol
     duplicates = 0
     seen_entities: set[str] = set()
     seen_activities: set[str] = set()
-    evidence = skipped = 0
+    evidence = skipped = undated = 0
     for row_number, row in enumerate(rows, 1):
         source_id = row_sources[row_number - 1]
         participants = []
@@ -283,6 +305,7 @@ def activity_rows_to_actions(board_id: str, rows: list[dict], *, title: str, rol
         seen_evidence.add(assertion_id)
         timestamp = _time(next((str(row[k]) for k in ("valid_from", "StartTime", *TIME_FIELDS) if row.get(k)), None))
         end = _time(next((str(row[k]) for k in ("valid_to", "EndTime") if row.get(k)), None))
+        undated += timestamp is None
         names = ", ".join(f"{m['role']} {row.get(m['field'])}" for m in roles if row.get(m["field"]))
         drafts.append(action("assertion.add", {"id": assertion_id, "fact_id": activity_id, "stance": "supports", "confidence": 1,
             "source_id": source_id, "note": row_text, "observation": f"{row_operation}: {names}",
@@ -292,7 +315,7 @@ def activity_rows_to_actions(board_id: str, rows: list[dict], *, title: str, rol
         evidence += 1
     return drafts, {"rows": len(rows), "skipped": skipped, "entities": len(seen_entities), "relations": len(seen_activities),
                     "activities": len(seen_activities), "evidence": evidence, "source_id": row_sources[0], "source_parts": len(set(row_sources)), "duplicates": duplicates,
-                    "roles": [f"{m['field']} → {m['role']}" for m in roles]}
+                    "roles": [f"{m['field']} → {m['role']}" for m in roles], "undated": undated, "time_field": _time_field(rows)}
 
 
 GUID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
@@ -326,7 +349,7 @@ def table_rows_to_actions(board_id: str, rows: list[dict], mapping, *, title: st
 
     Entities are found by their identifiers first (DeviceId, AccountObjectId, SHA-256 …), then by type and name, so a
     device seen in DeviceNetworkEvents and in SigninLogs is one entity. Missing identifiers are added to it. Every row
-    is its own unconfirmed evidence item with its own time and a locator such as "DeviceNetworkEvents ReportId=… DeviceId=…".
+    is its own evidence item (confirmed when an analyst imported the file: parsed from the original row; unconfirmed from agents) with its own time and a locator such as "DeviceNetworkEvents ReportId=… DeviceId=…".
     """
     from app.tables import details_of, locator_of, operation_of, participants_of, structured, time_of
 
@@ -437,4 +460,6 @@ def table_rows_to_actions(board_id: str, rows: list[dict], mapping, *, title: st
     return drafts, {"rows": len(rows), "skipped": skipped, "entities": len(touched), "new_entities": len(created),
                     "relations": len(activities), "evidence": evidence, "identifiers": identifiers_added, "source_id": row_sources[0], "source_parts": len(set(row_sources)), "duplicates": duplicates,
                     "table": mapping.table, "product": mapping.product,
+                    # For the preview: which column gives the event time (read as UTC) and how many rows have none.
+                    "time_field": next((c for c in mapping.time if any(r.get(c) for r in rows[:200])), None), "undated": evidence - len(times),
                     "first_seen": min(times) if times else None, "last_seen": max(times) if times else None}

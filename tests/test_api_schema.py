@@ -49,3 +49,19 @@ class RestPatchSchemaTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TimeNormalisationTest(unittest.TestCase):
+    """The API stores times the way the browser does: UTC with milliseconds, a zone-less time read as UTC."""
+
+    def test_times_are_normalised_to_utc(self):
+        from app.contracts import CompromiseInput, EntityUpdate, EvidenceInput
+        from app.structures import ActivityInput
+        self.assertEqual(EvidenceInput(valid_from="2026-09-17T10:00:00+02:00").valid_from, "2026-09-17T08:00:00.000Z")
+        self.assertEqual(EvidenceInput(valid_from="2026-09-17T10:00:00").valid_from, "2026-09-17T10:00:00.000Z")
+        self.assertEqual(ActivityInput(operation="x", participants=[{"entity_id": "a", "role": "actor"}, {"entity_id": "b", "role": "target"}],
+                                       valid_from="2026-09-17T08:00:05.123456Z").valid_from, "2026-09-17T08:00:05.123Z")
+        mark = EntityUpdate(compromise={"from": "2026-09-17T10:00:00+02:00"}, rotated_at="2026-09-18T00:00:00")
+        self.assertEqual((mark.compromise.since, mark.rotated_at), ("2026-09-17T08:00:00.000Z", "2026-09-18T00:00:00.000Z"))
+        with self.assertRaises(ValueError):
+            CompromiseInput(**{"from": "2026-09-18T00:00:00Z", "to": "2026-09-17T00:00:00Z"})

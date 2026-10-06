@@ -15,9 +15,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 RUN apt-get update \
     && apt-get -y upgrade --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
-COPY requirements.txt ./
-RUN pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir -r requirements.txt \
+# Exact versions with hashes (requirements.lock, generated from requirements.txt): reproducible builds, no unreviewed
+# upstream release slips in. Regenerate with: uv pip compile requirements.txt --generate-hashes --universal --python-version 3.14 -o requirements.lock
+COPY requirements.lock ./
+RUN pip install --no-cache-dir --require-hashes -r requirements.lock \
     && useradd --system --uid 10001 --create-home factgraph
 COPY app/ ./app/
 COPY --from=frontend /build/web/dist ./web/dist/

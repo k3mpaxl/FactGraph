@@ -66,25 +66,25 @@ class TypePatch(StrictModel):
 
 
 def register_extensions(app, mcp, core):
-    read_graph = core['get_graph']
     apply = core['apply_drafts']
     command = core['browser_command']
 
+    record = core['board_record']
+
     async def evidence_record(board_id, relation_id, evidence_id):
-        graph = await read_graph(board_id)
-        relation = next((f for f in graph['facts'] if f['id'] == relation_id), None)
-        evidence = next((a for a in (relation or {}).get('assertions', []) if a['id'] == evidence_id), None)
-        if not evidence:
+        # Only the record itself crosses the WebSocket, not the whole board.
+        evidence = await record(board_id, 'evidence', evidence_id)
+        if not evidence or evidence.get('fact_id') != relation_id:
             raise HTTPException(404, 'Evidence does not exist on this relationship and board')
-        return graph, evidence
+        return evidence
 
     @app.post('/api/boards/{board_id}/relations/{relation_id}/evidence/{evidence_id}/review')
     async def review_evidence(board_id: str, relation_id: str, evidence_id: str, body: ReviewInput):
-        graph, evidence = await evidence_record(board_id, relation_id, evidence_id)
+        evidence = await evidence_record(board_id, relation_id, evidence_id)
         if evidence.get('revision') != body.expected_revision:
             raise HTTPException(409, 'Evidence revision changed')
         if body.review_status == 'confirmed':
-            source = next((s for s in graph['sources'] if s['id'] == evidence.get('source_id')), None)
+            source = await record(board_id, 'sources', evidence['source_id']) if evidence.get('source_id') else None
             if not source or source.get('revision') != body.expected_source_revision:
                 raise HTTPException(409, 'Source missing or revision changed')
             if evidence.get('retracted_at') or source.get('source_kind') != 'primary' or not source.get('uri', '').strip() or not source.get('excerpt', '').strip():
@@ -118,8 +118,7 @@ def register_extensions(app, mcp, core):
         return {'board_id': board_id, 'id': identifier_id, 'accepted_actions': await apply(board_id, [action('identifier.add', {**body.model_dump(), 'id': identifier_id, 'entity_id': entity_id})])}
 
     async def check_identifier(board_id, entity_id, identifier_id):
-        graph = await read_graph(board_id)
-        entity = next((e for e in graph['entities'] if e['id'] == entity_id), {})
+        entity = await record(board_id, 'entities', entity_id) or {}
         if not any(i['id'] == identifier_id for i in entity.get('identifiers', [])):
             raise HTTPException(404, 'Identifier does not exist on this entity and board')
 
@@ -138,8 +137,7 @@ def register_extensions(app, mcp, core):
 
     @app.get('/api/boards/{board_id}/entities/{entity_id}/identifiers')
     async def list_identifiers(board_id: str, entity_id: str):
-        graph = await read_graph(board_id)
-        entity = next((e for e in graph['entities'] if e['id'] == entity_id), None)
+        entity = await record(board_id, 'entities', entity_id)
         if not entity:
             raise HTTPException(404, 'Entity not found')
         return {'board_id': board_id, 'items': entity.get('identifiers', [])}
@@ -152,15 +150,14 @@ def register_extensions(app, mcp, core):
 
     @app.get('/api/boards/{board_id}/relations/{relation_id}/evidence')
     async def list_relation_evidence(board_id: str, relation_id: str):
-        graph = await read_graph(board_id)
-        relation = next((f for f in graph['facts'] if f['id'] == relation_id), None)
+        relation = await record(board_id, 'facts', relation_id)
         if relation is None:
             raise HTTPException(404, 'Relationship not found')
         return {'board_id': board_id, 'items': relation['assertions']}
 
     @app.get('/api/boards/{board_id}/relations/{relation_id}/evidence/{evidence_id}')
     async def get_relation_evidence(board_id: str, relation_id: str, evidence_id: str):
-        return (await evidence_record(board_id, relation_id, evidence_id))[1]
+        return await evidence_record(board_id, relation_id, evidence_id)
 
     @app.get('/api/boards/{board_id}/history')
     async def board_history(board_id: str, offset: int = 0, limit: int = 100):

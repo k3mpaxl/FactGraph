@@ -75,6 +75,11 @@ class TablesTest(unittest.TestCase):
         self.assertEqual(tables["DeviceNetworkEvents"]["columns"]["RemotePort"], "int")
         self.assertIn("SrcIpAddr", schemas()["asim"]["network"]["columns"])
 
+    def test_exports_in_local_time_are_refused(self):
+        with self.assertRaisesRegex(ValueError, "local time"):
+            clean_rows([{"TimeGenerated [Local]": "9/28/2026, 12:42:07 PM", "OperationName": "x"}])
+        self.assertEqual(list(clean_rows([{"TimeGenerated [UTC]": "x"}])[0]), ["TimeGenerated"])
+
     def test_times_from_portal_exports(self):
         self.assertEqual(parse_time("2026-09-28T10:42:07.1234567Z"), "2026-09-28T10:42:07.123456Z")
         self.assertEqual(parse_time("9/28/2026, 10:42:07.512 AM"), "2026-09-28T10:42:07.512000Z")
@@ -347,31 +352,41 @@ class LargeExportTest(unittest.TestCase):
                             "_ResourceId": f"/subscriptions/0/resourcegroups/rg/providers/microsoft.cognitiveservices/accounts/acc-{i % 7}",
                             "Properties": json.dumps({"padding": "x" * 400, "quote": 'a "quoted" value'})} for i in range(count)])
 
-    def test_large_export_becomes_source_parts_and_evidence_points_to_its_part(self):
+    def test_large_export_keeps_a_sample_in_the_source_and_every_row_with_its_evidence(self):
         from unittest import mock
         import app.ingest as ingest
         board, index, rows = str(uuid4()), {"entities": [], "facts": [], "sources": []}, self.rows(40)
-        with mock.patch.object(ingest, "SOURCE_PART_BYTES", 5_000):
+        with mock.patch.object(ingest, "SOURCE_PART_BYTES", 5_000), mock.patch.object(ingest, "SOURCE_SAMPLE_BYTES", 3_000):
             _, drafts, summary = run(board, rows, index)
         sources = [d["payload"] for d in drafts if d["type"] == "source.add"]
-        self.assertGreater(len(sources), 3)
-        self.assertEqual(summary["source_parts"], len(sources))
-        self.assertEqual([s["title"] for s in sources[:2]], [f"AzureActivity · part 1/{len(sources)}", f"AzureActivity · part 2/{len(sources)}"])
-        parts = [json.loads(s["excerpt"]) for s in sources]
-        self.assertEqual([row for part in parts for row in part], rows, "all original rows, in order, nothing twice")
-        self.assertTrue(all(len(s["excerpt"].encode()) <= 5_000 + 1_000 for s in sources), "a part ends before the row that would exceed the budget")
-        part_of = {json.dumps(row, sort_keys=True): s["id"] for s, part in zip(sources, parts) for row in part}
+        self.assertEqual((len(sources), summary["source_parts"]), (1, 1), "one source, not every row twice")
+        sample = json.loads(sources[0]["excerpt"])
+        self.assertEqual(sample, rows[:len(sample)])
+        self.assertTrue(0 < len(sample) < 40 and len(sources[0]["excerpt"].encode()) <= 3_000)
+        self.assertIn(f"first {len(sample)} of 40 rows", sources[0]["title"])
         evidence = [d["payload"] for d in drafts if d["type"] == "assertion.add"]
         self.assertEqual(len(evidence), 40)
-        by_locator = {f"c{i}": rows[i] for i in range(40)}
-        for item in evidence:
-            row = next(r for key, r in by_locator.items() if f"CorrelationId={key} " in item["locator"] + " ")
-            self.assertEqual(item["source_id"], part_of[json.dumps(row, sort_keys=True)], "evidence points to the part holding its row")
-        # The same file again: every part is known; evidence has the same action IDs, which the browser skips.
-        with mock.patch.object(ingest, "SOURCE_PART_BYTES", 5_000):
-            _, again, _ = run(board, rows, index)
+        self.assertTrue(all(item["source_id"] == sources[0]["id"] for item in evidence))
+        self.assertEqual(sorted(json.loads(item["note"])["CorrelationId"] for item in evidence), sorted(f"c{i}" for i in range(40)), "every row is kept with its evidence")
+        # The same file again: nothing new.
+        with mock.patch.object(ingest, "SOURCE_PART_BYTES", 5_000), mock.patch.object(ingest, "SOURCE_SAMPLE_BYTES", 3_000):
+            _, again, _ = run(board, rows, {**index, "sources": [{"id": sources[0]["id"]}]})
         self.assertFalse([d for d in again if d["type"] == "source.add"])
         self.assertEqual({d["id"] for d in again if d["type"] == "assertion.add"}, {d["id"] for d in drafts if d["type"] == "assertion.add"})
+
+    def test_an_export_imported_in_parts_before_keeps_its_parts(self):
+        from unittest import mock
+        import hashlib
+        import app.ingest as ingest
+        board, rows = str(uuid4()), self.rows(40)
+        canonical = json.dumps(rows, sort_keys=True, ensure_ascii=False, default=str)
+        digest = hashlib.sha256(("AzureActivity\n\nAzureActivity\n" + canonical).encode()).hexdigest()
+        first_part = ingest._stable(board, "import", digest, "1")
+        with mock.patch.object(ingest, "SOURCE_PART_BYTES", 5_000):
+            _, drafts, summary = run(board, rows, {"entities": [], "facts": [], "sources": [{"id": first_part}]})
+        evidence = [d["payload"] for d in drafts if d["type"] == "assertion.add"]
+        self.assertGreater(summary["source_parts"], 3)
+        self.assertIn(first_part, {item["source_id"] for item in evidence}, "evidence of the first rows points to the old part 1")
 
     def test_small_export_keeps_one_source_with_its_former_id(self):
         import hashlib
@@ -395,6 +410,9 @@ class LargeExportTest(unittest.TestCase):
         _, drafts, summary = run(str(uuid4()), rows + [dict(rows[1])], {"entities": [], "facts": [], "sources": []})
         ids = [d["payload"]["id"] for d in drafts if d["type"] == "assertion.add"]
         self.assertEqual((len(ids), len(set(ids)), summary["evidence"], summary["duplicates"]), (3, 3, 3, 1))
+        # The preview names the column the event time comes from and how many rows have none.
+        self.assertIn(summary["time_field"], ("TimeGenerated", "Timestamp"))
+        self.assertEqual(summary["undated"], 0)
 
 
 class CredentialChangesTest(unittest.TestCase):

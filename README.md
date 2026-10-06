@@ -55,7 +55,7 @@ Directly with Python 3.11+ (the Docker image and CI use 3.14) and Node.js 20+:
 
 ```bash
 python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
+.venv/bin/pip install --require-hashes -r requirements.lock
 cd web && npm ci && npm run build && cd ..
 .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8080
 ```
@@ -109,6 +109,9 @@ FactGraph is meant to be spun up during an incident, often in a hurry and someti
 - There is no user authentication. Anyone with network access and a board link has full access to that board, so restrict network access to the response team.
 - Board data lives in the analysts' browsers (IndexedDB). Use trusted devices, and remember that exported JSON files contain the full investigation.
 - A session token proves that a browser tab has the board open, not that a human reviewed something. Technically enforced human approval would require separate permissions.
+- Provenance labels (*parsed by the import*, *reviewed by …*, *confirmed by an agent*, who marked a compromise) are recorded by the browsers, not signed. Anyone with the board link can connect to the relay and write actions with any author or channel, so treat these labels as reliable within a trusted team, not as proof against a hostile participant. The relay operator can also see board content in transit (it stores none).
+- Agents share the tab's session token. Only the tab that started a file upload treats its rows as the analyst's own import; the same upload by anything else (an agent, a script) is handled like any other REST write, so its evidence starts unconfirmed.
+- **Remove board from this browser** (board menu) deletes a board's data from this browser's storage; colleagues keep their copies.
 
 ## Deploying on Azure App Service
 
@@ -137,7 +140,7 @@ Notes:
 
 - **Exactly one instance.** The relay keeps the list of connected browsers in memory; with several instances, analysts on different instances would not see each other. Do not scale out.
 - **Web sockets must be on**, otherwise the board stays offline. **Always On** prevents the app from idling and dropping connections.
-- Prefer a pinned version (`k3mpaxl/factgraph:0.5.1`) over `latest` during an incident, so a restart never changes the version.
+- Prefer a pinned version (`k3mpaxl/factgraph:0.5.2`) over `latest` during an incident, so a restart never changes the version.
 - App Service **HTTP logging** is off by default. If you enable it, it records request URLs, which contain board IDs.
 - **App Service Authentication** (Entra ID sign-in) can be put in front of the UI. Agents and scripts then also need an Entra token, and if the incident involves your own tenant, an identity provider you cannot trust is no protection. IP access restrictions are often the better choice there.
 - When the incident is closed: export the boards as JSON, then `az group delete -n $RG`. Nothing remains on the server side.
@@ -146,7 +149,7 @@ Notes:
 
 ### Interface
 
-- A slim header with the board menu, the views (**Graph**, **Timeline**, **Review**, **Activity**), search, undo/redo, **Create** and the API/MCP menu. On the left the collapsible **entity explorer** (grouped by type), on the right the **inspector**, which appears only when something is selected.
+- A slim header with the board menu, the views (**Graph**, **Timeline**, **Review**, **Change log**, **Impact**, keys `1`–`5`), *Find entity*, undo/redo, **Create** and the API/MCP menu. On the left the collapsible **entity explorer** (grouped by type), on the right the **inspector**, which appears only when something is selected.
 - The header shows **who is online**: avatars of everyone connected to the board. A click lists them, together with recent authors who are no longer connected, such as agents writing via REST or MCP.
 - Light mode is the default; the moon icon switches to dark mode and the choice is remembered.
 - On the first visit FactGraph asks for a display name, which other analysts see in the presence list and in the history.
@@ -166,6 +169,10 @@ Notes:
 - **Colors:** the color picker offers default swatches plus the colors already used on the board, so related infrastructure (for example all C2 servers) gets the same color in one click.
 - The inspector shows relationships, identifiers and evidence and navigates to neighbours on click. **Copy context for agent** copies IDs and context for an agent chat.
 - Long edge labels are shortened; hovering or selecting an edge shows the full label.
+- Dialogs pick entities by search (name, type, identifier or ID) and show what each belongs to (repository, host, subscription) and its identifiers, so two `.env` files in different repositories are told apart; same-named entities are flagged.
+- **Merge** shows a preview before saving: which entity stays and which disappears, how many identifiers and relationships move, how many confirmed evidence items need a review again, and what is dropped (type, description, a compromise marking).
+- An entity can be related to itself (for example after merging two entities that were connected); the graph draws a loop.
+- Times in dialogs are UTC, whatever the browser's time zone.
 
 ### Large graphs
 
@@ -234,6 +241,8 @@ Collapsed and expanded groups share one place: drag the collapsed card and the m
 
 ## Evidence and review
 
+Evidence your own file import parsed from a log row is confirmed right away as **parsed by the import**: the row is the original record, but nobody has read it. Evidence written by hand, sent by an agent through REST or MCP (including rows an agent imports, since it could have written them itself) or edited later starts unconfirmed and is checked in **Review** (attacker activity first, one card per activity). Review keeps the kinds apart: *To review*, *Agent-confirmed*, *Parsed by import* and *Reviewed* (by an analyst), so an empty queue is not mistaken for "everything checked". Each item says who added it and through which channel. In the reader, *Previous / Next* and *All items* step through every item of an activity (one card can stand for thousands of rows), *Confirm this item only* confirms exactly one, and the item's own row reads top to bottom with the key fields first and the column the event time came from. Changing the evidence or its source asks for a review again; the source editor says how many items that affects.
+
 - A **source** describes where something comes from: title, reference (log export, `path@commit`, portal link), the original records as an excerpt and, for queries, the KQL. `primary` sources are original logs, telemetry and files; `secondary` is context and never proof. **FactGraph does not run queries**; the query and the results it returned are stored together as provenance.
 - An **evidence item** holds the observation, the locator (event ID, CorrelationId, result row, file:line), the time span of the activity, the stance (`supports`/`refutes`) and a confidence.
 - New evidence is **unconfirmed**. Confirming requires a primary source with reference and original excerpt, a concrete locator, an observation and a review note, and is bound to the current revision. If the evidence, the claim or the source changes, the confirmation is reset.
@@ -252,22 +261,28 @@ Collapsed and expanded groups share one place: drag the collapsed card and the m
 
 The **Impact** view (tab, command palette, or *Mark compromised…* in the inspector of any entity) answers the questions of an incident: what did the attacker do with what they stole, what did it reach, where to look next, and what has to be rotated.
 
+- **Case summary** at the top: what is *known*, what is only *suspected*, and the *missing evidence* as questions (how was the credential obtained, which secrets left the vault, what did the stolen keys enable, was the rotation done, what happened before the first known activity), each with the KQL that answers it.
+- **Where to start.** With nothing marked yet, FactGraph lists patterns in the evidence that usually mean an attack: encoded or download command lines, an Office application starting a shell, failed then successful sign-ins from one IP, an identity reading keys or secrets of many resources. One click marks the device, account or IP as *suspected*.
+- **Suspected or confirmed.** A marking says how sure it is; the analysis is the same, but everything that follows from a suspected entity (derived compromises, badges, the report) stays labelled *suspected* until someone confirms it. The case summary's *Known* column rests on confirmed compromises only. Marks set by agents (REST/MCP) are suspected unless the agent says otherwise, and are labelled *by agent*.
 - **Mark what is compromised.** A credential *since* a time (the secret leaked on 15 September: only its use from then on counts), an IP of the attacker's infrastructure (*always*, or within a window), an identity or a device. Markings are part of the board, synced, undoable, and say who set them when.
 - **Derived compromise.** Whatever attacker infrastructure (a marked IP or host) used *successfully* inside its window is in the attacker's hands: credentials, service principals, accounts are marked *compromised (derived)*, no later than their first such use (it may have been stolen earlier, so the hunting window starts two weeks before). Failed attempts prove nothing, and it never runs the other way: an IP that used a stolen secret may be its legitimate owner. *Confirm* turns it into a marking, *Not compromised* records that it was checked and keeps it from being derived again.
-- **Advice** at the top of the view says what the evidence suggests doing next, each with the evidence it rests on and the action: mark an IP that is new since the compromise (higher priority in the same /24 or network provider as a known attacker IP; only a note when it belongs to the provider, AS number, the identity already used before the compromise: a rotating cloud or CI egress), confirm derived compromises, find where a credential was taken from, rotate again where the attacker came back, prove the rotation, look further back than the first known activity.
+- **Advice** at the top of the view says what the evidence suggests doing next, each with the evidence it rests on and the action: mark an IP that is new since the compromise (higher priority in the same network, /24 for IPv4 or /64 for IPv6, or network provider as a known attacker IP; only a note when it belongs to the provider, AS number, the identity already used before the compromise: a rotating cloud or CI egress), confirm derived compromises, find where a credential was taken from, rotate again where the attacker came back, prove the rotation, look further back than the first known activity.
 - **Session tokens (UTI).** Entra records the unique token identifier of every session (`UniqueTokenIdentifier` in sign-ins, the `uti` claim in AzureActivity, `SignInActivityId` in Graph activity); FactGraph reads it from the original rows. A session used from the attacker and from another IP points at a **redirector** (the other IP came with or after the attacker: mark it) or at **token theft** (the other IP used it first: the token leaked there; investigate that system and revoke the sessions). A session from several IPs without a known attacker is a replay candidate. *Everything done with the replayed session tokens* hunts them across sign-ins, Azure and Graph.
+- **Sessions as one unit.** Everything done with one session token belongs to whoever holds it: an IP that uses the attacker's session after them is derived compromised (*same session token*), the IP that used it before is where it was stolen. *Sessions the attacker worked in* lists them with login, IPs and operations.
+- **User agents.** An agent that came with the attacker and that the compromised identities never used before is a lead; other IPs with the same agent are candidates (*Who else used the attacker's user agents?*). Agents from the baseline before the compromise, browsers and very common ones are weak and said so.
+- **Good.** Mark an entity good (known legitimate, e.g. your CI runner or egress IP): it is never derived, it is no pivot, and what runs from it is not attacker activity, even with a stolen credential. *Group harmless* collapses good and likely-regular entities into one group. Without events before the compromise FactGraph says so and suggests importing an earlier export to build a baseline.
 - **Likely regular.** An attacker activity that also happened exactly so before the compromise (same identity, credential, IP, target) is marked *likely regular*, sorted last and left out of the rotation list; an IP that used a stolen credential before it was stolen is most likely its owner, not the attacker.
-- **Trace back** lists when each compromised entity was first used by the attacker and which secrets other compromised entities had read before: where a credential was probably taken from.
-- **Attacker activities** are the activities a compromised entity drove (as actor, identity, source, tool or via) inside its window. Evidence without a time is counted separately instead of guessed.
+- **Trace back** lists when each compromised entity was first used by the attacker and which secrets other compromised entities had read before, with the time in between: candidates by timing only, to confirm or rule out, not a proven way in.
+- **Attacker activities** are the activities a compromised entity drove (as actor, identity, source, tool or via) inside its window, decided per evidence item: the same activity before the window is not the attacker's. In the graph and in exported images, activity that also happened exactly so before the compromise stays in its normal colour instead of attacker red. Evidence without a time is counted separately instead of guessed.
 - **Impacted resources** are their targets, rated by what happened: *secrets exposed* (listKeys, listSecrets, listClusterAdminCredential, registry credentials, Key Vault SecretGet, GitLab CI/CD variables, `.env` / key files read), *deleted*, *changed*, *read*, *signed in to*, or only *attempted* (failed or denied).
 - **Pivot next** lists the IPs, identities and credentials that appeared together with what is compromised. *New since the compromise* is suspicious; *seen before* (with the same credential before it was stolen) is probably the legitimate owner. One click marks a pivot compromised, and everything it did joins the analysis.
 - **What the attacker did** is the attack path in time order: one step per operation and compromised entity, with the IPs and identities it used and the targets it reached (*198.51.100.66 · listclusteradmincredential on 13 targets · with deploy-bot*).
 - **Secrets and variables read.** GitLab's audit log records that a project's CI/CD variables were read, not which ones: all of them count as exposed, including those inherited from the parent groups. A ready `glab` script lists their keys.
-- **Rotate, revoke, block** groups what follows by measure (*Rotate storage account keys*, *Rotate cluster certificates*, *Revoke GitLab access tokens*, *Remove credentials the attacker added*, *Block the attacker's IPs* …) with a checklist per resource. *Rotated* is stored on the entity, or **proven by an import**: a key removed in AuditLogs or keys regenerated in AzureActivity tick the item off with a link to the evidence. A compromised service principal is done once every compromised credential seen with it is removed. If the attacker used it successfully after that, the item reopens.
+- **Rotate, revoke, block** groups what follows by measure (*Rotate storage account keys*, *Rotate cluster certificates*, *Revoke GitLab access tokens*, *Remove credentials the attacker added*, *Block the attacker's IPs* …) with a checklist per resource. *Rotated* is stored on the entity, or **proven by an import**: a key removed in AuditLogs or keys regenerated in AzureActivity tick the item off with a link to the evidence. What the attacker did is no proof: keys a compromised identity regenerated are in the attacker's hands, so such an event keeps the item open and raises its own advice. A compromised service principal is done once every compromised credential seen with it is removed. If the attacker used it successfully after that, the item reopens.
 - **Prove the rotation** (service principals and app registrations): the KQL *Prove the rotation* returns every secret and certificate removed from or added to the affected apps since the attack (AuditLogs `KeyDescription`, one row per key: `CredentialChange`, `KeyId`, `KeyType`, `Application`, `Actor` …). Export it as CSV and drop it on the board: removed keys join the credentials from the sign-ins by key ID, keys added during the attack show up as backdoors. *Where else was the stolen credential used, and is it still accepted?* is importable too; after the rotation only failed attempts may remain.
 - **Hunt next (KQL)** gives Sentinel / Log Analytics queries filled with the key IDs, object and app IDs, IPs, resources and the window from the board: other use of the stolen credential, everything from the attacker's IPs, Key Vault and Graph access, persistence (new credentials, owners, role assignments), whether stolen keys and kubeconfigs were used afterwards. Run them, drop the exports on the board, and the analysis grows.
 
-In the graph, compromised nodes are red, impacted ones orange with what happened to them, attacker activities and their edges red, and group cards say how many of their members are affected. The **Impact** lens in the canvas toolbar dims everything else and zooms to the attack; exported images carry the same markers. *Copy report* puts the whole picture into Markdown for a ticket. The analysis runs in the browser in one pass over the board (about 20 ms for 8,600 evidence items) and updates with every change; agents get it from `get_impact`.
+In the graph, failed attempts are hidden by default and locations show as a flag on the IP (both switchable in **Layers**); credentials are laid out next to the identity they sign in as. IP groups are named after what their members share (network provider, country, tooling: *184 IP · AS8075 · NL · python-requests*). The evidence time bar sits at the top of the workspace, shows how much evidence falls in each step, steps automatically or per day, hour, minute or event, and shows the attacker's window in red. Activities read as one sentence, every entity once (*outlook.exe process created powershell.exe on ws-0142 as j.doe*), in the inspector, the timeline and the review. A board opens on its busiest part when the whole graph would be unreadably small; *Arrange* picks left-to-right or top-to-bottom, whichever fits the window. The inspector shows an activity as a small diagram and evidence as fields (operation, who, on what, IP, result, location, credential, user agent, session) with the original row on demand. Compromised nodes are red, impacted ones orange with what happened to them, attacker activities and their edges red, and group cards say how many of their members are affected. The **Impact** lens in the canvas toolbar dims everything else and zooms to the attack; exported images carry the same markers. *Copy report* puts the whole picture into Markdown for a ticket. The analysis runs in the browser in one pass over the board (about 20 ms for 8,600 evidence items) and updates with every change; agents get it from `get_impact`.
 
 ## Connecting AI agents (MCP and REST)
 
@@ -276,9 +291,9 @@ When a board is opened, the browser creates a random **session token**. REST and
 **Connect an agent** (API/MCP menu or command palette) provides ready-to-copy snippets:
 
 - `.vscode/mcp.json` for VS Code / GitHub Copilot. By default VS Code asks for the token when the server starts, so the file can be committed; optionally with the token embedded.
-- The command for Claude Code (`claude mcp add --transport http factgraph … --header "X-FactGraph-Token: …"`).
-- Endpoint and header for other clients.
-- A first message for the agent containing the board ID.
+- Two commands for Claude Code: one with the token for your own configuration, and one with `--scope project` that stores the placeholder `${FACTGRAPH_TOKEN}` in `.mcp.json` (safe to commit; each analyst exports the variable).
+- Endpoint, header, a paginated REST example (`/entities?q=…&limit=50`) and what the error codes mean for other clients.
+- A first message for the agent containing the board ID; it asks the agent to look things up with `find_entities` instead of reading the whole board.
 
 ![Connect an agent](docs/images/connect-agent.png)
 
@@ -386,6 +401,7 @@ The table schemas (names, columns, types; no description text) are generated fro
 - **SVG** as a standalone vector file; text stays editable in Illustrator, Inkscape, Word or PowerPoint.
 - **PNG** at 1×, 2× or 3×; very large graphs are reduced automatically to the browser's size limits.
 - Scope: the whole graph, the visible area or the selection; light or dark theme, transparent background, title with filters and date, status legend. **Copy** puts the image on the clipboard.
+- A preview shows the picture, its size and how large the labels end up on a 1920 px slide, before anything is written.
 - Agents use `export_image` or `POST /export`; the response contains `content` as SVG text or base64 PNG:
 
 ```bash
@@ -396,11 +412,15 @@ curl -s -X POST "http://127.0.0.1:8080/api/boards/$BOARD/export" \
 
 ## Synchronisation, conflicts and limits
 
+A **Syncing … changes** indicator in the header shows larger syncs (reconnects, imports, colleagues' batches) and a short *Synced* when done. Messages above 1 MB go to the relay gzip-compressed in a binary frame, so the 16 MiB WebSocket limit applies to the compressed size (up to 192 MiB unpacked); large imports are additionally kept in source parts.
+
 - Every browser sorts all actions the same way (logical clock, actor, ID). Any arrival order therefore produces the same graph, and concurrent changes to the same field are resolved identically everywhere.
-- When joining and reconnecting, browsers exchange their histories. Changes made offline stay local and are delivered later.
+- When joining and reconnecting, a browser sends a short summary of what it holds (per author: last clock, count, digest) to one peer, which answers with only what is missing; then the others are asked for what only they have. Changes made offline stay local and are delivered when a peer asks back. Large batches travel gzip-compressed; the relay forwards them without unpacking.
+- A duplicated browser tab gets its own identity before it connects. If two connections still claim the same identity, the older tab stops reconnecting and offers to continue as a new session.
+- All times are stored in one format, ISO 8601 in UTC with milliseconds. A time without a zone (from an export, an agent or a dialog) is read as UTC, never as the browser's local time. Exports whose time columns are marked *[Local]* are refused, so they cannot shift silently.
 - If an entity is merged while another browser still works with the old ID, that browser's new relationships, activity roles, identifiers and group changes end up on the merge target instead of being lost.
 - Group membership changes are incremental, so concurrent edits by two analysts are both kept.
-- **Undo** (`Cmd/Ctrl+Z`) reverts your own last group of actions (an import counts as one group) and refuses if someone else has changed the same records in the meantime. The **Activity** view lists all actions with channel (UI, REST, MCP, Import), author and time.
+- **Undo** (`Cmd/Ctrl+Z`) reverts your own last group of actions (an import counts as one group); changes agents made through this browser are not yours and are not undone by it (an agent's `undo` in turn only takes back REST/MCP batches). Undo refuses if someone else has built on the same records since, for example a relationship to an entity you would remove. The **Change log** lists every change with channel (UI, REST, MCP, Import), author and time, searchable and filterable by channel, author and kind; each change shows its fields with the earlier value (*before → after*) and links to the entity.
 - If the connection to the server is lost for more than a few seconds, the bell says so; when it is back, it reports how long it was gone and how many changes were synced. Large histories (100,000+ actions) load without problems.
 - If no browser has the board open, a new device cannot restore it from the UUID alone; import a JSON export instead. Without an export, boards are lost when the browser data is cleared.
 
@@ -430,8 +450,8 @@ cd web && npm run build && DOCS_SCREENSHOTS=1 npx playwright test e2e/docs-scree
 - **Publish Docker image** builds the image for `linux/amd64` and `linux/arm64` on a version tag (`v*.*.*`) or via **Run workflow**, and publishes it as `latest` and with the version number. It requires the repository secrets `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` (a Docker Hub access token with write permission).
 
 ```bash
-git tag v0.5.1
-git push origin v0.5.1
+git tag v0.5.2
+git push origin v0.5.2
 ```
 
 A manual multi-arch build is possible with `./deploy/publish-multiarch.sh` (`FACTGRAPH_IMAGE` and `FACTGRAPH_VERSION` override namespace and version).

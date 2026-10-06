@@ -14,6 +14,11 @@ def as_utc(value: str):
     date = datetime.fromisoformat(value.replace("Z", "+00:00"))
     return date.astimezone(timezone.utc) if date.tzinfo else date.replace(tzinfo=timezone.utc)
 
+
+def utc_iso(value: str) -> str:
+    """The one stored time format, as the browser writes it: UTC with milliseconds; a time without a zone is UTC."""
+    return as_utc(value).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
 class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -25,10 +30,10 @@ class StrictModel(BaseModel):
             value = getattr(self, key)
             if value is None and key not in nullable:
                 raise ValueError(f'{key} cannot be null')
-        for key in ('valid_from', 'valid_to'):
+        for key in ('valid_from', 'valid_to', 'rotated_at'):
             value = getattr(self, key, None)
             if value:
-                datetime.fromisoformat(value.replace('Z', '+00:00'))
+                setattr(self, key, utc_iso(value))
         start, end = getattr(self, 'valid_from', None), getattr(self, 'valid_to', None)
         if start and end and as_utc(start) > as_utc(end):
             raise ValueError('End must be after start')
@@ -104,14 +109,16 @@ class CompromiseInput(StrictModel):
     until: str | None = Field(default=None, alias="to")
     note: str = Field(default="", max_length=2000)
     cleared: bool = False
+    # An agent's mark is a hypothesis until an analyst confirms it in the board.
+    level: Literal["suspected", "confirmed"] = Field(default="suspected", description="suspected (default) until an analyst confirmed it; confirmed only if the evidence proves it.")
 
     @model_validator(mode="after")
     def window(self):
         if self.since and self.until and as_utc(self.since) > as_utc(self.until):
             raise ValueError("Compromise end must be after its start")
-        for value in (self.since, self.until):
-            if value:
-                as_utc(value)
+        for key in ('since', 'until'):
+            if getattr(self, key):
+                setattr(self, key, utc_iso(getattr(self, key)))
         return self
 
 class EntityUpdate(StrictModel):

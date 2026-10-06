@@ -116,7 +116,6 @@ class PerspectivePatch(StrictModel):
 
 
 def register_structures(app, core):
-    read_graph = core['get_graph']
     apply = core['apply_drafts']
     command = core['browser_command']
 
@@ -132,12 +131,13 @@ def register_structures(app, core):
             raise HTTPException(422, 'An activity needs at least two different participants')
         return [{'entity_id': p['entity_id'], 'role': p['role'].strip().casefold()} for p in items]
 
+    record_of = core['board_record']
+
     async def activity_record(board_id, activity_id):
-        graph = await read_graph(board_id)
-        record = next((f for f in graph['facts'] if f['id'] == activity_id and f.get('participants')), None)
+        record = await record_of(board_id, 'activities', activity_id)
         if record is None:
             raise HTTPException(404, 'Activity does not exist on this board')
-        return graph, record
+        return record
 
     @app.get('/api/layers')
     async def list_layers():
@@ -150,11 +150,18 @@ def register_structures(app, core):
 
         Prefer this over several separate relationships when one log record shows all participants together.
         Evidence attaches to the whole activity; the returned id works with all /relations/{id}/evidence endpoints."""
-        participants = check_participants(body.participants, await entity_ids(board_id))
-        if body.source_id and body.source_id not in {s['id'] for s in (await command(board_id, 'index'))['index']['sources']}:
+        index = (await command(board_id, 'index'))['index']
+        participants = check_participants(body.participants, {e['id'] for e in index['entities']})
+        if body.source_id and body.source_id not in {s['id'] for s in index['sources']}:
             raise HTTPException(422, 'Source does not exist on this board')
         activity_id = body.id or str(uuid4())
-        drafts = [action('fact.add', {'id': activity_id, 'predicate': body.operation.strip(), 'participants': participants,
+        # The same activity again (operation, participants, time): the board merges it, so evidence goes to the existing one.
+        key = '|'.join(sorted(f"{p['role']}:{p['entity_id']}" for p in participants))
+        existing = next((f for f in index['facts'] if f.get('participants_key') == key and f['predicate'].strip().casefold() == body.operation.strip().casefold()
+                         and f.get('valid_from') == body.valid_from and f.get('valid_to') == body.valid_to), None)
+        if existing:
+            activity_id = existing['id']
+        drafts = [] if existing else [action('fact.add', {'id': activity_id, 'predicate': body.operation.strip(), 'participants': participants,
                                       'technique': body.technique.strip(), 'valid_from': body.valid_from, 'valid_to': body.valid_to})]
         evidence_id = None
         if body.observation or body.locator or body.source_id:
@@ -169,16 +176,14 @@ def register_structures(app, core):
         """List activities (events with role-tagged participants). Filter by text q or by a participating entity_id."""
         if offset < 0 or not 1 <= limit <= 1000:
             raise HTTPException(422, 'Invalid pagination')
-        graph = await read_graph(board_id)
-        items = [f for f in graph['facts'] if f.get('participants')
-                 and (not entity_id or any(p['entity_id'] == entity_id for p in f['participants']))
-                 and (not q or q.casefold() in str(f).casefold())]
-        return {'board_id': board_id, 'items': items[offset:offset + limit], 'total': len(items)}
+        # Filtered and paginated in the browser; long evidence texts are shortened in lists (get_activity is complete).
+        result = await command(board_id, 'query', collection='activities', q=q, offset=offset, limit=limit, entity_id=entity_id or None)
+        return {'board_id': board_id, 'items': result.get('items', []), 'total': result.get('total', 0)}
 
     @app.get('/api/boards/{board_id}/activities/{activity_id}')
     async def get_activity(board_id: str, activity_id: str):
         """Read one activity including participants, evidence and derived truth_state."""
-        return (await activity_record(board_id, activity_id))[1]
+        return await activity_record(board_id, activity_id)
 
     @app.patch('/api/boards/{board_id}/activities/{activity_id}')
     async def update_activity(board_id: str, activity_id: str, body: ActivityUpdate):
@@ -227,11 +232,10 @@ def register_structures(app, core):
     core['import_activity_rows_impl'] = import_activity_rows
 
     async def group_record(board_id, group_id):
-        graph = await read_graph(board_id)
-        group = next((g for g in graph.get('groups', []) if g['id'] == group_id), None)
+        group = await record_of(board_id, 'groups', group_id)
         if group is None:
             raise HTTPException(404, 'Group does not exist on this board')
-        return graph, group
+        return group
 
     def check_members(ids, known, label):
         missing = [i for i in ids or [] if i not in known]
@@ -282,8 +286,7 @@ def register_structures(app, core):
         return {'board_id': board_id, **result['export']}
 
     async def view_record(board_id, view_id):
-        graph = await read_graph(board_id)
-        if not any(v['id'] == view_id for v in graph.get('views', [])):
+        if await record_of(board_id, 'views', view_id) is None:
             raise HTTPException(404, 'Perspective does not exist on this board')
 
     @app.post('/api/boards/{board_id}/perspectives', status_code=201)

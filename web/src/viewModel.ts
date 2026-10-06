@@ -136,7 +136,8 @@ export function buildViewModel(entities: Entity[], facts: Fact[], groups: Group[
     }
     const s = repOf(fact.subject_id), t = repOf(fact.object_id)
     if (!s || !t) { noteHidden(s, t); continue }
-    if (s === t) { const g = groupNodes.get(s); if (g) g.internal++; continue }
+    // Two members of one collapsed group: an internal link of the card. A relationship of an entity with itself stays visible.
+    if (s === t && (fact.subject_id !== fact.object_id || groupNodes.has(s))) { const g = groupNodes.get(s); if (g) g.internal++; continue }
     const key = `${s}|${t}|${fact.predicate.trim().toLowerCase()}`
     const existing = edges.get(key)
     if (existing) { existing.count++; existing.factIds.push(fact.id); existing.states.push(fact.truth_state) }
@@ -207,7 +208,7 @@ export function groupSuggestions(entities: Entity[], facts: Fact[], groups: Grou
     const memberSet = new Set(members)
     const outliers = entities.filter(e => e.kind === kind && !memberSet.has(e.id) && !grouped.has(e.id) && [...(tokens.get(e.id) ?? [])].some(t => shared.includes(t))).map(e => e.id)
     members.forEach(m => covered.add(m))
-    result.push({ id: `sig:${members[0]}`, name: `${members.length} ${kind}`, members, outliers, reason: `Same connections: ${shared.slice(0, 2).map(describe).join('; ')}${shared.length > 2 ? ` +${shared.length - 2}` : ''}` })
+    result.push({ id: `sig:${members[0]}`, name: `${kind} · same connections`, members, outliers, reason: `Same connections: ${shared.slice(0, 2).map(describe).join('; ')}${shared.length > 2 ? ` +${shared.length - 2}` : ''}` })
   }
   const perKind = new Map<string, string[]>()
   for (const entity of entities) if (!grouped.has(entity.id)) { const list = perKind.get(entity.kind); if (list) list.push(entity.id); else perKind.set(entity.kind, [entity.id]) }
@@ -230,6 +231,13 @@ export function borderPoint(from: NodeBox, toward: Point, pad = 0): Point {
 
 /** Floating edge between two node boxes (centre + size); parallel edges bend by `offset`. */
 export function edgeGeometry(a: NodeBox, b: NodeBox, offset: number) {
+  // An entity related to itself: a loop over its top right corner, larger for each further one.
+  if (a.x === b.x && a.y === b.y) {
+    const size = 34 + Math.abs(offset) * 0.8
+    const start = { x: a.x + a.w / 2 - 18, y: a.y - a.h / 2 }, end = { x: a.x + a.w / 2, y: a.y - a.h / 2 + 14 }
+    const path = `M ${start.x} ${start.y} C ${start.x} ${start.y - size} ${end.x + size} ${end.y} ${end.x + 3} ${end.y}`
+    return { path, label: { x: start.x + size * 0.45, y: start.y - size * 0.55 }, start, end }
+  }
   const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2
   const len = Math.hypot(b.x - a.x, b.y - a.y) || 1
   const cx = mx + (-(b.y - a.y) / len) * offset * 2, cy = my + ((b.x - a.x) / len) * offset * 2
@@ -396,7 +404,7 @@ export function autoGroups(entities: Entity[], facts: Fact[], groups: Group[], o
   const take = (members: Entity[], name: (ops: Set<string>) => string, reason: string) => {
     const ops = new Set(members.flatMap(m => [...(operations.get(m.id) ?? [])]))
     members.forEach(m => taken.add(m.id))
-    result.push({ members: members.map(m => m.id), name: `${members.length} ${members[0].kind} · ${name(ops)}`, reason })
+    result.push({ members: members.map(m => m.id), name: `${members[0].kind} · ${name(ops)}`, reason })
   }
   const one = (ops: Set<string>) => ops.size === 1 ? [...ops][0] : `${ops.size} operations`
   for (const members of bucket(e => `${e.kind}\u0000${[...exact.get(e.id)!].sort().join('\u0001')}`))
@@ -408,7 +416,38 @@ export function autoGroups(entities: Entity[], facts: Fact[], groups: Group[], o
     const own = [...new Set(peers.filter(id => !shared(id)).map(id => byId.get(id)?.kind ?? '?'))]
     take(members, one, `Same operation with ${names(peers.filter(shared))}; each with its own ${own.join(', ')}`)
   }
+  // IPs: by what they are (network provider, country, tooling, operations), not by address range.
+  const traits = ipTraits(entities, facts)
+  const label = (id: string) => { const t = traits.get(id); return t ? [t.asn && `AS${t.asn}`, t.country, t.agent].filter(Boolean).join(' · ') : '' }
+  for (const members of bucket(e => { const t = traits.get(e.id); return /^ip$/i.test(e.kind) && t?.asn ? `${t.asn}|${t.country}|${t.agent}|${[...(operations.get(e.id) ?? [])].sort().join(',')}` : null }))
+    take(members, ops => `${label(members[0].id)} · ${one(ops)}`, `Same network provider, country, tooling and operations`)
+  // Name IP groups after what their members share.
+  for (const group of result) {
+    if (!/^IP · /.test(group.name) || group.name.includes(' · AS')) continue
+    const shared = label(group.members[0])
+    if (shared && group.members.every(id => label(id) === shared)) group.name = group.name.replace(/^IP · /, `IP · ${shared} · `)
+  }
   return result
+}
+
+/** Per IP: its network provider (ASN), country and user-agent family, from the observations and original rows it appears in. */
+export function ipTraits(entities: Entity[], facts: Fact[]): Map<string, { asn: string; country: string; agent: string }> {
+  const kinds = new Map(entities.map(e => [e.id, e.kind])), names = new Map(entities.map(e => [e.id, e.name]))
+  const traits = new Map<string, { asn: string; country: string; agent: string }>()
+  for (const fact of facts) {
+    const parts = fact.participants ?? []
+    const ip = parts.find(p => p.role === 'source' && /^ip$/i.test(kinds.get(p.entity_id) ?? ''))?.entity_id
+    if (!ip) continue
+    const t = traits.get(ip) ?? { asn: '', country: '', agent: '' }
+    const location = parts.find(p => /^location$/i.test(kinds.get(p.entity_id) ?? ''))
+    if (!t.country && location) t.country = /\b([A-Z]{2})\s*$/.exec(names.get(location.entity_id) ?? '')?.[1] ?? ''
+    for (const item of fact.assertions.slice(0, 3)) {
+      if (!t.asn) t.asn = /\bASN (\d+)/.exec(item.observation ?? '')?.[1] ?? (item.note?.includes('AutonomousSystemNumber') ? /"AutonomousSystemNumber":\s*"?(\d+)/.exec(item.note)?.[1] ?? '' : '')
+      if (!t.agent && item.note?.includes('serAgent')) t.agent = (/"UserAgent":\s*"([^"/\s;(]+)/.exec(item.note)?.[1] ?? '').toLowerCase()
+    }
+    traits.set(ip, t)
+  }
+  return traits
 }
 
 /** Drafts that create the groups collapsed, each at the centre of its members, as one batch (one undo step). */

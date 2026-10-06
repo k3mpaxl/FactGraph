@@ -5,7 +5,7 @@ const { buildViewModel } = require(path + '/viewModel.js')
 const { buildGraphSvg, safeScale, escapeXml, mix } = require(path + '/exportGraph.js')
 
 let clock = 0
-const act = (type, payload) => ({ id: `a${++clock}`, clock, at: '2026-09-29T00:00:00Z', actor: 'x', author: 'x', boardId: 'b', type, payload })
+const act = (type, payload) => ({ id: `a${++clock}`, clock, at: '2026-09-29T00:00:00.000Z', actor: 'x', author: 'x', boardId: 'b', type, payload })
 const ops = [
   act('entity.add', { id: 'atk', name: 'APT <script>alert(1)</script> & "co"', kind: 'Threat Actor', x: 0, y: 0 }),
   act('entity.add', { id: 'ip', name: '203.0.113.7', kind: 'IP', x: 0, y: 200 }),
@@ -13,7 +13,7 @@ const ops = [
   act('entity.add', { id: 'far', name: 'far away', kind: 'Device', x: 5000, y: 5000 }),
   act('fact.add', { id: 'ctl', subject_id: 'atk', predicate: 'controls', object_id: 'ip' }),
   act('fact.add', { id: 'ev', predicate: 'listed secrets', participants: [{ entity_id: 'atk', role: 'actor' }, { entity_id: 'ip', role: 'source' }, { entity_id: 'kv', role: 'target' }], technique: 'T1555' }),
-  act('assertion.add', { id: 'e', fact_id: 'ev', stance: 'supports', note: 'x', valid_from: '2026-09-28T10:42:00Z' }),
+  act('assertion.add', { id: 'e', fact_id: 'ev', stance: 'supports', note: 'x', valid_from: '2026-09-28T10:42:00.000Z' }),
 ]
 for (let i = 0; i < 30; i++) { ops.push(act('entity.add', { id: `r${i}`, name: `repo-${i}`, kind: 'Repository', x: 900, y: i * 60 })); ops.push(act('fact.add', { id: `f${i}`, subject_id: 'ip', predicate: 'cloned', object_id: `r${i}` })) }
 ops.push(act('group.add', { id: 'g', name: 'Repos & forks', rule: { kinds: ['Repository'] }, collapsed: true }))
@@ -61,9 +61,9 @@ assert.equal(empty.nodeCount, 0)
   const attack = [act('entity.add', { id: 'cred', name: 'stolen secret', kind: 'Credential', x: 0, y: 0 }), act('entity.add', { id: 'vault', name: 'kv-prod', kind: 'Key Vault', x: 400, y: 0 }),
     act('entity.add', { id: 'calm', name: 'unrelated', kind: 'Device', x: 0, y: 300 }), act('entity.add', { id: 'other', name: 'other', kind: 'Device', x: 400, y: 300 }),
     act('fact.add', { id: 'f', predicate: 'secret get', participants: [{ entity_id: 'cred', role: 'tool' }, { entity_id: 'vault', role: 'target' }] }),
-    act('assertion.add', { id: 'e', fact_id: 'f', stance: 'supports', note: 'row', valid_from: '2026-09-20T00:00:00Z' }),
+    act('assertion.add', { id: 'e', fact_id: 'f', stance: 'supports', note: 'row', valid_from: '2026-09-20T00:00:00.000Z' }),
     act('fact.add', { id: 'g', subject_id: 'calm', predicate: 'connects to', object_id: 'other' }),
-    act('entity.update', { id: 'cred', compromise: { from: '2026-09-15T00:00:00Z' } })]
+    act('entity.update', { id: 'cred', compromise: { from: '2026-09-15T00:00:00.000Z' } })]
   const data = project('b', attack).data
   const view = buildViewModel(data.entities, data.facts, data.groups, { visibleLayers: null, collapseActivities: false, showLanes: false, entityTypes: [] })
   const marks = exportMarks(analyzeImpact(data), data.groups)

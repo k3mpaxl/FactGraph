@@ -1,5 +1,6 @@
-import { parseParticipants, type ActionDraft } from './board'
+import { activityEnds, parseParticipants, type ActionDraft } from './board'
 import { LAYER_IDS } from './layers'
+import { utc } from './time'
 import type { GraphData } from './types'
 
 /** Validate new local/API commands before committing; legacy log replay stays tolerant. */
@@ -16,9 +17,9 @@ export function validateDrafts(graph: GraphData, drafts: ActionDraft[]) {
   for (const { type, payload: p } of drafts) {
     const id = String(p.id ?? '')
     const require = (ok: unknown, message: string) => { if (!ok) throw new Error(message) }
-    for (const field of ['valid_from', 'valid_to']) if (p[field] !== undefined && p[field] !== null)
-      require(typeof p[field] === 'string' && Number.isFinite(Date.parse(p[field] as string)), `Invalid ${field}`)
-    if (p.valid_from && p.valid_to) require(Date.parse(String(p.valid_from)) <= Date.parse(String(p.valid_to)), 'End must be after start')
+    // Times are read like the projection stores them: UTC, also when no zone is given.
+    for (const field of ['valid_from', 'valid_to']) if (p[field] !== undefined && p[field] !== null) require(utc(p[field]), `Invalid ${field}`)
+    if (p.valid_from && p.valid_to) require(utc(p.valid_from)! <= utc(p.valid_to)!, 'End must be after start')
     const textFields = ['name', 'kind', 'description', 'title', 'uri', 'excerpt', 'query', 'observation', 'locator', 'interpretation', 'note', 'predicate', 'scheme', 'namespace', 'raw_value']
     for (const key of textFields) if (key in p) require(typeof p[key] === 'string', `${key} must be text`)
     if ('review_status' in p && type !== 'assertion.review') require(p.review_status === 'unconfirmed', 'Use the review operation to confirm evidence')
@@ -65,10 +66,10 @@ export function validateDrafts(graph: GraphData, drafts: ActionDraft[]) {
     if (type === 'entity.update' && p.compromise) {
       const c = p.compromise as Record<string, unknown>
       require(typeof c === 'object', 'Invalid compromise')
-      for (const field of ['from', 'to']) if (c[field] !== undefined && c[field] !== null) require(typeof c[field] === 'string' && Number.isFinite(Date.parse(c[field] as string)), `Invalid compromise ${field}`)
-      if (c.from && c.to) require(Date.parse(String(c.from)) <= Date.parse(String(c.to)), 'Compromise end must be after its start')
+      for (const field of ['from', 'to']) if (c[field] !== undefined && c[field] !== null) require(utc(c[field]), `Invalid compromise ${field}`)
+      if (c.from && c.to) require(utc(c.from)! <= utc(c.to)!, 'Compromise end must be after its start')
     }
-    if (type === 'entity.update' && p.rotated_at !== undefined && p.rotated_at !== null) require(typeof p.rotated_at === 'string' && Number.isFinite(Date.parse(p.rotated_at)), 'Invalid rotation time')
+    if (type === 'entity.update' && p.rotated_at !== undefined && p.rotated_at !== null) require(utc(p.rotated_at), 'Invalid rotation time')
     if (type === 'entity.position' || (type === 'entity.add' && ('x' in p || 'y' in p)))
       require([p.x, p.y].every(n => typeof n === 'number' && Number.isFinite(n) && Math.abs(n) <= 100000), 'Invalid node position')
     if (type === 'entity.merge') require(p.source_id !== p.target_id && entities.has(String(p.source_id)) && entities.has(String(p.target_id)), 'Invalid merge entities')
@@ -91,7 +92,12 @@ export function validateDrafts(graph: GraphData, drafts: ActionDraft[]) {
     if (type.startsWith('assertion.') && type !== 'assertion.add') require(evidence.has(id), 'Evidence does not exist')
     if (type === 'entity.delete') {
       entities.delete(id)
-      for (const [fid,f] of facts) if(f.subject_id===id||f.object_id===id) {facts.delete(fid);for(const [eid,e] of evidence) if(e.fact_id===fid)evidence.delete(eid)}
+      for (const [fid,f] of facts) {
+        // Mirrors the projection: an activity keeps going while two other participants remain.
+        const remaining = f.participants?.filter(p => p.entity_id !== id)
+        if (f.participants?.length && remaining!.length < f.participants.length && new Set(remaining!.map(p => p.entity_id)).size >= 2) { const ends = activityEnds(remaining!); facts.set(fid, { ...f, participants: remaining, ...ends }) }
+        else if (f.subject_id===id||f.object_id===id||(remaining && remaining.length < (f.participants?.length ?? 0))) {facts.delete(fid);for(const [eid,e] of evidence) if(e.fact_id===fid)evidence.delete(eid)}
+      }
       for (const g of graph.groups ?? []) if (g.rule?.container_id === id) groups.delete(g.id)
     }
     if (type === 'fact.delete') {require(facts.has(id),'Relationship does not exist');facts.delete(id);for(const [eid,e] of evidence) if(e.fact_id===id)evidence.delete(eid)}
@@ -101,7 +107,7 @@ export function validateDrafts(graph: GraphData, drafts: ActionDraft[]) {
     if (type === 'source.update' && p.expected_revision != null) require(sources.get(id)?.revision === p.expected_revision, 'Source changed. Reload before saving.')
     if (type === 'assertion.update' && p.expected_revision != null) require(evidence.get(id)?.revision === p.expected_revision, 'Evidence changed. Reload before saving.')
     if (type === 'source.update') { const source = sources.get(id)!; source.revision = 'pending'; Object.assign(source, p) }
-    if (type === 'assertion.update') { const current = evidence.get(id)!; Object.assign(current,p); current.revision = 'pending'; if(current.valid_from && current.valid_to) require(Date.parse(current.valid_from)<=Date.parse(current.valid_to),'End must be after start') }
+    if (type === 'assertion.update') { const current = evidence.get(id)!; Object.assign(current,p); current.revision = 'pending'; if(current.valid_from && current.valid_to) require(utc(current.valid_from)! <= utc(current.valid_to)!,'End must be after start') }
     if (type === 'assertion.review') {
       const item = evidence.get(id)!
       require(typeof p.expected_revision === 'string' && p.expected_revision === item.revision, 'Evidence changed. Reload and review the current revision.')

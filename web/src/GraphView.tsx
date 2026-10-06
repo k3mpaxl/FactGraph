@@ -13,7 +13,7 @@ import { KindIcon, iconMarkup, prepareIconMarkup, typeIcons } from './KindIcon'
 import { browserMeasure, buildGraphSvg, downloadBlob, exportFilename, svgToPng } from './exportGraph'
 import { createWheelClassifier, zoomAround, zoomFactor } from './wheel'
 import { ORGANIC_THRESHOLD } from './organicLayout'
-import { exportMarks, type Effect, type Impact } from './impact'
+import { effectOf, exportMarks, type Effect, type Impact } from './impact'
 import { EFFECT_SHORT } from './ImpactPanel'
 import { LayoutCancelled, organicLayoutAsync } from './layoutClient'
 
@@ -59,8 +59,8 @@ export { KindIcon }
 // Callbacks live in a ref so node data stays referentially stable and memoised cards do not re-render on every parent render.
 type Handlers = { rename: (id: string, name: string) => void; cancelSelect: () => void; toggleGroup: (groupId: string, collapsed: boolean) => void }
 type HandlerRef = { current: Handlers }
-type Mark = 'compromised' | 'derived' | 'pivot' | 'impacted'
-type EntityData = { v: Extract<VNode, { kind: 'entity' }>; icon?: string; color: string; dimmed: boolean; match: boolean; handlers: HandlerRef; mark?: Mark; effect?: Effect; regular?: boolean }
+type Mark = 'compromised' | 'derived' | 'pivot' | 'impacted' | 'good'
+type EntityData = { v: Extract<VNode, { kind: 'entity' }>; icon?: string; color: string; dimmed: boolean; match: boolean; handlers: HandlerRef; mark?: Mark; effect?: Effect; regular?: boolean; flag?: string; suspected?: boolean }
 /** marks: "compromised|impacted" member counts, a string so unchanged nodes keep their identity. */
 type GroupData = { v: Extract<VNode, { kind: 'group' }>; dimmed: boolean; match: boolean; handlers: HandlerRef; marks?: string }
 type ActivityData = { v: Extract<VNode, { kind: 'activity' }>; dimmed: boolean; attack?: boolean }
@@ -79,7 +79,7 @@ const EntityCard = memo(function EntityCard({ data, selected }: NodeProps<Node<E
   useEffect(() => setName(entity.name), [entity.name])
   const hint = entity.identifiers[0]?.raw_value
   return <div className={`entity-node${selected ? ' selected' : ''}${data.dimmed ? ' dimmed' : ''}${data.match ? ' match' : ''}${data.mark ? ` mark-${data.mark}${data.regular ? ' effect-attempt' : data.effect ? ` effect-${data.effect}` : ''}` : ''}`} style={{ '--entity-color': data.color } as CSSProperties}>
-    {data.mark && <span className={`impact-badge ${data.mark}${data.regular ? ' regular' : data.effect ? ` ${data.effect}` : ''}`}>{data.mark === 'compromised' ? 'Compromised' : data.mark === 'derived' ? 'Compromised (derived)' : data.mark === 'pivot' ? 'New with attacker' : data.regular ? 'Likely regular' : EFFECT_SHORT[data.effect ?? 'other']}</span>}
+    {data.mark && <span className={`impact-badge ${data.mark}${data.regular ? ' regular' : data.effect ? ` ${data.effect}` : ''}`}>{data.mark === 'good' ? 'Good' : data.mark === 'compromised' ? (data.suspected ? 'Suspected' : 'Compromised') : data.mark === 'derived' ? (data.suspected ? 'Suspected (derived)' : 'Compromised (derived)') : data.mark === 'pivot' ? 'New with attacker' : data.regular ? 'Likely regular' : EFFECT_SHORT[data.effect ?? 'other']}</span>}
     <Handle type="target" position={Position.Left} id="in" aria-label={`Connect to ${entity.name}`} />
     <div className="node-icon"><KindIcon kind={entity.kind} icon={data.icon} /></div>
     <div className="node-copy">
@@ -87,7 +87,7 @@ const EntityCard = memo(function EntityCard({ data, selected }: NodeProps<Node<E
         <input autoFocus aria-label="Entity name" value={name} onChange={e => setName(e.target.value)} onBlur={() => { setEditing(false); setName(entity.name) }}
           onKeyDown={e => { if (e.key === 'Escape') { setEditing(false); setName(entity.name); e.stopPropagation() } }} />
       </form> : <strong onDoubleClick={event => { event.stopPropagation(); data.handlers.current.cancelSelect(); setEditing(true) }} title={entity.name}>{entity.name}</strong>}
-      <small>{entity.kind}{hint ? <> · <span>{hint}</span></> : null}</small>
+      <small>{data.flag && <span className="node-flag" title="Location of its sign-ins">{data.flag} </span>}{entity.kind}{hint ? <> · <span>{hint}</span></> : null}</small>
     </div>
     {entity.pinned && <Pin className="node-pin" size={12} aria-label="Pinned" />}
     {(container || hidden > 0) && <div className="node-chips">
@@ -153,10 +153,10 @@ const FloatingEdge = memo(function FloatingEdge({ id, source, target, label, sel
   const { path, label: { x: lx, y: ly } } = edgeGeometry(boxOf(s), boxOf(t), data.offset)
   const width = data.count > 1 ? edgeWidth(data.count) : undefined
   return <>
-    <BaseEdge id={id} path={path} interactionWidth={16} markerEnd={`url(#fg-arrow-${selected ? 'selected' : data.state})`} style={width ? { strokeWidth: width } : undefined}
+    <BaseEdge id={id} path={path} interactionWidth={16} markerEnd={`url(#fg-arrow-${data.attack ? 'refuted' : selected ? 'selected' : data.state})`} style={width ? { strokeWidth: width } : undefined}
       className={`fg-edge ${data.state}${selected ? ' selected' : ''}${data.dimmed ? ' dimmed' : ''}${data.spoke ? ' spoke' : ''}${data.attack ? ' attack' : ''}`} />
     {(showLabel || selected) && label && <EdgeLabelRenderer>
-      <button type="button" className={`edge-label nodrag nopan ${data.state}${selected ? ' selected' : ''}${data.dimmed ? ' dimmed' : ''}${data.spoke ? ' spoke' : ''}`}
+      <button type="button" className={`edge-label nodrag nopan ${data.state}${selected ? ' selected' : ''}${data.dimmed ? ' dimmed' : ''}${data.spoke ? ' spoke' : ''}${data.attack ? ' attack' : ''}`}
         style={{ transform: `translate(-50%, -50%) translate(${lx}px, ${ly}px)` }} title={String(label)}
         onClick={event => { event.stopPropagation(); data.onPick(id) }} onDoubleClick={event => { event.stopPropagation(); data.onEdit(id) }}>
         {label}{data.count > 1 && <b>×{data.count}</b>}</button>
@@ -294,11 +294,39 @@ function Canvas(props: Props) {
   }
 
   const typeByName = useMemo(() => new Map(entityTypes.map(t => [t.name, t])), [entityTypes])
-  const view = useMemo(() => buildViewModel(entities, facts, groups, { visibleLayers: lens.layers, collapseActivities: lens.collapseActivities, showLanes: lens.showLanes, entityTypes }),
-    [entities, facts, groups, lens, entityTypes])
+  // What the canvas shows: failed attempts hidden unless asked for, locations as a flag on the IP instead of a node.
+  const [showFailed, setShowFailed] = useState(() => pref('showFailed', false))
+  const [locationNodes, setLocationNodes] = useState(() => pref('locationNodes', false))
+  const shown = useMemo(() => {
+    const locations = new Set(locationNodes ? [] : entities.filter(e => /^location$/i.test(e.kind)).map(e => e.id))
+    const names = new Map(entities.map(e => [e.id, e.name]))
+    const flags = new Map<string, Set<string>>()
+    const kept: Fact[] = [], used = new Set<string>(), all = new Set<string>()
+    for (const fact of facts) {
+      const ids = fact.participants?.length ? fact.participants.map(p => p.entity_id) : [fact.subject_id, fact.object_id]
+      for (const id of ids) all.add(id)
+      if (!showFailed && effectOf(fact.predicate) === 'attempt') continue
+      let shownFact = fact
+      if (locations.size && ids.some(id => locations.has(id))) {
+        if (!fact.participants?.length) continue
+        const codes = fact.participants.filter(p => locations.has(p.entity_id)).map(p => /\b([A-Z]{2})\s*$/.exec(names.get(p.entity_id) ?? '')?.[1]).filter((c): c is string => !!c)
+        for (const p of fact.participants) if (p.role === 'source' && !locations.has(p.entity_id)) { let set = flags.get(p.entity_id); if (!set) flags.set(p.entity_id, set = new Set()); codes.forEach(c => set!.add(c)) }
+        const rest = fact.participants.filter(p => !locations.has(p.entity_id))
+        if (rest.length < 2) continue
+        shownFact = { ...fact, participants: rest }
+      }
+      kept.push(shownFact)
+      for (const id of ids) used.add(id)
+    }
+    const hidden = facts.length - kept.length
+    return { entities: entities.filter(e => !locations.has(e.id) && (used.has(e.id) || !all.has(e.id))), facts: kept, flags, hidden }
+  }, [entities, facts, showFailed, locationNodes])
+  const view = useMemo(() => buildViewModel(shown.entities, shown.facts, groups, { visibleLayers: lens.layers, collapseActivities: lens.collapseActivities, showLanes: lens.showLanes, entityTypes }),
+    [shown, groups, lens, entityTypes])
   const impact = props.impact ?? null
   const impactEffects = useMemo(() => new Map((impact?.impacted ?? []).map(i => [i.entity.id, i.effect])), [impact])
   const impactRegular = useMemo(() => new Set((impact?.impacted ?? []).filter(i => i.regular).map(i => i.entity.id)), [impact])
+  const impactSuspected = useMemo(() => new Set((impact?.seeds ?? []).filter(s => s.suspected).map(s => s.entity.id)), [impact])
   const groupMarks = useMemo(() => {
     const marks = new Map<string, string>()
     if (!impact?.marks.size) return marks
@@ -364,15 +392,18 @@ function Canvas(props: Props) {
   const needle = search.trim().toLowerCase()
   const matches = (entity: Entity) => `${entity.name} ${entity.kind} ${entity.identifiers.map(i => i.raw_value).join(' ')}`.toLowerCase().includes(needle)
 
+  const entityById = useMemo(() => new Map(entities.map(e => [e.id, e])), [entities])
   const lastSelection = useRef<string | null | undefined>(undefined)
   useEffect(() => {
     const selectionChanged = lastSelection.current !== selectedNodeId
     lastSelection.current = selectedNodeId
     setNodes(current => {
       const previous = new Map(current.map(n => [n.id, n]))
+      // The inspector follows a click on the canvas (the node is already selected there): keep a Shift multi-selection.
+      const fromCanvas = selectionChanged && !!selectedNodeId && !!previous.get(selectedNodeId)?.selected
       return view.nodes.map(v => {
         const old = previous.get(v.id)
-        const selected = v.kind !== 'frame' && (v.id === selectedNodeId || (!selectionChanged && !!old?.selected))
+        const selected = v.kind !== 'frame' && (v.id === selectedNodeId || ((!selectionChanged || fromCanvas) && !!old?.selected))
         const dimmedByFocus = !!focusIds && !focusIds.has(v.id)
         const base = { id: v.id, measured: old?.measured, selected, position: old?.dragging ? old.position : v.position }
         let data: AnyData
@@ -381,16 +412,19 @@ function Canvas(props: Props) {
           const match = !!needle && matches(v.entity)
           const mark = impact?.marks.get(v.entity.id)
           data = { v, icon: type?.icon, color: v.entity.color || type?.color || entityVisual(v.entity.kind).border, match, dimmed: (!!needle && !match) || dimmedByFocus || (!!lensIds && !lensIds.has(v.id)), handlers,
-            mark, effect: mark === 'impacted' ? impactEffects.get(v.entity.id) : undefined, regular: mark === 'impacted' && impactRegular.has(v.entity.id) }
+            mark, effect: mark === 'impacted' ? impactEffects.get(v.entity.id) : undefined, regular: mark === 'impacted' && impactRegular.has(v.entity.id), suspected: impactSuspected.has(v.entity.id),
+            flag: shown.flags.get(v.entity.id)?.size ? [...shown.flags.get(v.entity.id)!].slice(0, 3).map(code => String.fromCodePoint(...[...code].map(c => 127397 + c.charCodeAt(0)))).join('') + ` ${[...shown.flags.get(v.entity.id)!].slice(0, 3).join('/')}` : undefined }
         } else if (v.kind === 'group') {
-          const match = !!needle && v.group.member_ids.some(id => { const e = entities.find(x => x.id === id); return !!e && matches(e) })
+          const match = !!needle && v.group.member_ids.some(id => { const e = entityById.get(id); return !!e && matches(e) })
           data = { v, match, dimmed: (!!needle && !match) || dimmedByFocus || (!!lensIds && !lensIds.has(v.id)), handlers, marks: groupMarks.get(v.group.id) }
         } else if (v.kind === 'activity') {
-          const attack = !!impact?.facts.size && v.facts.some(f => impact.facts.has(f.id))
-          data = { v, dimmed: !!needle || dimmedByFocus || (!!lensIds && !attack), attack }
+          // Red only for what is likely the attacker's; activity that also happened exactly so before is in the lens, not red.
+          const windowed = !!impact?.facts.size && v.facts.some(f => impact.facts.has(f.id))
+          const attack = windowed && v.facts.some(f => { const hit = impact!.facts.get(f.id); return !!hit && !hit.before })
+          data = { v, dimmed: !!needle || dimmedByFocus || (!!lensIds && !windowed), attack }
         }
         else data = { v, handlers }
-        const unrelated = v.kind !== 'frame' && hideUnrelated && (dimmedByFocus || (!!lensIds && (v.kind === 'activity' ? !(data as ActivityData).attack : !lensIds.has(v.id))))
+        const unrelated = v.kind !== 'frame' && hideUnrelated && (dimmedByFocus || (!!lensIds && (v.kind === 'activity' ? !v.facts.some(f => impact?.facts.has(f.id)) : !lensIds.has(v.id))))
         const sameData = old && old.type === (v.kind === 'group' ? 'bundle' : v.kind) && Object.keys(data).every(k => k === 'v' ? sameV(old.data.v, v) : (old.data as Record<string, unknown>)[k] === (data as Record<string, unknown>)[k])
         if (old && sameData && old.selected === selected && !!old.hidden === unrelated && old.position.x === base.position.x && old.position.y === base.position.y) return old
         return { ...base, hidden: unrelated, type: v.kind === 'group' ? 'bundle' : v.kind, data: sameData ? old!.data : data,
@@ -399,7 +433,7 @@ function Canvas(props: Props) {
           selectable: v.kind !== 'frame', zIndex: v.kind === 'frame' ? -1 : undefined, ...(v.kind === 'frame' ? { width: v.width, height: v.height } : {}) } as Node<AnyData>
       })
     })
-  }, [view, selectedNodeId, needle, typeByName, focusIds, impact, lensIds, impactEffects, impactRegular, groupMarks, hideUnrelated])
+  }, [view, selectedNodeId, needle, typeByName, focusIds, impact, lensIds, impactEffects, impactRegular, impactSuspected, groupMarks, hideUnrelated, shown])
   useEffect(() => { if (pendingFocus.current && groups.some(g => g.id === pendingFocus.current && !g.collapsed)) { const id = pendingFocus.current; pendingFocus.current = null; requestAnimationFrame(() => focusOn(id)) } }, [view])
   // Arrange once the new groups are on the canvas (React Flow has the nodes after this render).
   useEffect(() => {
@@ -409,7 +443,23 @@ function Canvas(props: Props) {
     requestAnimationFrame(() => { if (pending.arrange) void align(); else void flow.fitView({ padding: 0.2, maxZoom: 1.1, duration: 400 }) })
   }, [nodes])
   useEffect(() => { if (pendingFit.current) { pendingFit.current = false; requestAnimationFrame(() => void flow.fitView({ padding: 0.2, maxZoom: 1.1, duration: 400 })) } }, [view])
-  useEffect(() => { if (!fitted.current && nodes.length) { fitted.current = true; if (!props.initialViewport) requestAnimationFrame(() => void flow.fitView({ padding: 0.2, maxZoom: 1.1 })) } }, [nodes.length, flow, props.initialViewport])
+  // First view of a board: everything if it is readable, otherwise the busiest part (F or the fit button shows all).
+  useEffect(() => {
+    if (fitted.current || !nodes.length) return
+    fitted.current = true
+    if (props.initialViewport) return
+    requestAnimationFrame(() => {
+      void flow.fitView({ padding: 0.2, maxZoom: 1.1 })
+      if (flow.getViewport().zoom >= 0.45 || view.nodes.length < 30) return
+      const degree = new Map<string, number>()
+      for (const e of view.edges) { degree.set(e.source, (degree.get(e.source) ?? 0) + 1); degree.set(e.target, (degree.get(e.target) ?? 0) + 1) }
+      const lens = props.impactLens && lensIds?.size ? [...lensIds] : null
+      const hub = [...degree].filter(([id]) => !id.startsWith('act:')).sort((a, b) => b[1] - a[1])[0]?.[0]
+      if (lens) void flow.fitView({ nodes: lens.slice(0, 60).map(id => ({ id })), padding: 0.2, maxZoom: 1 })
+      else if (hub) focusOn(hub)
+      props.onNotice('Zoomed to the busiest part of the graph · F or the fit button shows everything')
+    })
+  }, [nodes.length, flow, props.initialViewport])
 
   const pickEdge = useRef((_id: string) => {})
   pickEdge.current = (id: string) => {
@@ -434,11 +484,12 @@ function Canvas(props: Props) {
     return view.edges.map(edge => {
       const selected = selectedEdgeIds.has(edge.id) || (!!edge.activityId && selection?.kind === 'fact' && selection.id === edge.activityId)
       const incident = !focusIds || (selectedNodeId ? edge.source === selectedNodeId || edge.target === selectedNodeId || (focusIds.has(edge.source) && focusIds.has(edge.target) && (edge.source.startsWith('act:') || edge.target.startsWith('act:'))) : selected)
-      const attack = !!impact?.facts.size && edge.factIds.some(id => impact.facts.has(id))
-      const unrelated = hideUnrelated && ((!!focusIds && !incident) || (!!lensIds && !attack))
+      const windowed = !!impact?.facts.size && edge.factIds.some(id => impact.facts.has(id))
+      const attack = windowed && edge.factIds.some(id => { const hit = impact!.facts.get(id); return !!hit && !hit.before })
+      const unrelated = hideUnrelated && ((!!focusIds && !incident) || (!!lensIds && !windowed))
       return { hidden: unrelated, id: edge.id, source: edge.source, target: edge.target, sourceHandle: 'out', targetHandle: 'in', type: 'floating', label: edge.label,
         reconnectable: !edge.activityId && edge.count === 1 && !edge.source.includes(':') && !edge.target.includes(':') && !confirmedFacts.has(edge.factIds[0]), selected,
-        data: { state: edge.state, offset: offsets.get(edge.id) ?? 0, dimmed: !incident || (!!lensIds && !attack), count: edge.count, spoke: !!edge.role, attack, ...edgeCallbacks } }
+        data: { state: edge.state, offset: offsets.get(edge.id) ?? 0, dimmed: !incident || (!!lensIds && !windowed), count: edge.count, spoke: !!edge.role, attack, ...edgeCallbacks } }
     })
   }, [view, selection, selectedEdgeIds, selectedNodeId, focusIds, edgeCallbacks, confirmedFacts, impact, lensIds, hideUnrelated])
 
@@ -567,6 +618,18 @@ function Canvas(props: Props) {
         return near.length ? Math.max(...near) : 0
       }
       const organic = !byLayer && (mode === 'organic' || (mode === 'auto' && movable.length > ORGANIC_THRESHOLD))
+      // Layout only: a credential sits next to the identity it signs in as (client secret beside its service principal).
+      const kinds = new Map(entities.map(e => [e.id, e.kind]))
+      const pairs = new Map<string, { source: string; target: string }>()
+      for (const v of view.nodes) if (v.kind === 'activity') for (const fact of v.facts) {
+        const parts = fact.participants ?? []
+        for (const owner of parts.filter(p => /service principal|application|managed identity|user/i.test(kinds.get(p.entity_id) ?? '')))
+          for (const credential of parts.filter(p => /credential|certificate|secret|token/i.test(kinds.get(p.entity_id) ?? ''))) {
+            const a = view.repOf(owner.entity_id), b = view.repOf(credential.entity_id)
+            if (a && b && a !== b && ids.has(a) && ids.has(b)) pairs.set(`${a}>${b}`, { source: a, target: b })
+          }
+      }
+      const layoutEdges = [...pairs.values()]
       if (organic) {
         const size = (n: Node<AnyData>) => ({ width: n.measured?.width ?? (n.type === 'activity' ? 28 : NODE_W), height: n.measured?.height ?? (n.type === 'activity' ? 28 : NODE_H) })
         const started = new Map(movable.map(n => [n.id, { ...n.position }]))
@@ -577,7 +640,7 @@ function Canvas(props: Props) {
         let positions: Map<string, { x: number; y: number }>
         try {
           positions = await organicLayoutAsync(chosen.map(n => ({ id: n.id, ...size(n), x: n.position.x, y: n.position.y, pinned: isPinned(n) })),
-            view.edges.filter(e => ids.has(e.source) || ids.has(e.target)).map(e => ({ source: e.source, target: e.target })),
+            [...view.edges.filter(e => ids.has(e.source) || ids.has(e.target)).map(e => ({ source: e.source, target: e.target })), ...layoutEdges],
             { signal: abort.signal, onProgress: (done, total) => progress.listener?.(done, total) })
         } catch (problem) {
           if (problem instanceof LayoutCancelled) { props.onNotice('Layout cancelled · nothing was moved'); return }
@@ -606,11 +669,24 @@ function Canvas(props: Props) {
       }
       const pane = shellRef.current?.getBoundingClientRect()
       const { default: ELK } = await import('elkjs/lib/elk.bundled.js')
-      const result = await new ELK().layout({ id: 'root', layoutOptions: { 'elk.algorithm': 'layered', 'elk.direction': direction, 'elk.spacing.nodeNode': '36', 'elk.layered.spacing.nodeNodeBetweenLayers': '110', 'elk.spacing.componentComponent': '60', 'elk.layered.considerModelOrder.strategy': 'NODES_AND_EDGES',
+      const layoutWith = (direction: string) => new ELK().layout({ id: 'root', layoutOptions: { 'elk.algorithm': 'layered', 'elk.direction': direction, 'elk.spacing.nodeNode': '36', 'elk.layered.spacing.nodeNodeBetweenLayers': '110', 'elk.spacing.componentComponent': '60', 'elk.layered.considerModelOrder.strategy': 'NODES_AND_EDGES',
         // Pack disconnected parts into a screen-shaped block instead of one long row.
         'elk.separateConnectedComponents': 'true', 'elk.aspectRatio': String(pane ? Math.max(1, pane.width / Math.max(1, pane.height)) : 1.6), ...(byLayer ? { 'elk.partitioning.activate': 'true' } : {}) },
         children: movable.map(n => ({ id: n.id, width: n.measured?.width ?? NODE_W, height: n.measured?.height ?? NODE_H, ...(byLayer ? { layoutOptions: { 'elk.partitioning.partition': String(partition(n.id)) } } : {}) })),
-        edges: view.edges.filter(e => ids.has(e.source) && ids.has(e.target)).map(e => ({ id: e.id, sources: [e.source], targets: [e.target] })) })
+        edges: [...view.edges.filter(e => ids.has(e.source) && ids.has(e.target)).map(e => ({ id: e.id, sources: [e.source], targets: [e.target] })),
+          ...layoutEdges.map((e, i) => ({ id: `layout-${i}`, sources: [e.source], targets: [e.target] }))] })
+      let result = await layoutWith(direction)
+      // Smaller graphs: also try top to bottom and keep the shape that fits the window (no thin strips).
+      if (direction === 'RIGHT' && !byLayer && movable.length <= 120 && pane) {
+        const ratio = (r: typeof result) => {
+          let w = 1, h = 1
+          for (const c of r.children ?? []) { w = Math.max(w, (c.x ?? 0) + (c.width ?? 0)); h = Math.max(h, (c.y ?? 0) + (c.height ?? 0)) }
+          return w / h
+        }
+        const target = pane.width / Math.max(1, pane.height)
+        const misfit = (r: typeof result) => Math.abs(Math.log(ratio(r) / target))
+        if (misfit(result) > Math.log(2)) { const down = await layoutWith('DOWN'); if (misfit(down) < misfit(result)) result = down }
+      }
       const pinned = chosen.filter(isPinned)
       const offsetX = pinned.length ? Math.max(...pinned.map(n => n.position.x + 350)) : 0
       pendingFit.current = true
@@ -619,9 +695,8 @@ function Canvas(props: Props) {
     } catch (e) { setError(String(e)) } finally { setBusy(false) }
   }
   /** Render the current canvas state (filters, layers, groups, activities) to a standalone SVG, optionally rasterised to PNG. */
-  const runExport = async (settings: ExportSettings, mode: 'download' | 'copy') => {
-    setExporting(true); setError('')
-    try {
+  /** The SVG an export would produce with these settings (also for the preview in the panel). */
+  const buildExport = async (settings: ExportSettings) => {
       await prepareIconMarkup()
       const flowNodes = flow.getNodes()
       const sizes = new Map(flowNodes.filter(n => n.measured?.width && n.measured?.height).map(n => [n.id, { width: n.measured!.width!, height: n.measured!.height! }]))
@@ -644,6 +719,12 @@ function Canvas(props: Props) {
         title: settings.title ? props.boardName : undefined,
         subtitle: settings.title ? [props.filterSummary, `exported ${new Date().toLocaleString('en-GB')}`].filter(Boolean).join(' · ') : undefined })
       if (!result.nodeCount) throw new Error('Nothing to export in this area.')
+      return result
+  }
+  const runExport = async (settings: ExportSettings, mode: 'download' | 'copy') => {
+    setExporting(true); setError('')
+    try {
+      const result = await buildExport(settings)
       if (settings.format === 'svg') {
         if (mode === 'copy') { await navigator.clipboard.writeText(result.svg); props.onNotice('SVG markup copied') }
         else { downloadBlob(new Blob([result.svg], { type: 'image/svg+xml;charset=utf-8' }), exportFilename(props.boardName, 'svg')); props.onNotice(`SVG exported · ${result.nodeCount} nodes`); props.onExported?.(`SVG · ${result.nodeCount} nodes · ${exportFilename(props.boardName, 'svg')}`) }
@@ -656,6 +737,18 @@ function Canvas(props: Props) {
       setPopover(null)
     } catch (e) { setError(e instanceof Error ? e.message : String(e)) } finally { setExporting(false) }
   }
+  // Preview in the export panel: thumbnail, size and how readable the labels will be, before anything is written.
+  const [exportPreview, setExportPreview] = useState<{ url: string; width: number; height: number; nodes: number } | { error: string } | null>(null)
+  useEffect(() => {
+    if (popover !== 'export') { setExportPreview(null); return }
+    let cancelled = false
+    const timer = window.setTimeout(() => {
+      buildExport(exportSettings).then(result => { if (!cancelled) setExportPreview({ url: `data:image/svg+xml;charset=utf-8,${encodeURIComponent(result.svg)}`, width: result.width, height: result.height, nodes: result.nodeCount }) })
+        .catch(e => { if (!cancelled) setExportPreview({ error: e instanceof Error ? e.message : String(e) }) })
+    }, 150)
+    return () => { cancelled = true; window.clearTimeout(timer) }
+  }, [popover, exportSettings, view, selectedNodeId])
+  const selectedCount = nodes.filter(n => n.selected).length || (selectedNodeId ? 1 : 0)
   // Dragging an expanded group's frame moves its members along; members follow live while dragging.
   const frameDrag = useRef<{ id: string; start: XYPosition; members: Map<string, XYPosition> } | null>(null)
   const frameGroup = (node: Node<AnyData>) => node.type === 'frame' ? groups.find(g => `frame:${g.id}` === node.id) : undefined
@@ -755,7 +848,15 @@ function Canvas(props: Props) {
       <div className="segmented full" role="group" aria-label="Format">{(['png', 'svg'] as const).map(f => <button key={f} className={exportSettings.format === f ? 'active' : ''} aria-pressed={exportSettings.format === f} onClick={() => setExportSettings({ ...exportSettings, format: f })}>{f.toUpperCase()}</button>)}</div>
       <p className="hint">{exportSettings.format === 'svg' ? 'Vector file for reports and slides; text stays editable in Illustrator, Inkscape, Word or PowerPoint.' : 'Image for chats, tickets and documents.'} The export shows what the canvas shows: filters, hidden layers, groups and activities.</p>
       <label>Area<select aria-label="Export area" value={exportSettings.area} onChange={e => setExportSettings({ ...exportSettings, area: e.target.value as ExportSettings['area'] })}>
-        <option value="all">Whole graph</option><option value="visible">Visible area</option><option value="selection">Selection</option></select></label>
+        <option value="all">Whole graph</option><option value="visible">Visible area</option><option value="selection">{selectedCount ? `Selection (${selectedCount} selected)` : 'Selection (select nodes first)'}</option></select></label>
+      {exportPreview && 'error' in exportPreview && <p className="form-error small">{exportPreview.error}</p>}
+      {exportPreview && 'url' in exportPreview && (() => {
+        const scale = exportSettings.format === 'png' ? exportSettings.scale : 1
+        // On a 1920 px slide or screen the image is shrunk to fit: labels shrink with it.
+        const shown = Math.min(1, 1920 / exportPreview.width)
+        return <div className="export-preview"><img src={exportPreview.url} alt="Export preview" />
+          <small>{exportPreview.nodes} nodes · {Math.round(exportPreview.width * scale).toLocaleString('en')} × {Math.round(exportPreview.height * scale).toLocaleString('en')} {exportSettings.format === 'png' ? 'px' : 'units'}
+            {shown < 0.5 ? <b className="warn-text"> · labels at {Math.round(shown * 100)}% on a 1920 px slide: export the visible area or a selection for a readable picture</b> : shown < 1 ? ` · labels at ${Math.round(shown * 100)}% on a 1920 px slide` : ''}</small></div> })()}
       <div className="field-grid">
         <label>Theme<select aria-label="Export theme" value={exportSettings.theme} onChange={e => setExportSettings({ ...exportSettings, theme: e.target.value as ExportSettings['theme'] })}><option value="current">Current</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
         {exportSettings.format === 'png' && <label>Resolution<select aria-label="Export resolution" value={exportSettings.scale} onChange={e => setExportSettings({ ...exportSettings, scale: Number(e.target.value) })}><option value={1}>1×</option><option value={2}>2× (sharp)</option><option value={3}>3× (print)</option></select></label>}
@@ -792,6 +893,8 @@ function Canvas(props: Props) {
       <div className="menu-sep" />
       <label className="check"><input type="checkbox" checked={lens.showLanes} onChange={e => props.onLensChange({ ...lens, showLanes: e.target.checked })} /> Show layer lanes</label>
       <label className="check"><input type="checkbox" checked={lens.collapseActivities} onChange={e => props.onLensChange({ ...lens, collapseActivities: e.target.checked })} /> Show activities as edges</label>
+      <label className="check"><input type="checkbox" checked={showFailed} onChange={e => toggle('showFailed', e.target.checked, setShowFailed)} /> Show failed attempts{!showFailed && shown.hidden ? ` (${shown.hidden.toLocaleString('en')} hidden)` : ''}</label>
+      <label className="check"><input type="checkbox" checked={locationNodes} onChange={e => toggle('locationNodes', e.target.checked, setLocationNodes)} /> Show locations as nodes (otherwise a flag on the IP)</label>
       <button className="secondary-button small full" disabled={busy} onClick={() => { void align('RIGHT', true); setPopover(null) }}><Columns3 size={14} /> Arrange by layer</button>
       <div className="menu-sep" />
       <div className="popover-sub">Perspectives</div>
@@ -815,9 +918,11 @@ function Canvas(props: Props) {
         {!suggestions.length && <p className="muted small">No suggestions. Select several entities and press <kbd>G</kbd> to group them manually.</p>}
       </div>
       <div className="menu-sep" />
-      <p className="hint">Groups: {groups.length ? groups.map(g => g.name).join(', ') : 'none yet'}</p>
+      <p className="hint">{groups.length ? `${groups.length} groups on the board` : 'No groups yet'}</p>
+      {groups.length > 0 && <div className="group-list">{[...groups].sort((a, b) => b.member_ids.length - a.member_ids.length).slice(0, 12).map(g => <button key={g.id} className="group-list-item" onClick={() => { onSelect({ kind: 'group', id: g.id }); focusOn(g.id); setPopover(null) }}>
+        <span>{g.name}</span><b>{g.member_ids.length}</b></button>)}{groups.length > 12 && <small className="muted">+{groups.length - 12} more in the explorer</small>}</div>}
     </div>}
-    {typeEdit && <div className="canvas-composer popover" role="dialog" aria-label="Entity type editor"><form onSubmit={e => { e.preventDefault(); void run([{ type: entityTypes.some(t => t.id === typeEdit.id) ? 'type.update' : 'type.add', payload: { ...typeEdit } }]).then(() => setTypeEdit(null)).catch(() => {}) }}>
+    {typeEdit && <div className="canvas-composer popover" role="dialog" aria-label="Entity type editor"><form onSubmit={e => { e.preventDefault(); void run([{ type: entityTypes.some(t => t.id === typeEdit.id) ? 'type.update' : 'type.add', payload: { ...typeEdit, layer: typeEdit.layer || null } }]).then(() => setTypeEdit(null)).catch(() => {}) }}>
       <div className="popover-head"><strong>Entity type</strong><button type="button" className="icon-button" aria-label="Close type editor" onClick={() => setTypeEdit(null)}><X size={15} /></button></div>
       <label>Existing type<select value={entityTypes.some(t => t.id === typeEdit.id) ? typeEdit.id : ''} onChange={e => setTypeEdit(entityTypes.find(t => t.id === e.target.value) ?? { id: uuid(), name: '', color: '#8da9ce', icon: 'Box' })}><option value="">New type</option>{entityTypes.map(t => <option value={t.id} key={t.id}>{t.name}</option>)}</select></label>
       <label>Type name<input required value={typeEdit.name} onChange={e => setTypeEdit({ ...typeEdit, name: e.target.value })} /></label>

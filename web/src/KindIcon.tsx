@@ -25,5 +25,6 @@ export function iconMarkup(kind: string, icon: string | undefined, color: string
     inner = `<g fill="none" stroke="currentColor" stroke-width="${stroke}" stroke-linecap="round" stroke-linejoin="round">${markup.replace(/^<svg[^>]*>/, '').replace(/<\/svg>$/, '')}</g>`
     cache.set(key, inner)
   }
-  return inner.replaceAll('currentColor', color)
+  // The colour goes into SVG attributes: only a plain colour value, never markup.
+  return inner.replaceAll('currentColor', /^#[0-9a-f]{3,8}$|^[a-z]+$/i.test(color) ? color : '#8da9ce')
 }

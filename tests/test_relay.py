@@ -76,6 +76,32 @@ class RelayTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual((await receive(b))["actions"], [action])
             self.assertEqual(await receive(a), {"type": "peer-left", "id": second})
 
+    async def test_large_batches_arrive_gzip_compressed(self):
+        """A batch far above the 16 MiB message limit gets through compressed, the way the browser sends it."""
+        import gzip
+        board, first, second = str(uuid4()), str(uuid4()), str(uuid4())
+        base = f"ws://127.0.0.1:{self.port}/ws/boards/{board}"
+        async with join(base, first, "Alex") as a, join(base, second, "Sam", max_size=None) as b:
+            await receive(a); await receive(b); await receive(a)
+            action = {"id": str(uuid4()), "clock": 1, "type": "source.add", "payload": {"id": str(uuid4()), "excerpt": "row,value\n" * 2_000_000}}
+            packed = gzip.compress(json.dumps({"type": "actions", "actions": [action]}).encode())
+            self.assertGreater(len(json.dumps(action)), 18 * 1024 * 1024)
+            self.assertLess(len(packed), 1024 * 1024)
+            await a.send(packed)
+            received = json.loads(await asyncio.wait_for(b.recv(), timeout=10))
+            self.assertEqual(received["actions"][0]["payload"]["excerpt"], action["payload"]["excerpt"])
+            # The browser's own format: a small header the relay reads, the compressed message forwarded as it is.
+            header = json.dumps({"type": "actions", "deferRender": False}).encode()
+            frame = b"FGZ1" + len(header).to_bytes(4, "big") + header + packed
+            await a.send(frame)
+            forwarded = await asyncio.wait_for(b.recv(), timeout=10)
+            self.assertEqual(forwarded, frame, "forwarded unchanged, still compressed")
+            self.assertEqual(json.loads(gzip.decompress(forwarded[8 + len(header):]))["actions"][0]["id"], action["id"])
+            await a.send(b"FGZ1" + (10**6).to_bytes(4, "big") + b"{}")
+            await a.send(b"not gzip")
+            await a.send(json.dumps({"type": "sync-request"}))
+            self.assertEqual((await receive(b))["type"], "sync-request", "an unreadable frame is skipped, the connection stays")
+
     async def test_boards_are_isolated(self):
         first, second = str(uuid4()), str(uuid4())
         async with join(f"ws://127.0.0.1:{self.port}/ws/boards/{first}", str(uuid4()), "A") as a:
@@ -187,13 +213,11 @@ class RelayTest(unittest.IsolatedAsyncioTestCase):
             await receive(websocket)
             request_task = asyncio.create_task(asyncio.to_thread(patch))
             command = await receive(websocket)
-            self.assertEqual(command["operation"], "snapshot")
+            # Only the evidence record is read, not the whole board.
+            self.assertEqual((command["operation"], command["collection"], command["id"]), ("query", "evidence", evidence_id))
             await websocket.send(json.dumps({
                 "type": "api-result", "requestId": command["requestId"], "ok": True,
-                "graph": {"board_id": board, "name": "Patch", "entities": [],
-                          "sources": [], "action_count": 2, "facts": [{
-                              "id": relation_id, "assertions": [{"id": evidence_id}],
-                          }]},
+                "record": {"id": evidence_id, "fact_id": relation_id},
             }))
             command = await receive(websocket)
             self.assertEqual(command["operation"], "apply")

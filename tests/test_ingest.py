@@ -31,6 +31,13 @@ class IngestTest(unittest.TestCase):
         self.assertEqual(evidence[0]["valid_to"], rows[0]["EndTime"])
         self.assertIsNone(evidence[1]["valid_from"])
 
+    def test_an_unreadable_time_leaves_the_row_undated(self):
+        # Kept as text, the browser would reject the whole chunk of 200 actions it arrives in.
+        rows = [{"ip": "a", "target": "b", "TimeGenerated": "letzten Dienstag"}, {"ip": "a", "target": "c", "TimeGenerated": "2026-01-01T10:00:00Z"}]
+        drafts, _ = rows_to_actions(str(uuid4()), rows, title="Odd dates")
+        times = [d["payload"]["valid_from"] for d in drafts if d["type"] == "assertion.add"]
+        self.assertEqual(times, [None, "2026-01-01T10:00:00Z"])
+
     def test_import_reuses_existing_manual_entity_and_relation(self):
         board, ip_id, file_id, fact_id = (str(uuid4()) for _ in range(4))
         drafts, _ = rows_to_actions(board, [{"IPAddress": "10.0.0.8", "FilePath": "repo/.env"}],

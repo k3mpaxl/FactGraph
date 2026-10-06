@@ -4,7 +4,7 @@ globalThis.localStorage = { getItem: k => store.get(k) ?? null, setItem: (k, v) 
 const { classify, count, describe, noticesFor, loadNotices, saveNotices, createLimiter } = require(require('node:path').resolve(process.argv[2]) + '/notifications.js')
 
 let n = 0
-const act = (type, payload = {}, extra = {}) => ({ id: `a${++n}`, boardId: 'b', actor: 'me', author: 'Ana', clock: n, at: '2026-10-04T10:00:00Z', type, payload: { id: `p${n}`, ...payload }, channel: 'UI', batch_id: 'x', ...extra })
+const act = (type, payload = {}, extra = {}) => ({ id: `a${++n}`, boardId: 'b', actor: 'me', author: 'Ana', clock: n, at: '2026-10-04T10:00:00.000Z', type, payload: { id: `p${n}`, ...payload }, channel: 'UI', batch_id: 'x', ...extra })
 
 ;(async () => {
   // Who changed it: own canvas is silent; agents, GTIEnricher and colleagues are told apart.

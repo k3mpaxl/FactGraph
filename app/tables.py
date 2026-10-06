@@ -38,6 +38,10 @@ def clean_column(name: str) -> str:
 
 
 def clean_rows(rows: list[Row]) -> list[Row]:
+    # Times in local time would be read as UTC and shifted by the exporter's offset without anyone noticing.
+    local = sorted({str(k).strip().strip('"') for row in rows[:1] for k in row if re.search(r"\[Local\]\s*$", str(k).strip().strip('"'))})
+    if local:
+        raise ValueError(f"{', '.join(local)}: the export shows local time. Export again with UTC times (the Log Analytics default) so events are not shifted.")
     return [{clean_column(k): v for k, v in row.items()} for row in rows]
 
 
@@ -481,7 +485,8 @@ MAPPINGS: tuple[Mapping, ...] = (
     Mapping("AzureActivity", "Sentinel", ("Caller", "OperationNameValue", "ResourceGroup", "CallerIpAddress"), (
         Part("actor", "User", ("Caller",), (Ident("Caller", "email"), Ident(OBJECT_CLAIM, namespace="entra-object-id")), lower=True,
              name=lambda r, g: text(g("Caller")) if "@" in text(g("Caller")) else ""),
-        Part("identity", "Service Principal", ("Caller",), (Ident("Caller", namespace="entra-object-id"), Ident("Claims.appid", namespace="entra-app-id")),
+        Part("identity", "Service Principal", ("Caller", "Properties.caller"), (Ident("Caller", namespace="entra-object-id"), Ident("Properties.caller", namespace="entra-object-id"),
+                                                    Ident("Claims.appid", namespace="entra-app-id"), Ident("Claims_d.appid", namespace="entra-app-id")),
              name=lambda r, g: text(g("Caller")) if "@" not in text(g("Caller")) else ""),
         Part("source", "IP", ("CallerIpAddress", "HTTPRequest.clientIpAddress"), (Ident("CallerIpAddress", "ip"),)),
         Part("target", "Azure Resource", ("_ResourceId",), (Ident("_ResourceId", "resource_id"), Ident("ResourceId", "resource_id")),

@@ -1,9 +1,12 @@
-import { useMemo, useState, type ReactNode } from 'react'
-import { ArrowLeft, ArrowRight, Boxes, ChevronDown, ChevronRight, CornerDownLeft, Crosshair, Pencil, Plus, Search, Ungroup, X, Zap } from 'lucide-react'
+import { Fragment, useMemo, useState, type ReactNode } from 'react'
+import { ArrowLeft, ArrowRight, Boxes, ChevronDown, ChevronRight, CornerDownLeft, Crosshair, Pencil, Plus, Search, ShieldAlert, Ungroup, X, Zap } from 'lucide-react'
 import type { ActionDraft } from './board'
 import type { Fact, GraphData, Group, Participant } from './types'
 import { uuid } from './uuid'
 import { groupToggleDrafts } from './viewModel'
+import { EFFECT_LABEL, type Impact } from './impact'
+import { fromUtcInput } from './timeline'
+import { EntityPicker } from './EntityPicker'
 
 export const ROLES = ['actor', 'identity', 'source', 'tool', 'via', 'target', 'other']
 export const roleHint: Record<string, string> = {
@@ -13,9 +16,6 @@ export const roleHint: Record<string, string> = {
 type Select = (selection: { kind: 'entity' | 'fact' | 'group'; id: string } | null, focus?: boolean) => void
 
 function nameOf(data: GraphData, id: string) { return data.entities.find(e => e.id === id)?.name ?? 'Unknown' }
-function entityOptions(data: GraphData) {
-  return [...data.entities].sort((a, b) => a.name.localeCompare(b.name)).map(e => <option key={e.id} value={e.id}>{e.name} · {e.kind}</option>)
-}
 
 function Collapsible({ title, count, action, children, open: initial = true }: { title: string; count?: number; action?: ReactNode; children: ReactNode; open?: boolean }) {
   const [open, setOpen] = useState(initial)
@@ -26,8 +26,8 @@ function Collapsible({ title, count, action, children, open: initial = true }: {
 }
 
 /** Group details: membership, rule, exceptions and the connections the group bundles. */
-export function GroupInspector({ data, group, onCommand, onSelect, onFocus, onClose }: {
-  data: GraphData; group: Group; onCommand: (drafts: ActionDraft[]) => Promise<unknown>; onSelect: Select; onFocus: (id: string) => void; onClose: () => void;
+export function GroupInspector({ data, group, onCommand, onSelect, onFocus, onClose, impact }: {
+  data: GraphData; group: Group; onCommand: (drafts: ActionDraft[]) => Promise<unknown>; onSelect: Select; onFocus: (id: string) => void; onClose: () => void; impact?: Impact | null;
 }) {
   const [query, setQuery] = useState('')
   const [limit, setLimit] = useState(100)
@@ -62,6 +62,22 @@ export function GroupInspector({ data, group, onCommand, onSelect, onFocus, onCl
         <button className="secondary-button small" onClick={() => { const name = window.prompt('Group name', group.name); if (name?.trim()) run([{ type: 'group.update', payload: { id: group.id, name: name.trim() } }]) }}><Pencil size={14} /> Rename</button>
         <button className="secondary-button small icon-only" title="Center in graph" aria-label="Center group" onClick={() => onFocus(group.id)}><Crosshair size={14} /></button>
       </div>
+      {impact?.seeds.length ? (() => {
+        const marks = { compromised: 0, impacted: 0, good: 0 }, effects = new Map<string, number>()
+        let regular = 0
+        const byEntity = new Map(impact.impacted.map(i => [i.entity.id, i]))
+        for (const id of group.member_ids) {
+          const mark = impact.marks.get(id)
+          if (mark === 'compromised' || mark === 'derived') marks.compromised++; else if (mark === 'good') marks.good++
+          const hit = byEntity.get(id)
+          if (hit) { marks.impacted++; if (hit.regular) regular++; else effects.set(hit.effect, (effects.get(hit.effect) ?? 0) + 1) }
+        }
+        if (!marks.compromised && !marks.impacted && !marks.good) return null
+        return <div className={`impact-callout ${marks.compromised ? 'compromised' : effects.has('secret') || effects.has('delete') ? 'impacted secret' : 'impacted'}`}>
+          <ShieldAlert size={15} /><div><strong>{marks.compromised ? `${marks.compromised} of ${group.member_ids.length} compromised` : `${marks.impacted} of ${group.member_ids.length} impacted`}</strong>
+            <dl className="impact-fields">{[...effects].map(([effect, n]) => <Fragment key={effect}><dt>{EFFECT_LABEL[effect as keyof typeof EFFECT_LABEL]}</dt><dd>{n}</dd></Fragment>)}
+              {regular > 0 && <><dt>Likely regular</dt><dd>{regular}</dd></>}{marks.good > 0 && <><dt>Good</dt><dd>{marks.good}</dd></>}</dl></div></div>
+      })() : null}
       <p className="inspector-note plain">A group bundles entities on the canvas. Relationships and evidence of its members are unchanged; edges show how many members they stand for.</p>
       {!container && <Collapsible title="Rule" action={<button className="text-button" onClick={() => setRuleEdit(ruleEdit ? null : { kinds: group.rule?.kinds?.join(', ') ?? '', match: group.rule?.match ?? '' })}>{ruleEdit ? 'Cancel' : 'Edit'}</button>}>
         {ruleEdit ? <form className="stack" onSubmit={e => { e.preventDefault(); const kinds = ruleEdit.kinds.split(',').map(k => k.trim()).filter(Boolean); run([{ type: 'group.update', payload: { id: group.id, rule: kinds.length || ruleEdit.match.trim() ? { kinds, match: ruleEdit.match.trim() } : null } }]); setRuleEdit(null) }}>
@@ -111,7 +127,7 @@ export function ParticipantList({ data, fact, onCommand, onSelect }: { data: Gra
     </div>)}
     {adding ? <form className="participant-add" onSubmit={e => { e.preventDefault(); if (adding.entity_id) save([...participants, adding]) }}>
       <select aria-label="Participant role" value={adding.role} onChange={e => setAdding({ ...adding, role: e.target.value })}>{ROLES.map(r => <option key={r}>{r}</option>)}</select>
-      <select aria-label="Participant entity" value={adding.entity_id} required onChange={e => setAdding({ ...adding, entity_id: e.target.value })}><option value="" disabled>Entity…</option>{entityOptions(data)}</select>
+      <EntityPicker data={data} label="Participant entity" value={adding.entity_id} onChange={id => setAdding({ ...adding, entity_id: id })} exclude={participants.map(p => p.entity_id)} required />
       <button className="primary-button small" aria-label="Add participant"><CornerDownLeft size={13} /></button>
     </form> : <button className="text-button" onClick={() => setAdding({ entity_id: '', role: 'via' })}><Plus size={14} /> Add participant</button>}
     {error && <div className="form-error">{error}</div>}
@@ -130,7 +146,7 @@ export function ActivityDialog({ data, initialEntity, onClose, onCommand, onCrea
     event.preventDefault()
     const form = new FormData(event.currentTarget)
     const get = (field: string) => String(form.get(field) ?? '').trim()
-    const asDate = (field: string) => get(field) ? new Date(get(field)).toISOString() : null
+    const asDate = (field: string) => fromUtcInput(get(field))
     const participants = rows.filter(r => r.entity_id)
     if (new Set(participants.map(p => p.entity_id)).size < 2) { setError('Choose at least two different participants.'); return }
     if (get('valid_from') && get('valid_to') && get('valid_from') > get('valid_to')) { setError('The end must be after the start.'); return }
@@ -154,12 +170,12 @@ export function ActivityDialog({ data, initialEntity, onClose, onCommand, onCrea
             <span className="field-label">Participants</span>
             {rows.map((row, index) => <div key={index} className="participant-edit-row">
               <select aria-label={`Role ${index + 1}`} value={row.role} onChange={e => setRows(rows.map((r, i) => i === index ? { ...r, role: e.target.value } : r))} title={roleHint[row.role]}>{ROLES.map(r => <option key={r}>{r}</option>)}</select>
-              <select aria-label={`Participant ${index + 1}`} value={row.entity_id} onChange={e => setRows(rows.map((r, i) => i === index ? { ...r, entity_id: e.target.value } : r))}><option value="">Choose entity…</option>{entityOptions(data)}</select>
+              <EntityPicker data={data} label={`Participant ${index + 1}`} value={row.entity_id} onChange={id => setRows(rows.map((r, i) => i === index ? { ...r, entity_id: id } : r))} />
               <button type="button" className="icon-button" aria-label="Remove row" disabled={rows.length <= 2} onClick={() => setRows(rows.filter((_, i) => i !== index))}><X size={14} /></button>
             </div>)}
             <button type="button" className="text-button" onClick={() => setRows([...rows, { role: 'via', entity_id: '' }])}><Plus size={14} /> Add participant</button>
           </div>
-          <div className="field-grid"><label>Activity from <span className="optional">UTC</span><input name="valid_from" type="datetime-local" step="1" /></label><label>Activity to <span className="optional">optional</span><input name="valid_to" type="datetime-local" step="1" /></label></div>
+          <div className="field-grid"><label>Activity from <span className="optional">UTC</span><input name="valid_from" type="datetime-local" step="1" /></label><label>Activity to <span className="optional">UTC, optional</span><input name="valid_to" type="datetime-local" step="1" /></label></div>
           <div className="form-divider">Evidence</div>
           <div className="stance-field"><span>Evidence stance</span><div className="segmented"><button type="button" className={stance === 'supports' ? 'active supports' : ''} onClick={() => setStance('supports')}>Supports</button><button type="button" className={stance === 'refutes' ? 'active refutes' : ''} onClick={() => setStance('refutes')}>Refutes</button></div></div>
           <div className="field-grid"><label>Source <span className="optional">optional</span><select name="source_id" defaultValue=""><option value="">Manual entry</option>{data.sources.map(s => <option key={s.id} value={s.id}>{s.title}</option>)}</select></label>

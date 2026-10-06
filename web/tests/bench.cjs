@@ -9,7 +9,7 @@ const { placeNew } = require(path + '/layout.js')
 
 const N = Number(process.env.BENCH_ENTITIES ?? 2000), F = Number(process.env.BENCH_FACTS ?? 5000)
 let clock = 0
-const act = (type, payload) => ({ id: `a-${++clock}`, clock, at: '2026-09-29T00:00:00Z', actor: 'a', author: 'a', boardId: 'b', type, payload })
+const act = (type, payload) => ({ id: `a-${++clock}`, clock, at: '2026-09-29T00:00:00.000Z', actor: 'a', author: 'a', boardId: 'b', type, payload })
 const ops = [act('source.add', { id: 's1', title: 'Report', kind: 'Report' })]
 const kinds = ['IP', 'Domain', 'User', 'Host', 'Service Principal']
 for (let i = 0; i < N; i++) ops.push(act('entity.add', { id: `e${i}`, name: `entity ${i}`, kind: kinds[i % 5], x: (i % 50) * 405, y: Math.floor(i / 50) * 160 }))
@@ -19,15 +19,24 @@ for (let i = 0; i < F; i++) {
   ops.push(act('assertion.add', { id: `as${i}`, fact_id: `f${i}`, stance: i % 9 ? 'supports' : 'refutes', confidence: 0.8, source_id: 's1', note: 'x' }))
 }
 
+// A history with clean-ups: a tenth of the entities deleted, merges, relationship edits and source edits. Replaying such
+// a log on every change must stay linear (an O(evidence) scan per action made it quadratic).
+const history = [...ops]
+for (let i = 0; i < N / 10; i++) history.push(act('entity.delete', { id: `e${i * 10 + 3}` }))
+for (let i = 0; i < N / 20; i++) history.push(act('entity.merge', { source_id: `e${i * 20 + 5}`, target_id: `e${i * 20 + 6}` }))
+for (let i = 0; i < F / 5; i++) history.push(act('fact.update', { id: `f${i * 5}`, predicate: 'reached' }))
+for (let i = 0; i < 200; i++) history.push(act('source.update', { id: 's1', title: `Report ${i}` }))
+
 // Budgets in ms: about 10× what a laptop needs, so only real regressions (e.g. accidental O(n²)) fail.
 const steps = [
+  ['project (history with deletes, merges, edits)', 300, () => project('b', history)],
   ['project', 200, () => project('b', ops)],
   ['buildViewModel', 120, data => buildViewModel(data.entities, data.facts, data.groups, { visibleLayers: null, collapseActivities: false, showLanes: false, entityTypes: [] })],
   ['groupSuggestions', 120, data => groupSuggestions(data.entities, data.facts, data.groups)],
   ['autoGroups', 120, data => autoGroups(data.entities, data.facts, data.groups)],
   // A tenth of the entities compromised from mid-September: every fact and evidence item is checked.
-  ['analyzeImpact', 120, data => analyzeImpact({ entities: data.entities.map((e, i) => i % 10 ? e : { ...e, compromise: { from: '2026-09-15T00:00:00Z' } }), facts: data.facts })],
-  ['timeline window', 60, data => { timelineSteps(data.facts); return factsInWindow(data.facts, '2026-09-05T00:00:00Z', '2026-09-12T00:00:00Z', true) }],
+  ['analyzeImpact', 120, data => analyzeImpact({ entities: data.entities.map((e, i) => i % 10 ? e : { ...e, compromise: { from: '2026-09-15T00:00:00.000Z' } }), facts: data.facts })],
+  ['timeline window', 60, data => { timelineSteps(data.facts); return factsInWindow(data.facts, '2026-09-05T00:00:00.000Z', '2026-09-12T00:00:00.000Z', true) }],
   ['validateDrafts', 40, data => validateDrafts(data, [{ type: 'fact.add', payload: { id: 'fx', subject_id: 'e1', predicate: 'p', object_id: 'e2' } }])],
   ['placeNew (1,000 new)', 60, data => placeNew([...Array(1000).keys()].map(i => ({ type: 'entity.add', payload: { id: `n${i}` } })), data.entities.map(e => e.position))],
 ]

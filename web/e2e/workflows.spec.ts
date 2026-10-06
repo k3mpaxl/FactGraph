@@ -248,8 +248,8 @@ test('navigation: command palette jumps to an entity, explorer and inspector nav
   await page.keyboard.press('2')
   await expect(page.getByRole('tab',{name:/Timeline/})).toHaveAttribute('aria-selected','true')
   await page.keyboard.press('1')
-  await page.getByLabel('Search graph').fill('jump')
-  await expect(page.getByRole('complementary',{name:'Entity explorer'}).getByRole('button',{name:/Jump host/})).toBeVisible()
+  await page.getByLabel('Find entity').fill('jump')
+  await expect(page.getByRole('complementary',{name:'Entity explorer'}).getByRole('button',{name:/Jump host/}).first()).toBeVisible()
   await expect(page.locator('.entity-node.dimmed')).toHaveCount(1)
 })
 
@@ -275,7 +275,9 @@ test('sync: offline edits and a concurrent merge converge in both browsers witho
   await peer.getByRole('complementary',{name:'Inspector'}).getByRole('button',{name:'Connect'}).click()
   const dialog=peer.getByRole('dialog',{name:'New relationship'})
   await dialog.getByRole('button',{name:'Existing node'}).click()
-  await dialog.locator('select[name=object_id]').selectOption(vault)
+  await dialog.getByRole('combobox',{name:'Target node'}).fill('kv-prod')
+  await dialog.getByRole('option',{name:/kv-prod/}).click()
+  await expect(dialog.locator('input[name=object_id]')).toHaveValue(vault)
   await dialog.getByLabel('Relationship / predicate').fill('read secrets of')
   await dialog.getByRole('button',{name:/Save/}).click()
   await expect(dialog).not.toBeVisible()
@@ -298,7 +300,7 @@ test('sync: offline edits and a concurrent merge converge in both browsers witho
   await second.close()
 })
 
-test('activities, groups, layers and perspectives across REST, MCP and the canvas',async({page,request})=>{
+test('activities, groups, layers and perspectives across REST, MCP and the canvas',async({page,browser,request})=>{
   const {id,token,call,graph}=await setup(page,request)
   const atk=(await call('POST','/entities',{name:'Attacker',kind:'Threat Actor',x:0,y:0})).id
   const ip=(await call('POST','/entities',{name:'203.0.113.7',kind:'IP',x:0,y:200})).id
@@ -309,6 +311,10 @@ test('activities, groups, layers and perspectives across REST, MCP and the canva
   expect(activity.participants).toHaveLength(4)
   expect(activity.assertions[0].review_status).toBe('unconfirmed')
   expect((await call('GET',`/activities?entity_id=${sp}`)).total).toBe(1)
+  // The same activity again: the board merges it, so the reply names the existing activity and its evidence lands there.
+  const again=await call('POST','/activities',{operation:'Listed secrets',participants:[{entity_id:kv,role:'target'},{entity_id:sp,role:'identity'},{entity_id:ip,role:'source'},{entity_id:atk,role:'actor'}],valid_from:'2026-09-28T10:42:00Z',observation:'Seen again in a second export',locator:'CorrelationId=abd'})
+  expect(again.id).toBe(created.id)
+  expect((await call('GET',`/activities/${again.id}`)).assertions).toHaveLength(2)
   await expect(page.locator('.activity-node')).toHaveCount(1)
   await expect(page.locator('.react-flow__edge')).toHaveCount(4)
   await call('PATCH',`/activities/${created.id}`,{participants:[{entity_id:atk,role:'actor'},{entity_id:sp,role:'identity'},{entity_id:kv,role:'target'}]})
@@ -349,12 +355,139 @@ test('activities, groups, layers and perspectives across REST, MCP and the canva
   await layers.getByLabel('Perspective name').fill('Without network')
   await layers.getByRole('button',{name:'Save perspective'}).click()
   await expect.poll(async()=>(await call('GET','/perspectives')).items[0]?.layers?.includes('network')).toBe(false)
+  // The shared link in a fresh browser: the perspective arrives with the sync and is applied then.
+  const perspective=(await call('GET','/perspectives')).items[0].id
+  const fresh=await browser.newContext({storageState:'e2e/storage.json'});const other=await fresh.newPage()
+  await other.goto(`/boards/${id}?lens=${perspective}`)
+  await expect(other.locator(`[data-id="${kv}"]`)).toHaveCount(1)
+  await expect(other.locator(`[data-id="${ip}"]`)).toHaveCount(0)
+  await fresh.close()
   expect((await request.get(`${base}/api/layers`)).ok()).toBeTruthy()
   await call('PATCH',`/entities/${kv}`,{layer:'data'})
   expect((await graph()).entities.find((e:any)=>e.id===kv).layer).toBe('data')
   await call('DELETE',`/groups/${group}`)
   await expect(page.locator('.group-node')).toHaveCount(0)
   expect((await graph()).entities).toHaveLength(16)
+})
+
+test('canvas: Shift-click keeps both nodes selected; a type layer goes back to Automatic',async({page,request})=>{
+  const {call,graph}=await setup(page,request)
+  const a=(await call('POST','/entities',{name:'host-a',kind:'Device',x:0,y:0})).id
+  const b=(await call('POST','/entities',{name:'host-b',kind:'Device',x:400,y:0})).id
+  await page.getByRole('button',{name:'fit view'}).click()
+  await page.locator(`[data-id="${a}"]`).click()
+  await page.locator(`[data-id="${b}"]`).click({modifiers:['Shift']})
+  await page.waitForTimeout(400)
+  await expect(page.locator('.react-flow__node.selected')).toHaveCount(2)
+  await expect(page.locator('.selection-tools')).toContainText('2 selected')
+  // A custom type with an explicit layer, then back to Automatic.
+  await page.getByRole('button',{name:'Add entity'}).click()
+  await page.getByRole('button',{name:'Manage types…'}).click()
+  const editor=page.getByRole('dialog',{name:'Entity type editor'})
+  await editor.getByLabel('Type name').fill('Jump host')
+  await editor.getByLabel('Layer',{exact:false}).last().selectOption('network')
+  await editor.getByRole('button',{name:'Save type'}).click()
+  await expect.poll(async()=>(await graph()).entity_types?.find((t:any)=>t.name==='Jump host')?.layer).toBe('network')
+  await page.getByRole('button',{name:'Manage types…'}).click()
+  await editor.getByLabel('Existing type').selectOption({label:'Jump host'})
+  await editor.getByLabel('Layer',{exact:false}).last().selectOption('')
+  await editor.getByRole('button',{name:'Save type'}).click()
+  await expect(editor).toHaveCount(0)
+  await expect.poll(async()=>{const t=(await graph()).entity_types?.find((t:any)=>t.name==='Jump host');return t?(t.layer??'automatic'):'missing'}).toBe('automatic')
+})
+
+test('large boards: the entity picker tells same-named files apart; merge shows what stays, moves and needs review',async({page,request})=>{
+  const {call,graph}=await setup(page,request)
+  const repoA=(await call('POST','/entities',{name:'team/app',kind:'Repository',x:0,y:0})).id
+  const repoB=(await call('POST','/entities',{name:'team/infra',kind:'Repository',x:0,y:300})).id
+  const envA=(await call('POST','/entities',{name:'.env',kind:'File',x:400,y:0})).id
+  const envB=(await call('POST','/entities',{name:'.env',kind:'File',x:400,y:300})).id
+  const user=(await call('POST','/entities',{name:'ci-reader',kind:'User',x:800,y:150})).id
+  await call('POST','/relations',{subject_id:repoA,predicate:'contains',object_id:envA})
+  await call('POST','/relations',{subject_id:repoB,predicate:'contains',object_id:envB})
+  await call('POST','/relations',{subject_id:user,predicate:'read',object_id:envB,note:'viewed in the UI'})
+  await page.keyboard.press('ControlOrMeta+k')
+  await page.getByPlaceholder(/Search entities/).fill('ci-reader')
+  await page.getByPlaceholder(/Search entities/).press('Enter')
+  const inspector=page.getByRole('complementary',{name:'Inspector'})
+  await inspector.getByRole('button',{name:'Connect'}).click()
+  const dialog=page.getByRole('dialog',{name:'New relationship'})
+  await dialog.getByRole('button',{name:'Existing node'}).click()
+  await dialog.getByRole('combobox',{name:'Target node'}).fill('.env')
+  const options=dialog.getByRole('listbox',{name:'Target node options'}).getByRole('option')
+  await expect(options).toHaveCount(2)
+  await expect(options.filter({hasText:'Repository team/infra'})).toContainText('2× this name')
+  await options.filter({hasText:'Repository team/app'}).click()
+  await expect(dialog.locator('input[name=object_id]')).toHaveValue(envA)
+  await dialog.getByRole('button',{name:'Cancel'}).click()
+  // Merge preview: the kept entity, what moves, the evidence that needs review again.
+  await page.keyboard.press('ControlOrMeta+k')
+  await page.getByPlaceholder(/Search entities/).fill('team/infra')
+  await page.getByPlaceholder(/Search entities/).press('Enter')
+  await inspector.getByRole('button',{name:'Merge'}).click()
+  const merge=page.getByRole('dialog',{name:'Merge entity'})
+  await merge.getByRole('combobox',{name:'Keep entity'}).fill('team/app')
+  await merge.getByRole('option',{name:/team\/app/}).click()
+  await expect(merge.locator('.merge-card.drop')).toContainText('team/infra')
+  await expect(merge.locator('.merge-card.keep')).toContainText('team/app')
+  await expect(merge.locator('.merge-effects')).toContainText('1 relationship/activity move to team/app')
+  await merge.getByRole('button',{name:/Merge|Save/}).last().click()
+  await expect.poll(async()=>(await graph()).entities.some((e:any)=>e.id===repoB)).toBe(false)
+})
+
+test('trust: a file upload with the shared token is not the analyst\'s import; the UI\'s own upload is',async({page,request})=>{
+  const {id,token,graph}=await setup(page,request)
+  // An agent (or script) holding the session token posts a file to the import endpoint.
+  const csv='IPAddress,FilePath,TimeGenerated\n198.51.100.9,/srv/app/.env,2026-09-28T10:00:00Z\n'
+  const response=await request.fetch(`${base}/api/boards/${id}/imports/file`,{method:'POST',headers:{'X-FactGraph-Token':token},multipart:{file:{name:'agent.csv',mimeType:'text/csv',buffer:Buffer.from(csv)},title:'Agent rows'}})
+  expect(response.ok(),await response.text()).toBeTruthy()
+  await expect.poll(async()=>(await graph()).facts.flatMap((f:any)=>f.assertions).length).toBe(1)
+  const item=(await graph()).facts.flatMap((f:any)=>f.assertions)[0]
+  expect([item.review_status,item.created_via]).toEqual(['unconfirmed','REST'])
+})
+
+test('identity: a duplicated tab gets its own identity; a tab replaced by its own identity stops reconnecting',async({page,request})=>{
+  const {id,token}=await setup(page,request)
+  const actor=await page.evaluate(id=>sessionStorage.getItem(`factgraph:actor:${id}`),id)
+  // A duplicated tab inherits sessionStorage: same actor, same token.
+  const dup=await page.context().newPage()
+  await dup.addInitScript(([id,actor,token])=>{sessionStorage.setItem(`factgraph:actor:${id}`,actor!);sessionStorage.setItem(`factgraph:sessionToken:${id}`,token!)},[id,actor,token])
+  await dup.goto(`/boards/${id}`)
+  await expect(dup.getByText('2 online',{exact:true})).toBeVisible()
+  expect(await dup.evaluate(id=>sessionStorage.getItem(`factgraph:actor:${id}`),id)).not.toBe(actor)
+  expect(await dup.evaluate(id=>sessionStorage.getItem(`factgraph:sessionToken:${id}`),id)).not.toBe(token)
+  // No ping-pong: both stay connected well beyond the 2 s reconnect delay.
+  await page.waitForTimeout(4500)
+  await expect(page.getByText('2 online',{exact:true})).toBeVisible()
+  await expect(dup.getByText('2 online',{exact:true})).toBeVisible()
+  await dup.close()
+  // Something connects with this tab's identity anyway: the tab says so and does not push it out again.
+  const socket=new WebSocket(`${base.replace('http','ws')}/ws/boards/${id}`)
+  await new Promise(resolve=>socket.addEventListener('open',resolve))
+  socket.send(JSON.stringify({type:'hello',actor,name:'Other',token:'x'.repeat(64)}))
+  await expect(page.getByRole('alert').filter({hasText:'opened with this tab'})).toBeVisible()
+  await page.waitForTimeout(3000)
+  expect(socket.readyState).toBe(WebSocket.OPEN)
+  socket.close()
+  await page.getByRole('button',{name:'Continue here as a new session'}).click()
+  await expect(page.getByText('1 online',{exact:true})).toBeVisible()
+  expect(await page.evaluate(id=>sessionStorage.getItem(`factgraph:actor:${id}`),id)).not.toBe(actor)
+})
+
+test('privacy: a board can be removed from this browser',async({page,request})=>{
+  const {id,call}=await setup(page,request)
+  await call('POST','/entities',{name:'host-to-forget',kind:'Device',x:0,y:0})
+  await expect(page.locator('.entity-node')).toHaveCount(1)
+  page.once('dialog',dialog=>{expect(dialog.message()).toContain('Remove');void dialog.accept()})
+  await page.getByRole('button',{name:'Board menu'}).click()
+  await page.getByRole('button',{name:/Remove board from this browser/}).click()
+  await expect(page).not.toHaveURL(new RegExp(id))
+  // Nobody else had it open: opening the old link finds nothing in this browser any more.
+  await page.goto(`/boards/${id}`)
+  await expect(page.getByText('Start your investigation')).toBeVisible()
+  expect(await page.evaluate(id=>localStorage.getItem(`factgraph:view:${id}`)===null||!localStorage.getItem(`factgraph:view:${id}`)?.includes('host-to-forget'),id)).toBe(true)
+  await page.getByRole('button',{name:'Board menu'}).click()
+  await expect(page.locator('.menu-scroll button',{hasText:'host-to-forget'})).toHaveCount(0)
 })
 
 test('export: PNG and SVG downloads, clipboard-free API export via REST and MCP',async({page,request})=>{
@@ -459,6 +592,10 @@ test('first visit asks for a name; help explains browser storage; agent snippets
   await expect(connect.locator('pre').first()).toContainText(token)
   await connect.getByRole('tab',{name:'Claude Code'}).click()
   await expect(connect.locator('pre').first()).toContainText(`--header "X-FactGraph-Token: ${token}"`)
+  // The shareable project config carries a placeholder, never the token.
+  await expect(connect.locator('pre').nth(1)).toContainText("--scope project")
+  await expect(connect.locator('pre').nth(1)).toContainText("'X-FactGraph-Token: ${FACTGRAPH_TOKEN}'")
+  await expect(connect.locator('pre').nth(1)).not.toContainText(token)
   await expect(connect.getByText(`Board ID: ${id}`)).toBeVisible()
   await context.close()
 })
@@ -618,7 +755,7 @@ test('drop: Defender XDR and Sentinel exports are recognised, mapped and joined 
   expect(net.assertions).toHaveLength(2)
   expect(net.assertions[0].locator).toMatch(/^DeviceNetworkEvents ReportId=1884\d DeviceId=a1b2c3$/)
   const signin=board.facts.find((f:any)=>f.predicate==='signed in')
-  expect(signin.assertions[0].valid_from).toBe('2026-09-28T10:40:01.512000Z')
+  expect(signin.assertions[0].valid_from).toBe('2026-09-28T10:40:01.512Z')
   await page.getByRole('button',{name:'Notifications'}).click()
   await expect(page.getByRole('dialog',{name:'Notifications'}).locator('.notice.done').filter({hasText:'DeviceNetworkEvents (Defender XDR)'})).toBeVisible()
   await expect(page.getByRole('dialog',{name:'Notifications'}).locator('.notice.done').filter({hasText:'SigninLogs (Sentinel)'})).toBeVisible()
@@ -774,7 +911,7 @@ test('large graphs: a dropped export collapses similar resources into groups, ac
   for(const type of ['dragenter','dragover','drop']) await page.locator('.workspace').dispatchEvent(type,{dataTransfer:transfer})
   await expect.poll(async()=>(await graph()).groups?.length??0,{timeout:15000}).toBe(2)
   const board=await graph()
-  expect(board.groups.map((g:any)=>[g.name,g.collapsed]).sort()).toEqual([['5 Azure Resource · delete cognitiveservices/accounts',true],['6 Azure Resource · write cognitiveservices/accounts/deployments',true]])
+  expect(board.groups.map((g:any)=>[g.name,g.collapsed]).sort()).toEqual([['Azure Resource · delete cognitiveservices/accounts',true],['Azure Resource · write cognitiveservices/accounts/deployments',true]])
   expect(board.groups.some((g:any)=>g.member_ids.includes(board.entities.find((e:any)=>e.name==='odd').id))).toBe(false)
   // One diamond per operation and group, with the number of events it stands for.
   const canvas=page.locator('.react-flow')
@@ -842,7 +979,7 @@ test('attack impact: mark a stolen secret since a time, pivot to the new IP, see
   await expect(secrets.locator('.proof-line')).toContainText('Proven: credential removed 2026-09-25 10:00 UTC')
   await expect(page.locator('.rotation-measure',{hasText:'Rotate all credentials of compromised identities'})).toContainText('1/1 done')
   // Not compromised after all: never derived again, listed as checked.
-  await page.locator('.impact-row.seed.derived',{hasText:'deploy-bot'}).getByRole('button',{name:'Not compromised'}).click()
+  await page.locator('.impact-row.seed.derived',{hasText:'deploy-bot'}).getByRole('button',{name:'Good',exact:true}).click()
   await expect(page.locator('.impact-row.seed',{hasText:'deploy-bot'})).toHaveCount(0)
   await expect(page.locator('.cleared-line')).toContainText('deploy-bot')
   // In the graph: the lens shows only the attack; the inspector tells the story of a node.

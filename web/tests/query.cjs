@@ -43,3 +43,26 @@ assert.deepEqual(chunks.flat().map(a => a.id), actions.map(a => a.id))
   assert.deepEqual(actionChunks([euros]), [], 'without a collector it is still left out')
 }
 console.log('Targeted queries, shortened lists, reply parts and size-bounded action chunks passed')
+
+// Sync by summary: a peer sends only what the requester lacks; a gap or a different set falls back per actor.
+{
+  const { summarize, syncPlan, isSummary } = require(require('node:path').resolve(process.argv[2]) + '/sync.js')
+  const act = (actor, clock, id = `${actor}${clock}`) => ({ boardId: 'b', id, actor, author: actor, clock, at: '2026-10-06T00:00:00Z', type: 'entity.position', payload: {} })
+  const mine = [act('a', 1), act('a', 2), act('a', 3), act('b', 4), act('b', 5)]
+  // A peer that has a1, a2, b4: gets a3 and b5 only.
+  let plan = syncPlan(mine, summarize([act('a', 1), act('a', 2), act('b', 4)]))
+  assert.deepEqual([plan.send.map(x => x.id), plan.askBack], [['a3', 'b5'], false])
+  // Up to date: nothing.
+  plan = syncPlan(mine, summarize(mine))
+  assert.deepEqual([plan.send.length, plan.askBack], [0, false])
+  // A gap below its highest clock (has a1, a3): all of a's actions, and it may hold something here unknown.
+  plan = syncPlan(mine, summarize([act('a', 1), act('a', 3), act('b', 4), act('b', 5)]))
+  assert.deepEqual(plan.send.map(x => x.id), ['a1', 'a2', 'a3'])
+  // It has an actor this browser never saw (offline changes): ask back.
+  plan = syncPlan(mine, summarize([...mine, act('c', 9)]))
+  assert.deepEqual([plan.send.length, plan.askBack], [0, true])
+  // An older browser sends no summary: everything, as before.
+  assert.equal(syncPlan(mine, null).send.length, 5)
+  assert.ok(isSummary(summarize(mine)) && !isSummary({ a: [1, 2] }) && !isSummary([1]))
+  console.log('Sync by summary: deltas, gaps, unknown actors, older peers passed')
+}

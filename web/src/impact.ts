@@ -11,7 +11,8 @@ import { CONTAINS_PREDICATES } from './board'
  * Set on an entity: compromised (a stolen credential, an attacker's IP) from `from` until `to`; both are optional.
  * `cleared`: the analyst checked it and it is not compromised, so it is never derived either.
  */
-export type Compromise = { from?: string | null; to?: string | null; note?: string; by?: string; at?: string; cleared?: boolean }
+/** via: the channel it was marked through (UI, REST, MCP): an agent's mark is shown as such. */
+export type Compromise = { from?: string | null; to?: string | null; note?: string; by?: string; at?: string; via?: string; cleared?: boolean; level?: 'suspected' | 'confirmed' }
 
 export type Effect = 'secret' | 'delete' | 'write' | 'read' | 'auth' | 'attempt' | 'other'
 export const EFFECTS: Effect[] = ['secret', 'delete', 'write', 'read', 'auth', 'attempt', 'other']
@@ -43,9 +44,12 @@ export function effectOf(operation: string, target?: Pick<Entity, 'kind' | 'name
 }
 
 /** `derived`: not marked, but used successfully from attacker infrastructure; compromised no later than its first use. */
-export type Seed = { entity: Entity; from: number; to: number; derived?: { via: string; fact: string; at: string } }
+export type Derivation = { via: string; fact: string; at: string; reason?: 'used' | 'session' }
+/** suspected: marked as suspected, or derived from something only suspected; the analysis is the same, the wording is not. */
+export type Seed = { entity: Entity; from: number; to: number; derived?: Derivation; suspected?: boolean }
 /** before: evidence of this very activity (same identity, credential, IP, target) before the compromise: likely regular. */
-export type AttackFact = { fact: Fact; seeds: string[]; count: number; first: string | null; last: string | null; effect: Effect; before: number }
+/** hits: the evidence items inside the window (the rest of the activity happened before or after it). */
+export type AttackFact = { fact: Fact; seeds: string[]; count: number; first: string | null; last: string | null; effect: Effect; before: number; hits: Set<string> }
 export type OperationUse = { operation: string; effect: Effect; count: number; first: string | null; last: string | null }
 /**
  * regular: every attacker activity on it also happened, exactly so, before the compromise (likely harmless).
@@ -68,7 +72,7 @@ export type Impact = {
   undated: number
   first: string | null; last: string | null
   /** Entity IDs by their part in the attack, for the graph. */
-  marks: Map<string, 'compromised' | 'derived' | 'pivot' | 'impacted'>
+  marks: Map<string, 'compromised' | 'derived' | 'pivot' | 'impacted' | 'good'>
   /** Evidence items per compromised entity before its window: how much there is to tell regular from new. */
   history: Map<string, number>
 }
@@ -94,15 +98,28 @@ const DRIVING_ROLES = new Set(['actor', 'identity', 'tool', 'via', 'other'])
  * inside its window: compromised no later than the first such use. One hop only, and never the other way round: an IP
  * that used a stolen secret may well be its legitimate owner. Failed attempts prove nothing.
  */
-export function derivedCompromises(data: Pick<GraphData, 'entities' | 'facts'>): Map<string, { via: string; fact: string; at: string }> {
+export function derivedCompromises(data: Pick<GraphData, 'entities' | 'facts'>): Map<string, Derivation> {
   const byId = new Map(data.entities.map(e => [e.id, e]))
   const infrastructure = new Map<string, { from: number; to: number }>()
   for (const entity of data.entities) if (marked(entity) && INFRASTRUCTURE.test(entity.kind)) {
     const c = compromiseOf(entity)!
     infrastructure.set(entity.id, { from: parse(c.from, -Infinity), to: parse(c.to, Infinity) })
   }
-  const derived = new Map<string, { via: string; fact: string; at: string }>()
+  const derived = new Map<string, Derivation>()
   if (!infrastructure.size) return derived
+  // A session token is one sign-in: whoever else used it holds the attacker's session (a redirector, a second exit).
+  const inWindow = (id: string, at: string) => { const w = infrastructure.get(id); const t = Date.parse(at); return !!w && t >= w.from && t <= w.to }
+  for (const uses of sessionUses(data).values()) {
+    const attacker = uses.filter(u => u.ip && inWindow(u.ip, u.at)).sort((a, b) => a.at.localeCompare(b.at))[0]
+    if (!attacker) continue
+    for (const use of uses) {
+      // Before the attacker the session was the victim's: that IP is where the token was stolen, not the attacker.
+      if (!use.ip || use.at < attacker.at || infrastructure.has(use.ip) || compromiseOf(byId.get(use.ip) ?? ({} as Entity))) continue
+      const current = derived.get(use.ip)
+      if (!current || use.at < current.at) derived.set(use.ip, { via: attacker.ip!, fact: use.fact, at: use.at, reason: 'session' })
+    }
+  }
+  for (const [id, d] of derived) infrastructure.set(id, { from: Date.parse(d.at), to: Infinity })
   for (const fact of data.facts) {
     const plain = !fact.participants?.length
     const parts = plain ? [{ entity_id: fact.subject_id, role: 'actor' }, { entity_id: fact.object_id, role: 'tool' }] : fact.participants!
@@ -118,12 +135,39 @@ export function derivedCompromises(data: Pick<GraphData, 'entities' | 'facts'>):
       if (!host) continue
       for (const entity of used) {
         const current = derived.get(entity.id)
-        if (!current || item.valid_from < current.at) derived.set(entity.id, { via: host.entity_id, fact: fact.id, at: item.valid_from })
+        if (!current || item.valid_from < current.at) derived.set(entity.id, { via: host.entity_id, fact: fact.id, at: item.valid_from, reason: 'used' })
       }
     }
   }
   return derived
 }
+/**
+ * When infrastructure is proven in the attacker's hands: its first successful use of a credential or identity. Before
+ * that, an IP (a shared exit, a cloud range) may well have served someone else; nothing on the board says otherwise.
+ */
+export function firstUseOf(data: Pick<GraphData, 'entities' | 'facts'>, entityId: string): string | null {
+  const byId = new Map(data.entities.map(e => [e.id, e]))
+  let first: string | null = null
+  for (const fact of data.facts) {
+    const parts = fact.participants?.length ? fact.participants : [{ entity_id: fact.subject_id, role: 'actor' }, { entity_id: fact.object_id, role: 'tool' }]
+    if (!parts.some(p => p.entity_id === entityId && p.role !== 'target') || effectOf(fact.predicate) === 'attempt') continue
+    if (!parts.some(p => p.entity_id !== entityId && DRIVING_ROLES.has(p.role) && USABLE.test(byId.get(p.entity_id)?.kind ?? ''))) continue
+    for (const item of fact.assertions) if (!item.retracted_at && item.stance === 'supports' && item.valid_from) first = earlier(first, item.valid_from)
+  }
+  return first
+}
+/** Evidence items of an entity's own activity before a time: what a mark without a start would count as the attacker's. */
+export function activityBefore(data: Pick<GraphData, 'facts'>, entityId: string, at: string): number {
+  let count = 0
+  for (const fact of data.facts) {
+    const parts = fact.participants?.length ? fact.participants : [{ entity_id: fact.subject_id, role: 'actor' }, { entity_id: fact.object_id, role: 'target' }]
+    if (!parts.some(p => p.entity_id === entityId && p.role !== 'target')) continue
+    for (const item of fact.assertions) if (!item.retracted_at && item.stance === 'supports' && item.valid_from && item.valid_from < at) count++
+  }
+  return count
+}
+/** Where a new mark starts by default: infrastructure from its first proven use, everything else is the analyst's call. */
+export const defaultSince = (data: Pick<GraphData, 'entities' | 'facts'>, entity: Entity) => INFRASTRUCTURE.test(entity.kind) ? firstUseOf(data, entity.id) : null
 export const rotatedAtOf = (entity: Entity) => (entity as Entity & { rotated_at?: string | null }).rotated_at ?? null
 
 export function analyzeImpact(data: Pick<GraphData, 'entities' | 'facts'>): Impact {
@@ -131,10 +175,16 @@ export function analyzeImpact(data: Pick<GraphData, 'entities' | 'facts'>): Impa
   const seeds: Seed[] = []
   for (const entity of data.entities) {
     const compromise = compromiseOf(entity)
-    if (compromise && !compromise.cleared) seeds.push({ entity, from: parse(compromise.from, -Infinity), to: parse(compromise.to, Infinity) })
+    if (compromise && !compromise.cleared) seeds.push({ entity, from: parse(compromise.from, -Infinity), to: parse(compromise.to, Infinity), suspected: compromise.level === 'suspected' })
   }
-  for (const [id, derived] of derivedCompromises(data)) seeds.push({ entity: byId.get(id)!, from: Date.parse(derived.at), to: Infinity, derived })
+  const explicitSuspected = new Set(seeds.filter(x => x.suspected).map(x => x.entity.id))
+  const derivations = derivedCompromises(data)
+  // Derived from something only suspected stays suspected; follows chains of session-derived IPs too.
+  const suspectedVia = (id: string, depth = 0): boolean => explicitSuspected.has(id) || (depth < 4 && !!derivations.get(id) && suspectedVia(derivations.get(id)!.via, depth + 1))
+  for (const [id, derived] of derivations) seeds.push({ entity: byId.get(id)!, from: Date.parse(derived.at), to: Infinity, derived, suspected: suspectedVia(derived.via) })
   const seedById = new Map(seeds.map(s => [s.entity.id, s]))
+  // Marked good: known legitimate. What runs from good infrastructure is the owner, not the attacker.
+  const good = new Set(data.entities.filter(e => compromiseOf(e)?.cleared).map(e => e.id))
   const facts = new Map<string, AttackFact>()
   const impacted = new Map<string, Impacted & { ops: Map<string, OperationUse>; seedSet: Set<string>; actorSet: Set<string>; keys: Set<string>; irregular: number }>()
   // Seed × operation × target seen before the compromise, from any source: what the identity normally does.
@@ -154,13 +204,15 @@ export function analyzeImpact(data: Pick<GraphData, 'entities' | 'facts'>): Impa
     // An activity is the attacker's when a compromised entity drove it (any role but target) inside its window.
     const drivers = parts.filter(p => p.role !== 'target' && seedById.has(p.entity_id)).map(p => seedById.get(p.entity_id)!)
     if (!drivers.length) continue
+    if (good.size && parts.some(p => p.role === 'source' && good.has(p.entity_id))) continue
     const unbounded = drivers.every(s => s.from === -Infinity && s.to === Infinity)
     let count = 0, earlierCount = 0, factFirst: string | null = null, factLast: string | null = null
+    const hits = new Set<string>()
     for (const item of fact.assertions) {
       if (item.retracted_at || item.stance !== 'supports') continue
       const t = parse(item.valid_from, NaN)
-      if (Number.isNaN(t)) { if (unbounded) count++; else undated++; continue }
-      if (drivers.some(s => t >= s.from && t <= s.to)) { count++; factFirst = earlier(factFirst, item.valid_from); factLast = later(factLast, item.valid_from) }
+      if (Number.isNaN(t)) { if (unbounded) { count++; hits.add(item.id) } else undated++; continue }
+      if (drivers.some(s => t >= s.from && t <= s.to)) { count++; hits.add(item.id); factFirst = earlier(factFirst, item.valid_from); factLast = later(factLast, item.valid_from) }
       else if (drivers.some(s => t < s.from)) earlierCount++
     }
     // Seen together before the compromise: a hint that the partner is legitimate (the usual runner IP, the owner).
@@ -174,7 +226,7 @@ export function analyzeImpact(data: Pick<GraphData, 'entities' | 'facts'>): Impa
     const targets = parts.filter(p => p.role === 'target').map(p => p.entity_id)
     const effect = effectOf(fact.predicate, byId.get(targets[0] ?? ''))
     const seedIds = drivers.map(s => s.entity.id)
-    facts.set(fact.id, { fact, seeds: seedIds, count, first: factFirst, last: factLast, effect, before: earlierCount })
+    facts.set(fact.id, { fact, seeds: seedIds, count, first: factFirst, last: factLast, effect, before: earlierCount, hits })
     const actors = [...new Set(parts.filter(p => p.role !== 'target').map(p => p.entity_id))].sort()
     for (const p of parts) {
       const entity = byId.get(p.entity_id)
@@ -217,25 +269,31 @@ export function analyzeImpact(data: Pick<GraphData, 'entities' | 'facts'>): Impa
     .sort((a, b) => Number(a.before > 0) - Number(b.before > 0) || b.count - a.count)
   const stepList = [...steps.values()].map(({ targetSet, otherSet, irregular, ...rest }) => ({ ...rest, targets: [...targetSet], others: [...otherSet], regular: irregular === 0 }))
     .sort((a, b) => (a.first ?? '9').localeCompare(b.first ?? '9') || b.count - a.count)
-  const marks = new Map<string, 'compromised' | 'derived' | 'pivot' | 'impacted'>()
+  const marks = new Map<string, 'compromised' | 'derived' | 'pivot' | 'impacted' | 'good'>()
   for (const entry of impactedList) marks.set(entry.entity.id, 'impacted')
   for (const entry of pivotList) if (!entry.before) marks.set(entry.entity.id, 'pivot')
   for (const seed of seeds) marks.set(seed.entity.id, seed.derived ? 'derived' : 'compromised')
+  for (const id of good) if (!marks.has(id) || marks.get(id) === 'pivot') marks.set(id, 'good')
   // Last successful use of each compromised entity by the attacker: a rotation before it has to be repeated.
   const lastUse = new Map<string, string>()
   for (const attack of facts.values()) if (attack.effect !== 'attempt' && attack.last) for (const id of attack.seeds) if (!lastUse.has(id) || attack.last > lastUse.get(id)!) lastUse.set(id, attack.last)
-  return { seeds, facts, impacted: impactedList, pivots: pivotList, steps: stepList, rotation: rotationPlan(seeds, impactedList, { proofs: rotationProofs(data), lastUse, links: credentialLinks(data, seeds) }), variables: variableExposures(impactedList),
+  return { seeds, facts, impacted: impactedList, pivots: pivotList, steps: stepList, rotation: rotationPlan(seeds, impactedList, { proofs: rotationProofs(data, facts), lastUse, links: credentialLinks(data, seeds) }), variables: variableExposures(impactedList),
     undated, first, last, marks, history }
 }
 
-/** The latest imported evidence per entity that its key material was replaced (successful operations only). */
-export function rotationProofs(data: Pick<GraphData, 'facts'>): Map<string, Proof> {
+/**
+ * The latest imported evidence per entity that its key material was replaced (successful operations only). What the
+ * attacker did is no proof: regenerateKey by a compromised identity hands the new keys to the attacker, and removing a
+ * credential may lock out the owner. `attack` are the attacker's activities; their evidence inside the window is skipped.
+ */
+export function rotationProofs(data: Pick<GraphData, 'facts'>, attack?: Map<string, AttackFact>): Map<string, Proof> {
   const proofs = new Map<string, Proof>()
   for (const fact of data.facts) {
     if (!ROTATION_EVIDENCE.test(fact.predicate) || effectOf(fact.predicate) === 'attempt') continue
     const targets = fact.participants?.length ? fact.participants.filter(p => p.role === 'target').map(p => p.entity_id) : [fact.object_id]
+    const byAttacker = attack?.get(fact.id)?.hits
     for (const item of fact.assertions) {
-      if (item.retracted_at || item.stance !== 'supports' || !item.valid_from) continue
+      if (item.retracted_at || item.stance !== 'supports' || !item.valid_from || byAttacker?.has(item.id)) continue
       for (const id of targets) { const current = proofs.get(id); if (!current || item.valid_from > current.at) proofs.set(id, { at: item.valid_from, fact: fact.id, operation: fact.predicate }) }
     }
   }
@@ -388,7 +446,7 @@ export function impactMarkdown(impact: Impact, nameOf: (id: string) => string, q
   return lines.join('\n')
 }
 
-export type ExportBadge = { tone: 'bad' | 'warn' | 'pivot' | 'muted'; label: string }
+export type ExportBadge = { tone: 'bad' | 'warn' | 'pivot' | 'muted' | 'good'; label: string }
 const BADGE_LABEL: Record<Effect, string> = { secret: 'Secrets exposed', delete: 'Deleted', write: 'Changed', read: 'Read', auth: 'Signed in', attempt: 'Attempted', other: 'Touched' }
 /** Labels for exported images: the same markers as on the canvas, by entity and by group, and the attacker's facts. */
 export function exportMarks(impact: Impact, groups: { id: string; member_ids: string[] }[]): { badges: Map<string, ExportBadge>; attack: Set<string> } {
@@ -396,10 +454,12 @@ export function exportMarks(impact: Impact, groups: { id: string; member_ids: st
   if (!impact.seeds.length) return { badges, attack: new Set() }
   const effects = new Map(impact.impacted.map(i => [i.entity.id, i.effect]))
   const regular = new Set(impact.impacted.filter(i => i.regular).map(i => i.entity.id))
+  const suspected = new Set(impact.seeds.filter(s => s.suspected).map(s => s.entity.id))
   for (const [id, mark] of impact.marks) {
     const effect = effects.get(id) ?? 'other'
     if (mark === 'impacted' && regular.has(id)) { badges.set(id, { tone: 'muted', label: 'Likely regular' }); continue }
-    badges.set(id, mark === 'compromised' ? { tone: 'bad', label: 'Compromised' } : mark === 'derived' ? { tone: 'bad', label: 'Compromised (derived)' } : mark === 'pivot' ? { tone: 'pivot', label: 'New with attacker' }
+    if (mark === 'good') { badges.set(id, { tone: 'good', label: 'Good' }); continue }
+    badges.set(id, mark === 'compromised' ? { tone: 'bad', label: suspected.has(id) ? 'Suspected' : 'Compromised' } : mark === 'derived' ? { tone: 'bad', label: suspected.has(id) ? 'Suspected (derived)' : 'Compromised (derived)' } : mark === 'pivot' ? { tone: 'pivot', label: 'New with attacker' }
       : { tone: effect === 'secret' || effect === 'delete' ? 'bad' : effect === 'attempt' || effect === 'other' ? 'muted' : 'warn', label: BADGE_LABEL[effect] })
   }
   for (const group of groups) {
@@ -407,7 +467,8 @@ export function exportMarks(impact: Impact, groups: { id: string; member_ids: st
     for (const id of group.member_ids) { const mark = impact.marks.get(id); if (mark === 'compromised' || mark === 'derived') compromised++; else if (mark === 'impacted') impacted++ }
     if (compromised || impacted) badges.set(`group:${group.id}`, { tone: compromised ? 'bad' : 'warn', label: [compromised && `${compromised} compromised`, impacted && `${impacted} impacted`].filter(Boolean).join(' · ') })
   }
-  return { badges, attack: new Set(impact.facts.keys()) }
+  // Red edges for what is likely the attacker's; "likely regular" activity keeps its normal colour, as on the canvas.
+  return { badges, attack: new Set([...impact.facts.values()].filter(f => !f.before).map(f => f.fact.id)) }
 }
 
 /** Readouts that can hand out someone else's credential (as opposed to a resource's own service keys). */
@@ -417,6 +478,13 @@ export type TraceEntry = { at: string; entity: Entity; via: string | null; deriv
  * How it started: when each compromised entity was first used by the attacker, earliest first, and the secret readouts
  * by other compromised entities that ended before that first use: where a derived credential was probably taken from.
  */
+/** "10 days", "3 hours", "12 minutes": the time between two moments, for wording that does not overstate closeness. */
+export function gapText(from: string, to: string): string {
+  const minutes = Math.max(0, Math.round((Date.parse(to) - Date.parse(from)) / 60_000))
+  const unit = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`
+  return minutes < 60 ? unit(minutes, 'minute') : minutes < 48 * 60 ? unit(Math.round(minutes / 60), 'hour') : unit(Math.round(minutes / 1440), 'day')
+}
+
 export function traceBack(impact: Impact): TraceEntry[] {
   const entries: TraceEntry[] = []
   for (const seed of impact.seeds) {
@@ -431,7 +499,7 @@ export function traceBack(impact: Impact): TraceEntry[] {
 }
 
 /** One use of a session token (Entra UniqueTokenIdentifier / `uti` claim), read from the original row of an evidence item. */
-export type SessionUse = { at: string; fact: string; item: string; ip: string | null; identity: string | null }
+export type SessionUse = { at: string; fact: string; item: string; ip: string | null; identity: string | null; agent: string | null }
 /**
  * A session token used from more than one IP. With an attacker IP among them: `redirector` when the other source came
  * up with or after the attacker (their proxy or second exit), `theft` when it used the session first (the token was
@@ -440,33 +508,99 @@ export type SessionUse = { at: string; fact: string; item: string; ip: string | 
 export type SessionFinding = { uti: string; kind: 'redirector' | 'theft' | 'replay'; identity: string | null; uses: SessionUse[]; sources: string[]; attacker: string[]; others: string[]; first: string; last: string }
 
 const UTI = /"(?:UniqueTokenIdentifier|uti|SignInActivityId)":\s*"([A-Za-z0-9_-]{12,})"/
-const sessionCache = new WeakMap<object, Map<string, SessionUse[]>>()
+const AGENT = /"(?:UserAgent|userAgent|user_agent)":\s*"([^"]{3,300})"/
+type Signals = { sessions: Map<string, SessionUse[]>; agents: Map<string, SessionUse[]>; agentOf: Map<string, string> }
+const signalCache = new WeakMap<object, Signals>()
 
-/** Every session token in the evidence, with when, from which IP and as whom it was used (cached per board state). */
-export function sessionUses(data: Pick<GraphData, 'entities' | 'facts'>): Map<string, SessionUse[]> {
-  const cached = sessionCache.get(data.facts)
+/**
+ * Session tokens and user agents from the original rows of every evidence item, with when, from which IP and as whom
+ * they were used. One pass over the evidence, cached per board state.
+ */
+export function rowSignals(data: Pick<GraphData, 'entities' | 'facts'>): Signals {
+  const cached = signalCache.get(data.facts)
   if (cached) return cached
   const kinds = new Map(data.entities.map(e => [e.id, e.kind]))
-  const sessions = new Map<string, SessionUse[]>()
+  const sessions = new Map<string, SessionUse[]>(), agents = new Map<string, SessionUse[]>(), agentOf = new Map<string, string>()
   for (const fact of data.facts) {
     const parts = fact.participants ?? []
     const ip = parts.find(p => p.role === 'source' && /\bip\b/i.test(kinds.get(p.entity_id) ?? ''))?.entity_id ?? null
     const identity = parts.find(p => (p.role === 'identity' || p.role === 'actor') && USABLE.test(kinds.get(p.entity_id) ?? ''))?.entity_id ?? null
     for (const item of fact.assertions) {
-      if (item.retracted_at || !item.valid_from || !item.note || !(item.note.includes('niqueTokenIdentifier') || item.note.includes('"uti"') || item.note.includes('SignInActivityId'))) continue
-      const uti = UTI.exec(item.note)?.[1]
-      if (!uti) continue
-      let list = sessions.get(uti); if (!list) sessions.set(uti, list = [])
-      list.push({ at: item.valid_from, fact: fact.id, item: item.id, ip, identity })
+      if (item.retracted_at || !item.valid_from || !item.note) continue
+      const hasSession = item.note.includes('niqueTokenIdentifier') || item.note.includes('"uti"') || item.note.includes('SignInActivityId')
+      const hasAgent = item.note.includes('serAgent') || item.note.includes('user_agent')
+      if (!hasSession && !hasAgent) continue
+      const uti = hasSession ? UTI.exec(item.note)?.[1] : undefined
+      const agent = hasAgent ? AGENT.exec(item.note)?.[1] ?? null : null
+      const use = { at: item.valid_from, fact: fact.id, item: item.id, ip, identity, agent }
+      if (uti) { let list = sessions.get(uti); if (!list) sessions.set(uti, list = []); list.push(use) }
+      if (agent) { let list = agents.get(agent); if (!list) agents.set(agent, list = []); list.push(use); agentOf.set(item.id, agent) }
     }
   }
-  sessionCache.set(data.facts, sessions)
-  return sessions
+  const signals = { sessions, agents, agentOf }
+  signalCache.set(data.facts, signals)
+  return signals
+}
+export const sessionUses = (data: Pick<GraphData, 'entities' | 'facts'>) => rowSignals(data).sessions
+
+/**
+ * A user agent that came with the attacker: first seen in an attacker activity, not used by the compromised identities
+ * before the compromise. `others`: unmarked IPs with the same agent (the same tooling, possibly the same attacker).
+ * `common`: also widely used elsewhere, so a weak signal.
+ */
+export type AgentFinding = { agent: string; attackerIps: string[]; others: string[]; first: string; uses: number; baseline: boolean; common: boolean; facts: string[] }
+const SCRIPTED = /python|curl|wget|go-http|powershell|okhttp|axios|node-fetch|httpclient|libwww|java\/|ruby|perl|postman|insomnia|sqlmap|nmap|masscan|zgrab/i
+export function agentFindings(data: Pick<GraphData, 'entities' | 'facts'>, impact: Impact): AgentFinding[] {
+  if (!impact.facts.size) return []
+  const { agents, agentOf } = rowSignals(data)
+  if (!agents.size) return []
+  const seedFrom = new Map(impact.seeds.map(s => [s.entity.id, s.from]))
+  const marked = (id: string) => impact.marks.get(id) === 'compromised' || impact.marks.get(id) === 'derived'
+  const good = new Set(data.entities.filter(e => compromiseOf(e)?.cleared).map(e => e.id))
+  const factById = new Map(data.facts.map(f => [f.id, f]))
+  const used = new Map<string, { ips: Set<string>; first: string; facts: Set<string> }>()
+  for (const attack of impact.facts.values()) for (const item of attack.fact.assertions) {
+    const agent = agentOf.get(item.id)
+    if (!agent || !item.valid_from || (attack.first && item.valid_from < attack.first)) continue
+    const entry = used.get(agent) ?? { ips: new Set<string>(), first: item.valid_from, facts: new Set<string>() }
+    const ip = (attack.fact.participants ?? []).find(p => p.role === 'source' && marked(p.entity_id))?.entity_id
+    if (ip) entry.ips.add(ip)
+    if (item.valid_from < entry.first) entry.first = item.valid_from
+    entry.facts.add(attack.fact.id); used.set(agent, entry)
+  }
+  const findings: AgentFinding[] = []
+  for (const [agent, entry] of used) {
+    const all = agents.get(agent) ?? []
+    // Used by a compromised identity before its compromise: their normal tooling.
+    const baseline = all.some(u => (factById.get(u.fact)?.participants ?? []).some(p => p.role !== 'target' && seedFrom.has(p.entity_id) && Date.parse(u.at) < seedFrom.get(p.entity_id)!))
+    const ips = new Set(all.map(u => u.ip).filter(Boolean))
+    const others = [...new Set(all.filter(u => u.ip && !marked(u.ip) && !good.has(u.ip)).map(u => u.ip!))]
+    findings.push({ agent, attackerIps: [...entry.ips], others, first: entry.first, uses: all.length, baseline, common: ips.size > 25, facts: [...entry.facts] })
+  }
+  return findings.sort((a, b) => Number(a.baseline) - Number(b.baseline) || Number(a.common) - Number(b.common) || Number(!SCRIPTED.test(a.agent)) - Number(!SCRIPTED.test(b.agent)) || a.others.length - b.others.length)
+}
+
+/** Sessions the attacker worked in: what happened within one sign-in, from where, until the token's last use. */
+export type AttackSession = { uti: string; identity: string | null; start: string; end: string; ips: string[]; facts: string[]; operations: [string, number][]; uses: number }
+export function attackSessions(data: Pick<GraphData, 'entities' | 'facts'>, impact: Impact): AttackSession[] {
+  const facts = new Map(data.facts.map(f => [f.id, f]))
+  const result: AttackSession[] = []
+  for (const [uti, uses] of rowSignals(data).sessions) {
+    if (!uses.some(u => impact.facts.has(u.fact))) continue
+    uses.sort((a, b) => a.at.localeCompare(b.at))
+    const ops = new Map<string, number>()
+    for (const u of uses) { const op = facts.get(u.fact)?.predicate ?? '?'; ops.set(op, (ops.get(op) ?? 0) + 1) }
+    result.push({ uti, identity: uses.find(u => u.identity)?.identity ?? null, start: uses[0].at, end: uses[uses.length - 1].at, ips: [...new Set(uses.map(u => u.ip).filter((x): x is string => !!x))],
+      facts: [...new Set(uses.map(u => u.fact))], operations: [...ops].sort((a, b) => b[1] - a[1]), uses: uses.length })
+  }
+  return result.sort((a, b) => b.ips.length - a.ips.length || b.uses - a.uses || a.start.localeCompare(b.start))
 }
 
 export function sessionFindings(data: Pick<GraphData, 'entities' | 'facts'>, impact: Impact): SessionFinding[] {
   const byId = new Map(data.entities.map(e => [e.id, e]))
-  const attackerIp = (id: string) => { const mark = impact.marks.get(id); return (mark === 'compromised' || mark === 'derived') && INFRASTRUCTURE.test(byId.get(id)?.kind ?? '') }
+  // Explicit or derived attacker infrastructure, but not what was derived from the session itself (those are its findings).
+  const bySession = new Set(impact.seeds.filter(s => s.derived?.reason === 'session').map(s => s.entity.id))
+  const attackerIp = (id: string) => { const mark = impact.marks.get(id); return (mark === 'compromised' || mark === 'derived') && !bySession.has(id) && INFRASTRUCTURE.test(byId.get(id)?.kind ?? '') }
   const findings: SessionFinding[] = []
   for (const [uti, uses] of sessionUses(data)) {
     const sources = [...new Set(uses.map(u => u.ip).filter((ip): ip is string => !!ip))]
@@ -493,7 +627,7 @@ export type Advice = {
 
 const ASN = /"AutonomousSystemNumber":\s*"?(\d+)|\bASN (\d+)/
 /** Network provider (AS number) per IP, and the providers each compromised entity used before its window. */
-function networkProviders(data: Pick<GraphData, 'entities' | 'facts'>, impact: Impact) {
+export function networkProviders(data: Pick<GraphData, 'entities' | 'facts'>, impact: Impact) {
   const kinds = new Map(data.entities.map(e => [e.id, e.kind]))
   const seeds = new Map(impact.seeds.map(s => [s.entity.id, s]))
   const ipAsn = new Map<string, string>(), before = new Map<string, Set<string>>()
@@ -513,7 +647,18 @@ function networkProviders(data: Pick<GraphData, 'entities' | 'facts'>, impact: I
   return { ipAsn, before }
 }
 
-const subnet = (ip: string) => /^(\d{1,3}\.\d{1,3}\.\d{1,3})\.\d{1,3}$/.exec(ip)?.[1] ?? null
+/** The network an address sits in: /24 for IPv4, /64 for IPv6 (one customer or host network). */
+export function subnet(ip: string): string | null {
+  const v4 = /^(\d{1,3}\.\d{1,3}\.\d{1,3})\.\d{1,3}$/.exec(ip.trim())?.[1]
+  if (v4) return `${v4}.0/24`
+  const text = ip.trim().toLowerCase().replace(/^\[|\]$/g, '').split('%')[0]
+  if (!/^[0-9a-f:]+$/.test(text) || !text.includes(':') || (text.match(/::/g)?.length ?? 0) > 1) return null
+  const [head, tail = ''] = text.split('::')
+  const left = head ? head.split(':') : [], right = text.includes('::') ? (tail ? tail.split(':') : []) : []
+  const groups = text.includes('::') ? [...left, ...Array(8 - left.length - right.length).fill('0'), ...right] : left
+  if (groups.length !== 8 || groups.some(g => !/^[0-9a-f]{1,4}$/.test(g))) return null
+  return `${groups.slice(0, 4).map(g => parseInt(g, 16).toString(16)).join(':')}::/64`
+}
 
 /** What the evidence suggests doing next, most important first; every advice names the evidence it rests on. */
 export function adviceFor(data: Pick<GraphData, 'entities' | 'facts'>, impact: Impact): Advice[] {
@@ -537,11 +682,31 @@ export function adviceFor(data: Pick<GraphData, 'entities' | 'facts'>, impact: I
       detail: `Token ${finding.uti.slice(0, 10)}… came from ${finding.sources.map(name).join(', ')} between ${short(finding.first)} and ${short(finding.last)} UTC. Unless these are known egress points of the same network, this is a replayed token.`,
       entities: finding.sources, mark: finding.sources, facts, query: 'session-replay' })
   }
+  for (const finding of agentFindings(data, impact).filter(f => !f.baseline).slice(0, 6)) {
+    const weak = finding.common || !SCRIPTED.test(finding.agent)
+    advice.push({ id: `ua-${finding.agent}`, severity: finding.others.length && !weak ? 'high' : 'medium',
+      title: finding.others.length ? `${finding.others.length} other IP${finding.others.length === 1 ? '' : 's'} used the attacker's user agent ${finding.agent}` : `The attacker's user agent: ${finding.agent}`,
+      detail: `First seen in attacker activity ${short(finding.first)} UTC${finding.attackerIps.length ? ` from ${finding.attackerIps.map(name).join(', ')}` : ''}, never used by the compromised identities before the compromise. ${finding.others.length ? `Also used from ${finding.others.slice(0, 5).map(name).join(', ')}${finding.others.length > 5 ? ` +${finding.others.length - 5}` : ''}: the same tooling, possibly the same attacker.` : 'Hunt for it elsewhere.'}${weak ? ' A common or browser agent: weak on its own, combine it with the IP, ASN or time.' : ''}`,
+      entities: [...finding.attackerIps, ...finding.others.slice(0, 5)], mark: finding.others.slice(0, 4), facts: finding.facts.slice(0, 1), query: 'agent-hunt' })
+  }
+  const blind = impact.seeds.filter(s => !(impact.history.get(s.entity.id) ?? 0) && s.from !== -Infinity)
+  if (blind.length) advice.push({ id: 'baseline', severity: 'medium', title: `No events before the compromise for ${blind.length === 1 ? name(blind[0].entity.id) : `${blind.length} compromised entities`}`,
+    detail: `${blind.slice(0, 5).map(s => name(s.entity.id)).join(', ')}: nothing on the board from before ${short(new Date(Math.min(...blind.map(s => s.from))).toISOString())} UTC, so FactGraph cannot tell their usual IPs, agents and operations from the attacker's. Import an export that starts two weeks or more earlier ("Where else was the stolen credential used" starts there) to build a baseline.`,
+    entities: blind.map(s => s.entity.id), query: 'credential-use' })
   for (const entry of traceBack(impact)) if (entry.exposedBy.length && entry.derived) {
     const step = entry.exposedBy[0]
-    advice.push({ id: `trace-${entry.entity.id}`, severity: 'high', title: `${name(entry.entity.id)} was probably taken from: ${step.operation}`,
-      detail: `First used by the attacker ${short(entry.at)} UTC, right after ${step.seeds.map(name).join(', ')} ran ${step.operation} on ${step.targets.length} target${step.targets.length === 1 ? '' : 's'} (${short(step.first ?? '')} – ${short(step.last ?? '')}). Find where it was stored there, and everything else that uses it.`,
+    const gap = gapText(step.last ?? step.first ?? entry.at, entry.at)
+    // Only the order in time points there: a hypothesis to check, not a proven way in.
+    advice.push({ id: `trace-${entry.entity.id}`, severity: 'medium', title: `Possible origin of ${name(entry.entity.id)}: ${step.operation} (${gap} earlier)`,
+      detail: `Hypothesis from timing only. ${step.seeds.map(name).join(', ')} ran ${step.operation} on ${step.targets.length} target${step.targets.length === 1 ? '' : 's'} (${short(step.first ?? '')} – ${short(step.last ?? '')} UTC); the attacker first used ${name(entry.entity.id)} ${gap} later (${short(entry.at)} UTC). Nothing on the board ties what was read there to this credential (no secret name or key ID in common). Confirm it by finding the credential among what was read, or rule it out.`,
       entities: [entry.entity.id, ...step.targets.slice(0, 5)], facts: step.facts.slice(0, 1) })
+  }
+  // Keys regenerated or credentials removed by the attacker: the new keys are theirs, or the owner was locked out.
+  for (const attack of impact.facts.values()) if (ROTATION_EVIDENCE.test(attack.fact.predicate) && attack.effect !== 'attempt' && !attack.before) {
+    const targets = (attack.fact.participants?.filter(p => p.role === 'target').map(p => p.entity_id) ?? [attack.fact.object_id])
+    advice.push({ id: `attacker-rotation-${attack.fact.id}`, severity: 'high', title: `The attacker ran ${attack.fact.predicate} on ${targets.map(name).join(', ')}`,
+      detail: `${attack.count}× between ${short(attack.first ?? '')} and ${short(attack.last ?? '')} UTC by ${attack.seeds.map(name).join(', ')}. This is not a rotation in your favour: regenerated keys are in the attacker's hands, removed credentials may lock out the owner. Rotate again once the attacker's access is cut, and check that the legitimate clients still work.`,
+      entities: [...attack.seeds, ...targets], facts: [attack.fact.id] })
   }
   for (const item of impact.rotation.filter(r => r.stale)) advice.push({ id: `stale-${item.id}`, severity: 'high', title: `Attacker active after rotation: ${item.title}`,
     detail: `Rotated ${short(item.rotatedAt ?? '')} UTC, but used by the attacker until ${short(item.lastUse ?? '')} UTC. Rotate again and find the second way in (another credential, a session token, persistence).`, entities: [item.entityId] })
@@ -557,7 +722,7 @@ export function adviceFor(data: Pick<GraphData, 'entities' | 'facts'>, impact: I
     const known = Math.max(0, ...pivot.seeds.map(id => impact.history.get(id) ?? 0))
     const thin = known < 20
     advice.push({ id: `pivot-${pivot.entity.id}`, severity: sameNet || attackerProvider || (pivot.count >= 5 && !thin && !usualProvider) ? 'high' : usualProvider ? 'info' : 'medium',
-      title: `${pivot.entity.name}: ${sameNet ? 'same /24 as a known attacker IP' : attackerProvider ? `same network provider (AS${asn}) as the attacker` : usualProvider ? `new IP, but the usual provider (AS${asn})` : 'new since the compromise'}`,
+      title: `${pivot.entity.name}: ${sameNet ? `same network (${subnet(pivot.entity.name)}) as a known attacker IP` : attackerProvider ? `same network provider (AS${asn}) as the attacker` : usualProvider ? `new IP, but the usual provider (AS${asn})` : 'new since the compromise'}`,
       detail: `Used ${pivot.count}× with compromised ${pivot.seeds.map(name).join(', ')} (${short(pivot.first ?? '')} – ${short(pivot.last ?? '')} UTC) and never before the compromise.${sameNet ? ' Its network neighbour is already known as attacker infrastructure.' : ''}${usualProvider ? ` Its network (AS${asn}) was already used by the same identity before the compromise: most likely a rotating cloud or CI egress, not the attacker.` : asn && !attackerProvider ? ` Network provider AS${asn} was not seen with it before.` : ''}${thin ? ` Only ${known} event${known === 1 ? '' : 's'} before the compromise to compare with, so "new" says little: check whether it is one of your own cloud or CI egress addresses first.` : ''} If it is not a known egress of yours, mark it: its own activity then joins the analysis.`,
       entities: [pivot.entity.id], mark: [pivot.entity.id] })
   }
@@ -579,4 +744,107 @@ export function adviceFor(data: Pick<GraphData, 'entities' | 'facts'>, impact: I
     detail: 'The first attacker activity on the board is rarely the first one. Run the queries for the attacker IPs and the stolen credentials (they start two weeks earlier) and drop the exports here.', entities: [], query: 'ip-everywhere' })
   const order = { high: 0, medium: 1, info: 2 }
   return advice.sort((a, b) => order[a.severity] - order[b.severity])
+}
+
+/** Where to start when nothing is marked yet: patterns in the evidence that usually mean an attack. */
+export type StartingPoint = { id: string; title: string; detail: string; entities: string[]; mark: string[]; fact: string }
+const ENCODED = /(?:^|\s)-(?:e|en|enc|encodedcommand)\s+[A-Za-z0-9+/=]{8,}|frombase64string|iex\s*\(|invoke-expression|downloadstring|downloadfile|invoke-webrequest|certutil[^\n]*-urlcache|bitsadmin[^\n]*\/transfer|mshta\s+https?:|regsvr32[^\n]*\/i:http/i
+const OFFICE = /^(winword|excel|outlook|powerpnt|onenote|msaccess|mspub)\.exe$/i
+const SHELL = /^(powershell|pwsh|cmd|wscript|cscript|mshta|rundll32|regsvr32|bash|sh)(\.exe)?$/i
+export function startingPoints(data: Pick<GraphData, 'entities' | 'facts'>): StartingPoint[] {
+  const byId = new Map(data.entities.map(e => [e.id, e]))
+  const name = (id: string) => byId.get(id)?.name ?? id
+  const points: StartingPoint[] = []
+  const seen = new Set<string>()
+  const markable = (ids: string[]) => ids.filter(id => /device|host|user|account|service principal|credential|\bip\b/i.test(byId.get(id)?.kind ?? '') && !compromiseOf(byId.get(id)!))
+  const spray = new Map<string, { failed: number; ok: number; identities: Set<string>; fact: string }>()
+  const secretReads = new Map<string, { ops: number; targets: Set<string>; fact: string }>()
+  for (const fact of data.facts) {
+    const parts = fact.participants ?? []
+    const ids = parts.map(p => p.entity_id)
+    const command = fact.assertions.map(a => a.note).find(note => note && ENCODED.test(note))
+    if (command && !seen.has(`cmd${fact.id}`)) {
+      seen.add(`cmd${fact.id}`)
+      const line = (/"(?:ProcessCommandLine|CommandLine|InitiatingProcessCommandLine)":\s*"([^"]{0,140})/.exec(command)?.[1] ?? ENCODED.exec(command)?.[0] ?? '').trim()
+      points.push({ id: `cmd-${fact.id}`, title: `Encoded or download command: ${line.slice(0, 80)}`, detail: `${fact.predicate} with ${ids.map(name).join(', ')}. Obfuscated PowerShell or a download cradle is a typical first step; mark the device or account as suspected to see what followed.`, entities: ids, mark: markable(ids), fact: fact.id })
+    }
+    const names = parts.map(p => byId.get(p.entity_id)?.name.split(/[\\/]/).pop() ?? '')
+    if (names.some(n => OFFICE.test(n)) && names.some(n => SHELL.test(n)) && !seen.has(`office${fact.id}`)) {
+      seen.add(`office${fact.id}`)
+      points.push({ id: `office-${fact.id}`, title: `${names.find(n => OFFICE.test(n))} started ${names.find(n => SHELL.test(n))}`, detail: `An Office application launching a shell (${ids.map(name).join(', ')}) is the classic sign of a malicious document or mail attachment.`, entities: ids, mark: markable(ids), fact: fact.id })
+    }
+    const effect = effectOf(fact.predicate)
+    const ip = parts.find(p => p.role === 'source' && /\bip\b/i.test(byId.get(p.entity_id)?.kind ?? ''))?.entity_id
+    if (ip && AUTH_OPERATION.test(fact.predicate)) {
+      const entry = spray.get(ip) ?? { failed: 0, ok: 0, identities: new Set<string>(), fact: fact.id }
+      const count = fact.assertions.length
+      if (effect === 'attempt') entry.failed += count; else { entry.ok += count; entry.fact = fact.id }
+      for (const p of parts) if (p.role === 'identity' || p.role === 'actor') entry.identities.add(p.entity_id)
+      spray.set(ip, entry)
+    }
+    if (effect === 'secret') for (const p of parts) if ((p.role === 'identity' || p.role === 'actor') && USABLE.test(byId.get(p.entity_id)?.kind ?? '')) {
+      const entry = secretReads.get(p.entity_id) ?? { ops: 0, targets: new Set<string>(), fact: fact.id }
+      entry.ops += fact.assertions.length
+      parts.filter(t => t.role === 'target').forEach(t => entry.targets.add(t.entity_id))
+      secretReads.set(p.entity_id, entry)
+    }
+  }
+  for (const [ip, entry] of spray) if (entry.failed >= 5 && entry.ok > 0)
+    points.push({ id: `spray-${ip}`, title: `${entry.failed} failed, then ${entry.ok} successful sign-ins from ${name(ip)}`, detail: `Against ${entry.identities.size} identit${entry.identities.size === 1 ? 'y' : 'ies'}: guessing or spraying that eventually worked.`, entities: [ip, ...entry.identities], mark: markable([ip]), fact: entry.fact })
+  for (const [id, entry] of [...secretReads].sort((a, b) => b[1].targets.size - a[1].targets.size).slice(0, 3)) if (entry.targets.size >= 3)
+    points.push({ id: `secrets-${id}`, title: `${name(id)} read keys or secrets of ${entry.targets.size} resources`, detail: 'Collecting credentials across many resources in a short time is how attackers widen access. Check whether this is its normal job.', entities: [id], mark: markable([id]), fact: entry.fact })
+  return points.slice(0, 12)
+}
+
+/** The case at a glance: what is known, what is only suspected, and the questions the evidence does not answer yet. */
+export type CaseGap = { question: string; why: string; query?: string; entities: string[] }
+export type CaseSummary = { known: string[]; suspected: string[]; gaps: CaseGap[] }
+export function caseSummary(data: Pick<GraphData, 'entities' | 'facts'>, impact: Impact): CaseSummary {
+  const byId = new Map(data.entities.map(e => [e.id, e]))
+  const name = (id: string) => byId.get(id)?.name ?? id
+  const short = (t: string | null) => t ? t.slice(0, 16).replace('T', ' ') : '?'
+  const list = (ids: string[], max = 3) => ids.slice(0, max).map(name).join(', ') + (ids.length > max ? ` and ${ids.length - max} more` : '')
+  const confirmed = impact.seeds.filter(s => !s.suspected && !s.derived).map(s => s.entity.id)
+  const suspected = impact.seeds.filter(s => s.suspected && !s.derived).map(s => s.entity.id)
+  const derived = impact.seeds.filter(s => s.derived).map(s => s.entity.id)
+  const known: string[] = [], maybe: string[] = [], gaps: CaseGap[] = []
+  if (confirmed.length) known.push(`Compromised: ${list(confirmed)}.`)
+  // "Known" rests on confirmed compromises only; what only suspected or derived entities did is listed as suspected.
+  const sure = new Set(confirmed)
+  const byConfirmed = (ids: string[]) => ids.some(id => sure.has(id))
+  const sureFacts = [...impact.facts.values()].filter(f => byConfirmed(f.seeds) && !f.before)
+  const window = sureFacts.reduce<[string | null, string | null]>(([a, b], f) => [earlier(a, f.first), later(b, f.last)], [null, null])
+  if (window[0]) known.push(`Attacker activity by confirmed compromised entities from ${short(window[0])} to ${short(window[1])} UTC (${sureFacts.reduce((n, f) => n + f.count, 0).toLocaleString('en')} evidence items).`)
+  else if (impact.first) maybe.push(`Activity in the compromise windows from ${short(impact.first)} to ${short(impact.last)} UTC, by suspected or derived entities only.`)
+  const kindsOf = (entries: Impacted[]) => { const kinds = new Map<string, number>(); entries.forEach(i => kinds.set(i.entity.kind, (kinds.get(i.entity.kind) ?? 0) + 1)); return [...kinds].sort((a, b) => b[1] - a[1]).map(([k, n]) => `${n} ${k}`).join(', ') }
+  const secrets = impact.impacted.filter(i => i.effect === 'secret' && !i.regular)
+  const sureSecrets = secrets.filter(i => byConfirmed(i.seeds)), maybeSecrets = secrets.filter(i => !byConfirmed(i.seeds))
+  if (sureSecrets.length) known.push(`Secrets possibly exposed on ${sureSecrets.length} resources (a secret-read operation succeeded): ${kindsOf(sureSecrets)}.`)
+  if (maybeSecrets.length) maybe.push(`Secrets possibly exposed on ${maybeSecrets.length} more resources, by suspected or derived entities: ${kindsOf(maybeSecrets)}.`)
+  const changed = impact.impacted.filter(i => (i.effect === 'write' || i.effect === 'delete') && !i.regular)
+  const sureChanged = changed.filter(i => byConfirmed(i.seeds))
+  if (sureChanged.length) known.push(`${sureChanged.length} resources changed or deleted by confirmed compromised entities.`)
+  if (changed.length > sureChanged.length) maybe.push(`${changed.length - sureChanged.length} resources changed or deleted by suspected or derived entities.`)
+  const proven = impact.rotation.filter(r => r.proof && !r.stale)
+  if (proven.length) known.push(`Rotation proven for ${proven.length} item${proven.length === 1 ? '' : 's'}.`)
+  if (suspected.length) maybe.push(`Suspected compromised: ${list(suspected)}.`)
+  if (derived.length) maybe.push(`Derived from the evidence, not yet confirmed: ${list(derived)}.`)
+  const newPivots = impact.pivots.filter(p => !p.before && INFRASTRUCTURE.test(p.entity.kind))
+  if (newPivots.length) maybe.push(`${newPivots.length} IP${newPivots.length === 1 ? '' : 's'} appeared with compromised entities and never before.`)
+  const regular = impact.impacted.filter(i => i.regular).length
+  if (regular) maybe.push(`${regular} impacted resources look like regular activity (it happened exactly so before the compromise).`)
+  // Questions the board cannot answer yet, each with the query that can.
+  for (const entry of traceBack(impact)) if (!entry.exposedBy.length && /credential|secret|token|key|service principal|user|account/i.test(entry.entity.kind))
+    gaps.push({ question: `How was ${name(entry.entity.id)} obtained?`, why: `First used by the attacker ${short(entry.at)} UTC; nothing on the board shows it being read or stolen before.`, query: 'credential-use', entities: [entry.entity.id] })
+  const vaults = secrets.filter(i => /vault/i.test(i.entity.kind) || i.operations.some(o => /secret ?get|vaults/i.test(o.operation)))
+  if (vaults.length) gaps.push({ question: `Which secrets were read from ${list(vaults.map(v => v.entity.id), 2)}, and where were they used?`, why: 'The board shows access to the vault, not which secret values left it or what they unlock.', query: 'sp-keyvault', entities: vaults.map(v => v.entity.id) })
+  const exposedKinds: [RegExp, string, string][] = [[/listcluster\w*credential/, 'aks-admin', 'the kubeconfigs'], [/storage.*listkeys|listkeys.*storage/, 'storage-keys', 'the storage keys'], [/listcredentials.*regist|regist.*listcredentials/, 'acr-use', 'the registry passwords'], [/cognitiveservices|openai/, 'ai-keys', 'the AI service keys']]
+  for (const [pattern, query, label] of exposedKinds) { const hit = secrets.filter(i => i.operations.some(o => pattern.test(o.operation.toLowerCase()))); if (hit.length) gaps.push({ question: `What did ${label} enable after they were read?`, why: `${hit.length} resource${hit.length === 1 ? '' : 's'} affected; using the stolen material leaves traces in the resource's own logs.`, query, entities: hit.map(i => i.entity.id) }) }
+  if (impact.variables.length) gaps.push({ question: `Which CI/CD variables of the ${impact.variables.length} projects held secrets, and where are those secrets used?`, why: 'GitLab logs that variables were read, not which: list the keys, then rotate and hunt for each secret.', entities: impact.variables.map(v => v.entity.id) })
+  const unproven = impact.rotation.filter(r => (r.key === 'revoke-secret' || r.key === 'rotate-identity') && !r.proof)
+  if (unproven.length) gaps.push({ question: `Were the stolen credentials removed (${unproven.length})?`, why: 'No key removal or rotation is on the board yet.', query: 'rotation-proof', entities: unproven.map(r => r.entityId) })
+  const blind = impact.seeds.filter(s => !(impact.history.get(s.entity.id) ?? 0) && s.from !== -Infinity)
+  if (blind.length) gaps.push({ question: `What is normal for ${list(blind.map(s => s.entity.id), 2)}?`, why: 'No events from before the compromise: without a baseline, regular use and the attacker look the same.', query: 'credential-use', entities: blind.map(s => s.entity.id) })
+  if (impact.first) gaps.push({ question: `What happened before ${short(impact.first)} UTC?`, why: 'The first attacker activity on the board is rarely the first one.', query: 'ip-everywhere', entities: [] })
+  return { known, suspected: maybe, gaps }
 }

@@ -1,11 +1,14 @@
 import { impactReport } from './hunting'
 import { analyzeImpact, exportMarks } from './impact'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { type ActionDraft, type BoardAction, isAction, isDraft, project, sortActions, undoneActions } from './board'
+import { type ActionDraft, type BoardAction, type UndoScope, isAction, isDraft, participantKey, project, redoTarget, sortActions, undoTargets } from './board'
 import { listBoards, loadActions, saveActions, touchBoard, type BoardMeta } from './store'
 import { placeNew } from './layout'
-import { actionChunks, messageParts, queryRecords } from './query'
+import { actionChunks, messageParts, queryRecords, COMPRESS_ABOVE, COMPRESSED_RAW_LIMIT, RELAY_LIMIT, gzipText, packFrame, unpackFrame } from './query'
 import { uuid } from './uuid'
+import { trustedDrafts } from './importBatches'
+import { actorTaken, freshIdentity, holdActor, releaseActor, storedIdentity } from './identity'
+import { isSummary, summarize, syncPlan } from './sync'
 import { validateDrafts } from './validation'
 import { buildViewModel } from './viewModel'
 import { browserMeasure, buildGraphSvg, svgToPng } from './exportGraph'
@@ -46,34 +49,28 @@ function initialName(actor: string) {
   catch { return `Guest ${actor.slice(0, 4)}` }
 }
 
-function initialSessionToken(boardId: string) {
-  const key = `factgraph:sessionToken:${boardId}`
-  try {
-    const existing = sessionStorage.getItem(key)
-    if (existing) return existing
-    const token = `${uuid()}${uuid()}`.replaceAll('-', '')
-    sessionStorage.setItem(key, token)
-    return token
-  } catch {
-    return `${uuid()}${uuid()}`.replaceAll('-', '')
-  }
-}
-
 /** Receives every batch of actions that was newly stored, local or remote (for notifications). */
 export type ChangeListener = { current: ((fresh: BoardAction[]) => void) | null }
 
 export function useBoard(boardId: string, listener?: ChangeListener) {
-  const actor = useRef((() => {
-    const key = `factgraph:actor:${boardId}`
-    try { const stored = sessionStorage.getItem(key); if(stored) return stored; const id=uuid(); sessionStorage.setItem(key,id); return id } catch { return uuid() }
-  })()).current
-  const sessionToken = useRef(initialSessionToken(boardId)).current
+  // Actor and token of this tab; a duplicated tab gets its own before it connects (see identity.ts).
+  const [identity, setIdentity] = useState(() => storedIdentity(boardId))
+  const { actor, token: sessionToken } = identity
+  /** The relay replaced this tab's connection by another tab with the same identity: no automatic reconnect. */
+  const [replaced, setReplaced] = useState(false)
+  const reidentify = useCallback(() => { setReplaced(false); setIdentity(freshIdentity(boardId)) }, [boardId])
   const [name, setNameState] = useState(() => initialName(actor))
   const nameRef = useRef(name)
   const [actions, setActions] = useState<BoardAction[]>([])
   const [boards, setBoards] = useState<BoardMeta[]>([])
   const [peers, setPeers] = useState<Peer[]>([])
   const [ready, setReady] = useState(false)
+  // A fresh browser joining analysts who are online: the board is on its way, not empty.
+  const [joining, setJoining] = useState(false)
+  const joinTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const syncPrimary = useRef<string | null>(null)
+  const syncTimer2 = useRef<number | undefined>(undefined)
+  const settleJoin = (delay: number) => { clearTimeout(joinTimer.current); joinTimer.current = setTimeout(() => setJoining(false), delay) }
   const [connected, setConnected] = useState(false)
   const [storageError, setStorageError] = useState('')
   /** Actions too large for the relay: kept in this browser, never shared. */
@@ -95,20 +92,55 @@ export function useBoard(boardId: string, listener?: ChangeListener) {
   }, [boardId])
   const projection = useMemo(() => projectCached(actions), [projectCached, actions])
 
-  const send = useCallback((message: object) => {
-    if (socketRef.current?.readyState === WebSocket.OPEN)
-      socketRef.current.send(JSON.stringify(message))
+  // Messages go out in order; large ones gzip-compressed (the 16 MiB relay limit then applies to the compressed size).
+  // Sync progress: changes received but not stored yet, and changes waiting to go out. Shown as "Syncing…".
+  const syncCounts = useRef({ incoming: 0, outgoing: 0, peak: 0 })
+  const [sync, setSync] = useState<{ incoming: number; outgoing: number; doneAt: number | null; peak: number }>({ incoming: 0, outgoing: 0, doneAt: null, peak: 0 })
+  const syncTimer = useRef<number | undefined>(undefined)
+  const reportSync = useCallback(() => {
+    if (syncTimer.current) return
+    syncTimer.current = window.setTimeout(() => {
+      syncTimer.current = undefined
+      const counts = syncCounts.current, pending = counts.incoming + counts.outgoing
+      counts.peak = Math.max(counts.peak, pending)
+      const peak = counts.peak
+      if (!pending) counts.peak = 0
+      setSync(current => ({ incoming: counts.incoming, outgoing: counts.outgoing, peak, doneAt: !pending && (current.incoming || current.outgoing) ? Date.now() : current.doneAt }))
+    }, 250)
   }, [])
+  const sendQueue = useRef<Promise<void>>(Promise.resolve())
+  const send = useCallback((message: object, onTooLarge?: () => void) => {
+    const text = JSON.stringify(message)
+    const count = Array.isArray((message as { actions?: unknown[] }).actions) ? (message as { actions: unknown[] }).actions.length : 0
+    if (count) { syncCounts.current.outgoing += count; reportSync() }
+    const done = () => { if (count) { syncCounts.current.outgoing -= count; reportSync() } }
+    sendQueue.current = sendQueue.current.then(async () => {
+      if (socketRef.current?.readyState !== WebSocket.OPEN) return
+      if (text.length > COMPRESS_ABOVE) {
+        const packed = await gzipText(text)
+        if (packed) {
+          if (packed.byteLength > RELAY_LIMIT) { onTooLarge?.(); return }
+          const { type, target, deferRender } = message as Record<string, unknown>
+          if (socketRef.current?.readyState === WebSocket.OPEN) socketRef.current.send(packFrame({ type, ...(target ? { target } : {}), deferRender: deferRender === true }, packed))
+          return
+        }
+      }
+      socketRef.current.send(text)
+    }).catch(() => {}).finally(done)
+  }, [reportSync])
 
-  const sendActions = useCallback((items: BoardAction[], target?: string, deferRender = false) => {
+  const sendActions = useCallback((items: BoardAction[], target?: string, deferRender = false, syncDone = false) => {
     // By count and by size: a few actions with large source excerpts must not form one message above the relay limit.
     const tooLarge: BoardAction[] = []
-    const chunks = actionChunks(items, 100, 4_000_000, tooLarge)
-    if (tooLarge.length) setUnsynced(current => { const ids = new Set([...current, ...tooLarge.map(a => a.id)]); return ids.size === current.length ? current : [...ids] })
+    const markUnsynced = (list: BoardAction[]) => setUnsynced(current => { const ids = new Set([...current, ...list.map(a => a.id)]); return ids.size === current.length ? current : [...ids] })
+    const chunks = actionChunks(items, 100, 4_000_000, tooLarge, typeof CompressionStream === 'undefined' ? RELAY_LIMIT : COMPRESSED_RAW_LIMIT)
+    if (tooLarge.length) markUnsynced(tooLarge)
+    // The answer to a sync request ends with syncDone (also when nothing was missing), so the requester knows it has all.
+    if (syncDone && !chunks.length) chunks.push([])
     chunks.forEach((chunk, index) => send({ type: 'actions', actions: chunk,
       deferRender: deferRender || index < chunks.length - 1,
-      ...(target ? { target } : {}) }))
-  }, [send])
+      ...(target ? { target } : {}), ...(syncDone && index === chunks.length - 1 ? { syncDone: true, responder: actor } : {}) }, () => markUnsynced(chunk)))
+  }, [send, actor])
   // Replies to REST/MCP commands; large ones go in parts that the server reassembles.
   const reply = useCallback((requestId: string, payload: Record<string, unknown>) => {
     const socket = socketRef.current
@@ -176,27 +208,20 @@ export function useBoard(boardId: string, listener?: ChangeListener) {
   const emit = useCallback((type: ActionDraft['type'], payload: Record<string, unknown>) =>
     emitMany([{ type, payload }]), [emitMany])
 
-  const undo = useCallback(async () => {
-    const alreadyUndone = undoneActions(actionsRef.current)
-    const target = [...actionsRef.current].reverse().find(item =>
-      item.actor === actor && !item.type.startsWith('action.') && !alreadyUndone.has(item.id))
-    if (!target) return false
-    const targets = actionsRef.current.filter(item => item.id === target.id || (target.batch_id && item.batch_id === target.batch_id))
-    const ids = new Set(targets.flatMap(item => [item.payload.id, item.payload.source_id, item.payload.target_id]).filter(Boolean))
-    if (actionsRef.current.some(item => item.actor !== actor && item.clock > target.clock && ids.has(item.payload.id) && !alreadyUndone.has(item.id)))
-      throw new Error('Another analyst changed these records. Review their changes before undoing.')
-    await emit('action.undo', { action_ids: targets.map(item => item.id) })
+  // Analyst (UI) and agents (REST/MCP) undo their own batches only; the undo action carries the same channel.
+  const undo = useCallback(async (scope: UndoScope = 'analyst') => {
+    const targets = undoTargets(actionsRef.current, actor, scope)
+    if (!targets) return false
+    await emitMany([{ type: 'action.undo', payload: { action_ids: targets.map(item => item.id) }, channel: scope === 'agent' ? 'REST' : 'UI' }])
     return true
-  }, [actor, emit])
+  }, [actor, emitMany])
 
-  const redo = useCallback(async () => {
-    const undone = undoneActions(actionsRef.current)
-    const target = [...actionsRef.current].reverse().find(item => item.actor === actor && item.type === 'action.undo' &&
-      (item.payload.action_ids as string[] ?? [item.payload.action_id]).some(id => undone.has(String(id))))
+  const redo = useCallback(async (scope: UndoScope = 'analyst') => {
+    const target = redoTarget(actionsRef.current, actor, scope)
     if (!target) return false
-    await emit('action.redo', target.payload)
+    await emitMany([{ type: 'action.redo', payload: target.payload, channel: scope === 'agent' ? 'REST' : 'UI' }])
     return true
-  }, [actor, emit])
+  }, [actor, emitMany])
 
   const importActions = useCallback(async (items: unknown[]) => {
     const received = items.filter(isAction).map(item => ({ ...item, boardId }))
@@ -219,6 +244,15 @@ export function useBoard(boardId: string, listener?: ChangeListener) {
     let retry: number | undefined
     let websocket: WebSocket | null = null
 
+    const requestSync = (target?: string, reply = false) => send({ type: 'sync-request', summary: summarize(actionsRef.current), ...(target ? { target } : {}), ...(reply ? { reply: true } : {}) })
+    // The first peer has answered (or did not in time): ask everyone for what only they have; their answers are small.
+    const finishPrimary = () => {
+      if (!syncPrimary.current) return
+      syncPrimary.current = null
+      window.clearTimeout(syncTimer2.current)
+      settleJoin(300)
+      requestSync()
+    }
     const connect = () => {
       if (cancelled) return
       const scheme = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
@@ -230,13 +264,27 @@ export function useBoard(boardId: string, listener?: ChangeListener) {
         if (cancelled) return
         socket.send(JSON.stringify({ type: 'hello', actor, name: nameRef.current, token: sessionToken }))
         setConnected(true)
-        sendActions(actionsRef.current)
-        send({ type: 'sync-request' })
+        // Syncing starts with the welcome (who is online), with summaries instead of the whole log.
       }
+      socket.binaryType = 'arraybuffer'
       socket.onmessage = event => {
+        // Large batches arrive as compressed binary frames (forwarded unchanged by the relay).
+        if (event.data instanceof ArrayBuffer) { void unpackFrame(event.data).then(message => { if (message && socketRef.current === socket) handle(message) }); return }
         let message: Record<string, unknown>
         try { message = JSON.parse(event.data) as Record<string, unknown> } catch { return }
+        handle(message)
+      }
+      const handle = (message: Record<string, unknown>) => {
         if (message.type === 'welcome' && Array.isArray(message.peers)) {
+          const others = message.peers.filter((peer): peer is Peer => !!peer && typeof peer === 'object' && typeof (peer as Peer).id === 'string' && (peer as Peer).id !== actor)
+          if (!actionsRef.current.length && others.length) { setJoining(true); settleJoin(15000) }
+          // First one peer (it answers with what is missing here), then the others for what only they have.
+          if (others.length) {
+            syncPrimary.current = others[0].id
+            requestSync(others[0].id)
+            window.clearTimeout(syncTimer2.current)
+            syncTimer2.current = window.setTimeout(finishPrimary, 15000)
+          }
           setPeers(message.peers.filter((peer): peer is Peer =>
             !!peer && typeof peer === 'object' && typeof peer.id === 'string' && typeof peer.name === 'string'))
         } else if ((message.type === 'peer-joined' || message.type === 'peer-profile') && message.peer && typeof message.peer === 'object') {
@@ -245,10 +293,19 @@ export function useBoard(boardId: string, listener?: ChangeListener) {
             setPeers(current => [...current.filter(item => item.id !== peer.id), { ...current.find(item => item.id === peer.id), ...peer }])
         } else if (message.type === 'peer-left' && typeof message.id === 'string') {
           setPeers(current => current.filter(item => item.id !== message.id))
+          if (message.id === syncPrimary.current) finishPrimary()
         } else if (message.type === 'sync-request' && typeof message.from === 'string') {
-          sendActions(actionsRef.current, message.from)
+          const { send: missing, askBack } = syncPlan(actionsRef.current, isSummary(message.summary) ? message.summary : null)
+          sendActions(missing, message.from, false, true)
+          // The requester holds something this browser lacks (offline changes): ask it back once, never in a loop.
+          if (askBack && message.reply !== true) requestSync(message.from, true)
         } else if (message.type === 'actions' && Array.isArray(message.actions)) {
+          const incoming = message.actions.length
+          syncCounts.current.incoming += incoming; reportSync()
+          const responder = typeof message.from === 'string' ? message.from : typeof message.responder === 'string' ? message.responder : null
+          const done = message.syncDone === true && !!responder && responder === syncPrimary.current
           void merge(message.actions, message.deferRender === true).catch(error => setStorageError(String(error)))
+            .finally(() => { syncCounts.current.incoming -= incoming; reportSync(); if (done) finishPrimary(); else settleJoin(1500) })
         } else if (message.type === 'api-command' && typeof message.requestId === 'string') {
           const requestId = message.requestId
           void (async () => {
@@ -260,7 +317,7 @@ export function useBoard(boardId: string, listener?: ChangeListener) {
                 const offset = Math.max(0, Number(message.offset ?? 0)), limit = message.limit === undefined ? all.length : Math.max(1, Number(message.limit))
                 reply(requestId, { ok: true, actions: all.slice(offset, offset + limit), total: all.length })
               } else if (message.operation === 'undo' || message.operation === 'redo') {
-                const changed = await (message.operation === 'undo' ? undo() : redo())
+                const changed = await (message.operation === 'undo' ? undo('agent') : redo('agent'))
                 reply(requestId, { ok: true, changed })
               } else if (message.operation === 'export') {
                 reply(requestId, { ok: true, export: await renderExport(projectCached(actionsRef.current), (message.options ?? {}) as Record<string, unknown>) })
@@ -275,7 +332,7 @@ export function useBoard(boardId: string, listener?: ChangeListener) {
               } else if (message.operation === 'query') {
                 const result = queryRecords(projectCached(actionsRef.current).data, { collection: String(message.collection ?? ''),
                   q: typeof message.q === 'string' ? message.q : '', offset: Number(message.offset ?? 0), limit: Number(message.limit ?? 100),
-                  id: typeof message.id === 'string' ? message.id : undefined })
+                  id: typeof message.id === 'string' ? message.id : undefined, entity_id: typeof message.entity_id === 'string' ? message.entity_id : undefined })
                 reply(requestId, { ok: true, ...result, revision: actionsRef.current.at(-1)?.id ?? null })
               } else if (message.operation === 'index') {
                 const snapshot = projectCached(actionsRef.current).data
@@ -283,12 +340,13 @@ export function useBoard(boardId: string, listener?: ChangeListener) {
                   entities: snapshot.entities.map(({ id, kind, name, identifiers }) => ({ id, kind, name,
                     identifiers: identifiers.map(({ scheme, namespace, normalized_value }) => ({ scheme, namespace, normalized_value })) })),
                   facts: snapshot.facts.map(({ id, subject_id, predicate, object_id, valid_from, valid_to, participants }) =>
-                    ({ id, subject_id, predicate, object_id, valid_from, valid_to, activity: !!participants?.length })),
+                    ({ id, subject_id, predicate, object_id, valid_from, valid_to, activity: !!participants?.length,
+                      ...(participants?.length ? { participants_key: participantKey(participants) } : {}) })),
                   sources: snapshot.sources.map(({ id }) => ({ id })),
                 } })
               } else if (message.operation === 'apply' && Array.isArray(message.drafts) &&
                          message.drafts.length <= 200 && message.drafts.every(isDraft)) {
-                const accepted = await emitMany(message.drafts, message.deferRender === true)
+                const accepted = await emitMany(trustedDrafts(message.drafts), message.deferRender === true)
                 reply(requestId, { ok: true, accepted })
               } else reply(requestId, { ok: false, error: 'Invalid API request' })
             } catch (error) {
@@ -297,18 +355,23 @@ export function useBoard(boardId: string, listener?: ChangeListener) {
           })()
         }
       }
-      socket.onclose = () => {
-        if (cancelled) return
+      socket.onclose = event => {
+        if (cancelled || socketRef.current !== socket) return
         setConnected(false)
         setPeers([])
+        // Another tab connected with this identity: reconnecting would push it out again, and so on every 2 s.
+        if (event.code === 4001) { setReplaced(true); return }
         retry = window.setTimeout(connect, 2000)
       }
     }
 
     void (async () => {
       try {
-        const stored = sortActions(await loadActions(boardId))
+        const [loaded, taken] = await Promise.all([loadActions(boardId), actorTaken(actor)])
         if (cancelled) return
+        if (taken) { setIdentity(freshIdentity(boardId)); return }
+        holdActor(actor)
+        const stored = sortActions(loaded)
         actionsRef.current = stored
         actionIdsRef.current = new Set(stored.map(item => item.id))
         boardNameRef.current = projectCached(stored).name
@@ -324,6 +387,7 @@ export function useBoard(boardId: string, listener?: ChangeListener) {
     })()
     return () => {
       cancelled = true
+      releaseActor(actor)
       if (retry) window.clearTimeout(retry)
       if (flushTimer.current) window.clearTimeout(flushTimer.current)
       websocket?.close()
@@ -331,6 +395,6 @@ export function useBoard(boardId: string, listener?: ChangeListener) {
     }
   }, [actor, boardId, emitMany, merge, projectCached, reply, send, sendActions, sessionToken, undo, redo])
 
-  return { actor, name, setName, actions, boards, peers, ready, connected, storageError, unsynced,
+  return { actor, name, setName, actions, boards, peers, ready, joining, replaced, reidentify, connected, storageError, unsynced, sync,
     boardName: projection.name, data: projection.data, emit, emitMany, undo, redo, importActions, sessionToken }
 }

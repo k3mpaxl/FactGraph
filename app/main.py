@@ -12,6 +12,7 @@ import contextvars
 import json
 import os
 import secrets
+import zlib
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -33,7 +34,7 @@ from app.tables import clean_rows, detect
 WEB_DIR = Path(__file__).resolve().parents[1] / "web" / "dist"
 MCP_INSTRUCTIONS = """FactGraph is an evidence-first investigation graph that analysts and agents build together.
 
-Connection: every tool needs board_id and the board open in a browser (data lives in the browser; the server only relays). Pass the board's session token as session_token or header X-FactGraph-Token. HTTP 409 "offline" means nobody has the board open: ask the analyst to open it. There is no board listing; the analyst gives you board ID and token (board menu → API/MCP).
+Connection: every tool needs board_id and the board open in a browser (data lives in the browser; the server only relays). Pass the board's session token as session_token or header X-FactGraph-Token. HTTP 409 "offline" means nobody has the board open: ask the analyst to open it. There is no board listing; the analyst gives you board ID and token (plug icon in the board header → Connect an agent).
 
 Workflow
 1. Read first: find_entities (q = name or identifier) or get_graph, and reuse existing IDs. Never create a second entity for the same object; merge_entities fixes duplicates.
@@ -44,13 +45,14 @@ Workflow
    Example: attacker used IP a.a.a.a and service principal B and listed Key Vault C → operation "listed secrets", actor=attacker, source=IP, identity=SP B, target=Key Vault C.
    Attribution ("this IP belongs to the attacker") is its own relationship with its own evidence.
 4. Evidence: create_source for the origin (source_kind=primary for logs, telemetry, repository files; original rows in excerpt, query text in query), then add_evidence on the relationship or activity (observation = what the record shows, locator = event ID/CorrelationId/row, valid_from/valid_to = when it happened, stance supports|refutes). A query without results proves nothing; secondary sources are context only.
-5. Review: new evidence starts unconfirmed; a relationship is "unknown" until confirmed evidence exists, "disputed" when confirmed evidence points both ways. You may confirm with review_evidence only after checking the original record yourself: primary source with uri and excerpt, a concrete locator and observation, and a review_note stating what you compared. Keep contradicting evidence (stance refutes) instead of overwriting; retract_evidence instead of deleting.
+5. Review: everything you add starts unconfirmed, also rows you import (only the analyst's own file imports count as parsed and confirmed); a relationship is "unknown" until confirmed evidence exists, "disputed" when confirmed evidence points both ways. You may confirm with review_evidence only after checking the original record yourself: primary source with uri and excerpt, a concrete locator and observation, and a review_note stating what you compared. Keep contradicting evidence (stance refutes) instead of overwriting; retract_evidence instead of deleting.
 6. Bulk: import_rows for two-column rows, import_activities for rows with several participant columns; always dry_run first. Imports are idempotent.
 7. Large graphs: create_group bundles many similar entities into one collapsed node (members, or rule by kinds/name match, or a container's contents); excluded keeps anomalies visible on their own. Groups only change the view.
 8. Layers (identity, network, endpoint, workload = Kubernetes/containers, cloud = control plane/Key Vaults, data = buckets/blobs/databases, code = repositories/CI, other) are inferred from the kind; set layer only to correct it.
 9. export_image renders the graph as SVG (text) or PNG (base64) for reports.
 
-Editing: update tools change only the fields you pass; explicit null clears nullable fields. Pass expected_revision for sources and evidence; HTTP 409 means someone changed it — re-read and retry. undo reverts your session's last change batch. Content changes reset affected reviews.
+Editing: update tools change only the fields you pass; explicit null clears nullable fields. Pass expected_revision for sources and evidence; HTTP 409 means someone changed it — re-read and retry; 404 means the record does not exist. undo reverts the last change batch made through REST/MCP (never the analyst's own edits) and refuses when someone built on it since. Content changes reset affected reviews.
+Times: ISO 8601; a time without a zone is UTC. Compromise marks you set are "suspected" unless you pass level "confirmed" and the evidence proves it.
 Tool profile: this server shows a compact agent tool set by default; with FACTGRAPH_MCP_TOOLS=full it exposes one rest_<operation> tool per REST endpoint instead.
 """
 mcp = FastMCP("FactGraph Browser Boards", version="0.5.1", instructions=MCP_INSTRUCTIONS)
@@ -196,6 +198,17 @@ async def send_to_room(board_id: str, message: dict, *, exclude: str | None = No
             pass
 
 
+async def send_bytes_to_room(board_id: str, data: bytes, *, exclude: str | None = None, target: str | None = None) -> None:
+    async with rooms_lock:
+        recipients = [peer.websocket for actor, peer in rooms.get(board_id, {}).items()
+                      if actor != exclude and (target is None or actor == target)]
+    for websocket in recipients:
+        try:
+            await websocket.send_bytes(data)
+        except (RuntimeError, WebSocketDisconnect):
+            pass
+
+
 async def browser_command(board_id: str, operation: str, **values) -> dict:
     """Ask a connected browser to read or durably apply work, then await its ACK."""
     from uuid import uuid4
@@ -225,7 +238,9 @@ async def browser_command(board_id: str, operation: str, **values) -> dict:
         result = await asyncio.wait_for(future, timeout=30)
         if not result.get("ok"):
             error = str(result.get("error") or "Browser rejected the command")
-            raise HTTPException(409 if 'changed.' in error or 'revision' in error else 422, error)
+            # The browser validates every write against the board: a missing record is a 404, a concurrent change a 409.
+            status = 409 if 'changed.' in error or 'revision' in error else 404 if 'does not exist' in error else 422
+            raise HTTPException(status, error)
         return result
     except asyncio.TimeoutError as error:
         raise HTTPException(504, "The browser did not confirm the request") from error
@@ -236,9 +251,15 @@ async def browser_command(board_id: str, operation: str, **values) -> dict:
         result_parts.pop(request_id, None)
 
 
+async def board_record(board_id: str, collection: str, record_id: str) -> dict | None:
+    """One complete record (entities, facts, activities, sources, evidence, groups, views), looked up in the browser: only
+    this record crosses the WebSocket, not the whole board."""
+    return (await browser_command(board_id, "query", collection=collection, id=record_id)).get("record")
+
+
 async def apply_drafts(board_id: str, drafts: list[dict]) -> int:
     if len(drafts) > 200_000:
-        raise HTTPException(413, "Zu viele Aktionen in einem Auftrag")
+        raise HTTPException(413, "Too many actions in one request")
     from uuid import uuid4
     batch_id = request_batch.get() or str(uuid4())
     channel = request_channel.get()
@@ -520,16 +541,15 @@ async def create_evidence(board_id: str, relation_id: str, body: EvidenceInput):
 
 @app.patch("/api/boards/{board_id}/relations/{relation_id}/evidence/{evidence_id}")
 async def update_evidence(board_id: str, relation_id: str, evidence_id: str, body: EvidenceUpdate):
-    graph = (await browser_command(board_id, "snapshot"))["graph"]
-    relation = next((fact for fact in graph["facts"] if fact["id"] == relation_id), None)
-    if relation is None:
-        raise HTTPException(404, "Relationship does not exist on this board")
-    if not any(assertion["id"] == evidence_id for assertion in relation.get("assertions", [])):
+    evidence = await board_record(board_id, "evidence", evidence_id)
+    if evidence is None or evidence.get("fact_id") != relation_id:
+        if await board_record(board_id, "facts", relation_id) is None:
+            raise HTTPException(404, "Relationship does not exist on this board")
         raise HTTPException(404, "Evidence does not exist on this relationship")
     values = body.model_dump(exclude_unset=True)
     if "stance" in values and values["stance"] not in {"supports", "refutes"}:
         raise HTTPException(422, "Evidence stance must be supports or refutes")
-    if "source_id" in values and values["source_id"] and values["source_id"] not in {source["id"] for source in graph["sources"]}:
+    if "source_id" in values and values["source_id"] and await board_record(board_id, "sources", values["source_id"]) is None:
         raise HTTPException(422, "Source does not exist on this board")
     if not values:
         raise HTTPException(422, "At least one evidence field is required")
@@ -540,9 +560,8 @@ async def update_evidence(board_id: str, relation_id: str, evidence_id: str, bod
 
 @app.delete("/api/boards/{board_id}/relations/{relation_id}/evidence/{evidence_id}")
 async def delete_evidence(board_id: str, relation_id: str, evidence_id: str):
-    graph = (await browser_command(board_id, "snapshot"))["graph"]
-    relation = next((fact for fact in graph["facts"] if fact["id"] == relation_id), None)
-    if relation is None or not any(item["id"] == evidence_id for item in relation.get("assertions", [])):
+    evidence = await board_record(board_id, "evidence", evidence_id)
+    if evidence is None or evidence.get("fact_id") != relation_id:
         raise HTTPException(404, "Evidence does not exist on this relationship")
     accepted = await apply_drafts(board_id, [action("assertion.delete", {"id": evidence_id})])
     return {"relation_id": relation_id, "id": evidence_id, "accepted_actions": accepted}
@@ -570,9 +589,14 @@ async def import_table_export(board_id: str, body: TableRowsInput):
 
     The table is recognised from the column names; devices, accounts, IPs, files and apps become entities matched by their
     IDs (DeviceId, Entra object ID, SID, hashes, resource IDs) with what is already on the board; each row becomes one
-    unconfirmed evidence item of an activity with its timestamp and a locator such as ReportId. Use dry_run first. An
+    evidence item of an activity with its timestamp and a locator such as ReportId. Rows sent through REST or MCP stay
+    unconfirmed until an analyst reviews them (only an analyst's own file import counts as parsed and confirmed). Use dry_run first. An
     unrecognised table returns 422 with a suggested column mapping; then use import_activities with explicit roles."""
-    return await import_table(board_id, clean_rows(body.rows), title=body.title, query=body.query, dry_run=body.dry_run)
+    try:
+        rows = clean_rows(body.rows)
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
+    return await import_table(board_id, rows, title=body.title, query=body.query, dry_run=body.dry_run)
 
 
 @app.post("/api/boards/{board_id}/imports/kql")
@@ -651,6 +675,50 @@ async def run_mcp_session(session_token: str | None, operation):
         request_channel.reset(channel_context)
 
 
+# Large action batches arrive as binary frames: b"FGZ1", a 4-byte header length, a small JSON header (type, target) and
+# the gzip-compressed message. The relay reads only the header and forwards the frame unchanged: it never inflates or
+# re-serialises board data, so a frame costs its compressed size in memory, not hundreds of MB.
+FRAME_MAGIC = b"FGZ1"
+MAX_FRAME_HEADER = 4096
+# Older browsers send plain gzip-compressed JSON; inflated here with a cap and one at a time.
+MAX_INFLATED = 64 * 1024 * 1024
+legacy_inflation = asyncio.Semaphore(1)
+
+
+async def receive_message(websocket: WebSocket):
+    """One message from a browser: JSON text, a binary frame (returned as (header, frame)), or legacy gzip JSON.
+    None if unreadable or too large."""
+    frame = await websocket.receive()
+    if frame["type"] == "websocket.disconnect":
+        raise WebSocketDisconnect(frame.get("code", 1000))
+    data = frame.get("bytes")
+    if data is not None:
+        if data[:4] == FRAME_MAGIC and len(data) >= 8:
+            length = int.from_bytes(data[4:8], "big")
+            if length > MAX_FRAME_HEADER or 8 + length > len(data):
+                return None
+            try:
+                header = json.loads(data[8:8 + length])
+            except ValueError:
+                return None
+            return (header, data) if isinstance(header, dict) else None
+        async with legacy_inflation:
+            inflater = zlib.decompressobj(16 + zlib.MAX_WBITS)
+            try:
+                inflated = inflater.decompress(data, MAX_INFLATED)
+            except zlib.error:
+                return None
+            if inflater.unconsumed_tail:
+                return None
+            text = inflated.decode("utf-8", errors="replace")
+    else:
+        text = frame.get("text") or ""
+    try:
+        return json.loads(text)
+    except ValueError:
+        return None
+
+
 @app.websocket("/ws/boards/{board_id}")
 async def board_socket(websocket: WebSocket, board_id: str):
     if not valid_uuid(board_id) or not allowed_origin(websocket):
@@ -678,16 +746,27 @@ async def board_socket(websocket: WebSocket, board_id: str):
                  if peer_id != actor]
         room[actor] = Peer(websocket=websocket, name=name, session_token=session_token)
     if previous:
+        # 4001: replaced by a connection with the same identity. The browser does not reconnect on it (two tabs with
+        # one actor would otherwise replace each other every few seconds) and offers a new identity instead.
         try:
-            await previous.websocket.close(code=1000)
+            await previous.websocket.close(code=4001, reason="replaced")
         except RuntimeError:
             pass
+        for request_id, (writer, future) in list(pending.items()):
+            if writer is previous.websocket and not future.done():
+                future.set_result({"ok": False, "error": "Browser connection replaced"})
     await websocket.send_json({"type": "welcome", "peers": peers})
     await send_to_room(board_id, {"type": "peer-joined", "peer": {"id": actor, "name": name}}, exclude=actor)
 
     try:
         while True:
-            message = await websocket.receive_json()
+            message = await receive_message(websocket)
+            if isinstance(message, tuple):
+                header, data = message
+                target = header.get("target")
+                if header.get("type") == "actions":
+                    await send_bytes_to_room(board_id, data, exclude=actor, target=target if isinstance(target, str) else None)
+                continue
             if not isinstance(message, dict):
                 continue
             kind = message.get("type")
@@ -695,10 +774,15 @@ async def board_socket(websocket: WebSocket, board_id: str):
                 actions = message.get("actions")
                 if isinstance(actions, list) and len(actions) <= 1000:
                     target = message.get("target")
-                    await send_to_room(board_id, {"type": "actions", "from": actor, "actions": actions, "deferRender": message.get("deferRender") is True},
+                    await send_to_room(board_id, {"type": "actions", "from": actor, "actions": actions, "deferRender": message.get("deferRender") is True,
+                                                  **({"syncDone": True} if message.get("syncDone") is True else {})},
                                        exclude=actor, target=target if isinstance(target, str) else None)
             elif kind == "sync-request":
-                await send_to_room(board_id, {"type": "sync-request", "from": actor}, exclude=actor)
+                # A summary of what the requester holds lets peers answer with only what is missing.
+                target, summary = message.get("target"), message.get("summary")
+                await send_to_room(board_id, {"type": "sync-request", "from": actor, **({"summary": summary} if isinstance(summary, dict) else {}),
+                                              **({"reply": True} if message.get("reply") is True else {})},
+                                   exclude=actor, target=target if isinstance(target, str) else None)
             elif kind == "profile":
                 updated = str(message.get("name", "")).strip()[:40]
                 if updated:

@@ -1,6 +1,7 @@
 import type { Assertion, Entity, EntityType, Fact, GraphData, Group, GroupRule, Identifier, Participant, Perspective, Source, TruthState } from './types'
 import { initialPosition } from './layout'
 import { uuid } from './uuid'
+import { utc } from './time'
 
 export type ActionType =
   | 'type.add' | 'type.update' | 'type.delete' | 'board.rename' | 'entity.add' | 'entity.update' | 'entity.position' | 'entity.delete' | 'entity.merge' | 'identifier.add' | 'identifier.delete'
@@ -21,14 +22,25 @@ const actionTypes: ActionType[] = [
   'assertion.add', 'assertion.update', 'assertion.retract', 'assertion.restore', 'assertion.review', 'assertion.delete', 'action.undo', 'action.redo', 'identifier.update',
   'fact.position', 'group.add', 'group.update', 'group.delete', 'view.add', 'view.update', 'view.delete',
 ]
-export const CONTAINS_PREDICATES = ['contains', 'runs', 'hosts', 'includes', 'enthält', 'has']
+// 'enthält': boards created with the earlier German interface still use it.
+export const CONTAINS_PREDICATES = ['contains', 'runs', 'hosts', 'includes', 'has', 'enthält']
+
+/**
+ * Clocks above this are rejected, the same way by every browser (so boards still converge): a clock near
+ * Number.MAX_SAFE_INTEGER from a broken or hostile peer would otherwise be stored, push every later clock there and win
+ * every conflict. 2^40 is about a trillion changes.
+ */
+export const MAX_CLOCK = 2 ** 40
+const COLOR = /^#[0-9a-f]{6}$/i
+/** A colour from a peer, an action log or an API is used in SVG attributes and styles: only #rrggbb. */
+const color = (value: unknown) => typeof value === 'string' && COLOR.test(value) ? value : undefined
 
 export function isAction(value: unknown): value is BoardAction {
   if (!value || typeof value !== 'object') return false
   const item = value as Partial<BoardAction>
   return typeof item.boardId === 'string' && typeof item.id === 'string' &&
     typeof item.actor === 'string' && typeof item.author === 'string' &&
-    Number.isSafeInteger(item.clock) && (item.clock ?? -1) >= 0 &&
+    Number.isSafeInteger(item.clock) && (item.clock ?? -1) >= 0 && (item.clock ?? 0) <= MAX_CLOCK &&
     typeof item.at === 'string' && actionTypes.includes(item.type as ActionType) &&
     !!item.payload && typeof item.payload === 'object' && !Array.isArray(item.payload)
 }
@@ -93,6 +105,9 @@ function parseRule(value: unknown): GroupRule | null {
 }
 const ids = (value: unknown) => Array.isArray(value) ? [...new Set(value.filter((v): v is string => typeof v === 'string'))] : []
 
+/** Channels through which agents write: what arrives there is the agent's claim until an analyst vets it. */
+const AGENT_CHANNELS = new Set(['REST', 'MCP'])
+
 export function truth(assertions: Assertion[]): TruthState {
   const active = new Set(assertions.filter(item => !item.retracted_at && item.review_status === 'confirmed').map(item => item.stance))
   if (active.has('supports') && active.has('refutes')) return 'disputed'
@@ -110,6 +125,16 @@ export function project(boardId: string, operations: BoardAction[]): BoardProjec
   const assertions = new Map<string, Assertion>()
   const canonicalFacts = new Map<string, string>()
   const aliases = new Map<string, string>()
+  // Evidence by relationship and by source: deleting, merging or editing never scans all evidence, which would make
+  // every replay of a long history quadratic (the projection runs on every change).
+  const byFact = new Map<string, Set<string>>(), bySource = new Map<string, Set<string>>()
+  const link = (index: Map<string, Set<string>>, key: string | null, id: string) => { if (!key) return; let set = index.get(key); if (!set) index.set(key, set = new Set()); set.add(id) }
+  const unlink = (index: Map<string, Set<string>>, key: string | null, id: string) => { if (key) index.get(key)?.delete(id) }
+  const evidenceOf = (index: Map<string, Set<string>>, key: string) => [...(index.get(key) ?? [])].map(id => assertions.get(id)).filter((a): a is Assertion => !!a)
+  const dropEvidence = (factId: string) => {
+    for (const assertion of evidenceOf(byFact, factId)) { assertions.delete(assertion.id); unlink(bySource, assertion.source_id, assertion.id) }
+    byFact.delete(factId)
+  }
   // Merged entity IDs keep pointing at their target, so concurrent edits by other analysts that still
   // reference the old ID (made offline or before the merge arrived) land on the merged entity instead of vanishing.
   const merged = new Map<string, string>()
@@ -138,13 +163,14 @@ export function project(boardId: string, operations: BoardAction[]): BoardProjec
       const id = typeof item.id === 'string' ? item.id : ''
       switch (operation.type) {
         case 'type.add':
-          if (id && typeof item.name === 'string') entityTypes.set(id, {id,name:item.name,color:String(item.color ?? '#8da9ce'),icon:String(item.icon ?? 'Box'),...(typeof item.layer === 'string' && item.layer ? {layer:item.layer} : {})})
+          if (id && typeof item.name === 'string') entityTypes.set(id, {id,name:item.name,color:color(item.color) ?? '#8da9ce',icon:String(item.icon ?? 'Box'),...(typeof item.layer === 'string' && item.layer ? {layer:item.layer} : {})})
           break
         case 'type.update': {
           const type = entityTypes.get(id)
           if (!type) break
           const oldName = type.name
-          for (const key of ['name', 'color', 'icon'] as const) if (typeof item[key] === 'string') type[key] = item[key]
+          for (const key of ['name', 'icon'] as const) if (typeof item[key] === 'string') type[key] = item[key]
+          if (color(item.color)) type.color = color(item.color)!
           if (item.layer === null || item.layer === '') delete type.layer
           else if (typeof item.layer === 'string') type.layer = item.layer
           for (const entity of entities.values()) if (entity.kind === oldName) entity.kind = type.name
@@ -159,7 +185,7 @@ export function project(boardId: string, operations: BoardAction[]): BoardProjec
             const fallback = initialPosition(placementIndex++)
             entities.set(id, { id, name: item.name, kind: item.kind,
               description: String(item.description ?? ''), created_at: String(item.created_at ?? operation.at), identifiers: [],
-              color: typeof item.color === 'string' ? item.color : undefined, pinned: item.pinned === true,
+              color: color(item.color), pinned: item.pinned === true,
               ...(typeof item.layer === 'string' && item.layer ? { layer: item.layer } : {}),
               position: validPosition(item.x, item.y) ? { x: item.x as number, y: item.y as number } : fallback })
           }
@@ -171,15 +197,15 @@ export function project(boardId: string, operations: BoardAction[]): BoardProjec
           if (entity && item.compromise === null) delete entity.compromise
           else if (entity && item.compromise && typeof item.compromise === 'object') {
             const c = item.compromise as Record<string, unknown>
-            const time = (value: unknown) => typeof value === 'string' && Number.isFinite(Date.parse(value)) ? new Date(value).toISOString() : null
-            entity.compromise = { from: time(c.from), to: time(c.to), note: typeof c.note === 'string' ? c.note.slice(0, 2000) : '',
-              by: operation.author, at: operation.at, ...(c.cleared === true ? { cleared: true } : {}) }
+            entity.compromise = { from: utc(c.from), to: utc(c.to), note: typeof c.note === 'string' ? c.note.slice(0, 2000) : '',
+              by: operation.author, at: operation.at, via: operation.channel ?? 'UI', ...(c.cleared === true ? { cleared: true } : {}), ...(c.level === 'suspected' || c.level === 'confirmed' ? { level: c.level } : {}) }
           }
           if (entity && item.rotated_at === null) delete entity.rotated_at
-          else if (entity && typeof item.rotated_at === 'string' && Number.isFinite(Date.parse(item.rotated_at))) entity.rotated_at = new Date(item.rotated_at).toISOString()
+          else if (entity && utc(item.rotated_at)) entity.rotated_at = utc(item.rotated_at)!
           if (entity && (item.layer === null || item.layer === '')) delete entity.layer
           else if (entity && typeof item.layer === 'string') entity.layer = item.layer
-          if (entity) for (const field of ['name', 'kind', 'description', 'color'] as const) {
+          if (entity && color(item.color)) entity.color = color(item.color)
+          if (entity) for (const field of ['name', 'kind', 'description'] as const) {
             if (typeof item[field] === 'string' && (field === 'description' || item[field].trim()))
               entity[field] = item[field].trim()
           }
@@ -195,14 +221,21 @@ export function project(boardId: string, operations: BoardAction[]): BoardProjec
           if (id) {
             entities.delete(id)
             for (const [key, claim] of identifiers) if (claim.entity_id === id) identifiers.delete(key)
-            for (const [key, fact] of facts) if (fact.subject_id === id || fact.object_id === id) {
-              facts.delete(key)
-              canonicalFacts.delete(factKey(fact))
-              for (const [assertionId, assertion] of assertions) if (assertion.fact_id === key) assertions.delete(assertionId)
-            } else if (fact.participants?.some(p => p.entity_id === id)) {
-              canonicalFacts.delete(factKey(fact))
-              fact.participants = fact.participants.filter(p => p.entity_id !== id)
-              canonicalFacts.set(factKey(fact), key)
+            for (const [key, fact] of facts) {
+              const remaining = fact.participants?.filter(p => p.entity_id !== id)
+              // An activity loses the participant, whichever role it had, and keeps its evidence while two others remain.
+              if (fact.participants?.length && remaining!.length < fact.participants.length && new Set(remaining!.map(p => p.entity_id)).size >= 2) {
+                canonicalFacts.delete(factKey(fact))
+                fact.participants = remaining
+                Object.assign(fact, activityEnds(remaining!))
+                canonicalFacts.set(factKey(fact), key)
+                // The confirmed statement named the deleted participant: what remains has to be reviewed again.
+                for (const assertion of evidenceOf(byFact, key)) invalidateReview(assertion)
+              } else if (fact.subject_id === id || fact.object_id === id || (remaining && remaining.length < (fact.participants?.length ?? 0))) {
+                facts.delete(key)
+                canonicalFacts.delete(factKey(fact))
+                dropEvidence(key)
+              }
             }
             for (const group of groups.values()) { group.members = group.members.filter(m => m !== id); group.excluded = group.excluded.filter(m => m !== id) }
           }
@@ -218,11 +251,12 @@ export function project(boardId: string, operations: BoardAction[]): BoardProjec
             if (fact.subject_id === sourceId) fact.subject_id = targetId
             if (fact.object_id === sourceId) fact.object_id = targetId
             if (fact.participants) fact.participants = parseParticipants(fact.participants.map(p => p.entity_id === sourceId ? { ...p, entity_id: targetId } : p)) ?? fact.participants
-            for (const evidence of assertions.values()) if (evidence.fact_id === factId) invalidateReview(evidence)
+            for (const evidence of evidenceOf(byFact, factId)) invalidateReview(evidence)
             const key = factKey(fact)
             const existingId = canonicalFacts.get(key)
             if (existingId && existingId !== factId) {
-              for (const assertion of assertions.values()) if (assertion.fact_id === factId) assertion.fact_id = existingId
+              for (const assertion of evidenceOf(byFact, factId)) { assertion.fact_id = existingId; link(byFact, existingId, assertion.id) }
+              byFact.delete(factId)
               facts.delete(factId)
               aliases.set(factId, existingId)
             } else canonicalFacts.set(key, factId)
@@ -245,7 +279,7 @@ export function project(boardId: string, operations: BoardAction[]): BoardProjec
           const source = sources.get(id)
           if (source) {
             source.revision = operation.id
-            for (const evidence of assertions.values()) if (evidence.source_id === id) invalidateReview(evidence)
+            for (const evidence of evidenceOf(bySource, id)) invalidateReview(evidence)
           }
           if (source && ['primary', 'secondary', 'unknown'].includes(String(item.source_kind))) source.source_kind = item.source_kind as Source['source_kind']
           if (source) for (const field of ['title', 'uri', 'excerpt', 'query'] as const)
@@ -256,7 +290,8 @@ export function project(boardId: string, operations: BoardAction[]): BoardProjec
           if (id) {
             sources.delete(id)
             for (const identifier of identifiers.values()) if (identifier.source_id === id) identifier.source_id = null
-            for (const assertion of assertions.values()) if (assertion.source_id === id) { assertion.source_id = null; invalidateReview(assertion) }
+            for (const assertion of evidenceOf(bySource, id)) { assertion.source_id = null; invalidateReview(assertion) }
+            bySource.delete(id)
           }
           break
         case 'identifier.add': {
@@ -266,8 +301,7 @@ export function project(boardId: string, operations: BoardAction[]): BoardProjec
               namespace: String(item.namespace ?? ''), raw_value: String(item.raw_value ?? ''),
               normalized_value: String(item.normalized_value ?? normalizeIdentifier(String(item.scheme ?? ''), String(item.raw_value ?? ''))),
               confidence: Number(item.confidence ?? 1), source_id: typeof item.source_id === 'string' ? item.source_id : null,
-              valid_from: typeof item.valid_from === 'string' ? item.valid_from : null,
-              valid_to: typeof item.valid_to === 'string' ? item.valid_to : null })
+              valid_from: utc(item.valid_from), valid_to: utc(item.valid_to) })
           break
         }
         case 'identifier.update': {
@@ -275,7 +309,8 @@ export function project(boardId: string, operations: BoardAction[]): BoardProjec
           if (identifier) {
             for (const field of ['scheme', 'namespace', 'raw_value'] as const) if (typeof item[field] === 'string') identifier[field] = item[field]
             identifier.normalized_value = normalizeIdentifier(identifier.scheme, identifier.raw_value)
-            for (const field of ['source_id', 'valid_from', 'valid_to'] as const) if (field in item) identifier[field] = typeof item[field] === 'string' ? item[field] : null
+            if ('source_id' in item) identifier.source_id = typeof item.source_id === 'string' ? item.source_id : null
+            for (const field of ['valid_from', 'valid_to'] as const) if (field in item) identifier[field] = utc(item[field])
             if (typeof item.confidence === 'number') identifier.confidence = item.confidence
           }
           break
@@ -289,8 +324,7 @@ export function project(boardId: string, operations: BoardAction[]): BoardProjec
           if (!id || typeof ends.subject_id !== 'string' || typeof ends.object_id !== 'string' ||
               !entities.has(ends.subject_id) || !entities.has(ends.object_id)) break
           const fact: Fact = { id, subject_id: ends.subject_id, object_id: ends.object_id,
-            predicate: String(item.predicate ?? ''), valid_from: typeof item.valid_from === 'string' ? item.valid_from : null,
-            valid_to: typeof item.valid_to === 'string' ? item.valid_to : null,
+            predicate: String(item.predicate ?? ''), valid_from: utc(item.valid_from), valid_to: utc(item.valid_to),
             created_at: String(item.created_at ?? operation.at), assertions: [], truth_state: 'unknown' }
           const participants = given
           if (participants) {
@@ -309,13 +343,15 @@ export function project(boardId: string, operations: BoardAction[]): BoardProjec
           const canonical = aliases.get(id) ?? id
           const fact = facts.get(canonical)
           if (!fact) break
-          for (const evidence of assertions.values()) if (evidence.fact_id === canonical) invalidateReview(evidence)
           const subject = typeof item.subject_id === 'string' ? entityRef(item.subject_id) as string : fact.subject_id
           const object = typeof item.object_id === 'string' ? entityRef(item.object_id) as string : fact.object_id
+          // An update that cannot apply (an end deleted or merged meanwhile, e.g. an offline edit) changes nothing,
+          // so it must not reset reviews either.
           if (!entities.has(subject) || !entities.has(object)) break
           const participants = refParticipants(item.participants)
           if (participants && participants.some(p => !entities.has(p.entity_id))) break
-          canonicalFacts.delete(factKey(fact))
+          const before = factKey(fact)
+          canonicalFacts.delete(before)
           fact.subject_id = subject; fact.object_id = object
           if (participants) {
             fact.participants = participants
@@ -324,10 +360,10 @@ export function project(boardId: string, operations: BoardAction[]): BoardProjec
           if (item.technique === null || item.technique === '') delete fact.technique
           else if (typeof item.technique === 'string') fact.technique = item.technique.trim()
           if (typeof item.predicate === 'string' && item.predicate.trim()) fact.predicate = item.predicate.trim()
-          if (item.valid_from === null) fact.valid_from = null
-          else if (typeof item.valid_from === 'string') fact.valid_from = item.valid_from
-          if (item.valid_to === null) fact.valid_to = null
-          else if (typeof item.valid_to === 'string') fact.valid_to = item.valid_to
+          if (item.valid_from === null || typeof item.valid_from === 'string') fact.valid_from = utc(item.valid_from)
+          if (item.valid_to === null || typeof item.valid_to === 'string') fact.valid_to = utc(item.valid_to)
+          // The confirmed statement changed (who, what, when): its evidence needs a review again. A technique label does not.
+          if (factKey(fact) !== before) for (const evidence of evidenceOf(byFact, canonical)) invalidateReview(evidence)
           canonicalFacts.set(factKey(fact), canonical)
           break
         }
@@ -342,7 +378,7 @@ export function project(boardId: string, operations: BoardAction[]): BoardProjec
           if (id && typeof item.name === 'string' && item.name.trim() && !groups.has(id))
             groups.set(id, { id, name: item.name.trim().slice(0, 120), members: [...new Set(ids(item.members).map(m => entityRef(m) as string))].filter(m => entities.has(m)),
               excluded: ids(item.excluded).map(m => entityRef(m) as string), rule: parseRule(item.rule), collapsed: item.collapsed !== false,
-              color: typeof item.color === 'string' ? item.color : undefined,
+              color: color(item.color),
               position: validPosition(item.x, item.y) ? { x: item.x as number, y: item.y as number } : undefined,
               created_at: String(item.created_at ?? operation.at), member_ids: [] })
           break
@@ -362,7 +398,7 @@ export function project(boardId: string, operations: BoardAction[]): BoardProjec
           if ('rule' in item) group.rule = parseRule(item.rule)
           if (typeof item.collapsed === 'boolean') group.collapsed = item.collapsed
           if (item.color === null) group.color = undefined
-          else if (typeof item.color === 'string') group.color = item.color
+          else if (color(item.color)) group.color = color(item.color)
           if (validPosition(item.x, item.y)) group.position = { x: item.x as number, y: item.y as number }
           break
         }
@@ -387,8 +423,7 @@ export function project(boardId: string, operations: BoardAction[]): BoardProjec
             const existing = facts.get(canonical)
             if (existing) canonicalFacts.delete(factKey(existing))
             facts.delete(canonical)
-            for (const [assertionId, assertion] of assertions)
-              if (assertion.fact_id === canonical) assertions.delete(assertionId)
+            dropEvidence(canonical)
           }
           break
         }
@@ -397,10 +432,25 @@ export function project(boardId: string, operations: BoardAction[]): BoardProjec
           if (id && facts.has(factId) && !assertions.has(id) && (item.stance === 'supports' || item.stance === 'refutes'))
             assertions.set(id, { id, fact_id: factId, stance: item.stance, confidence: Number(item.confidence ?? 1),
               source_id: typeof item.source_id === 'string' ? item.source_id : null,
-              valid_from: typeof item.valid_from === 'string' ? item.valid_from : null,
-              valid_to: typeof item.valid_to === 'string' ? item.valid_to : null,
+              valid_from: utc(item.valid_from), valid_to: utc(item.valid_to),
               note: String(item.note ?? ''), observation: String(item.observation ?? ''), locator: String(item.locator ?? ''), interpretation: String(item.interpretation ?? ''), review_status: 'unconfirmed', revision: operation.id, created_at: String(item.created_at ?? operation.at),
-              retracted_at: typeof item.retracted_at === 'string' ? item.retracted_at : null })
+              retracted_at: typeof item.retracted_at === 'string' ? item.retracted_at : null,
+              created_by: operation.author ?? null, created_via: operation.channel ?? (operation.author === 'Import' ? 'Import' : 'UI') })
+          if (assertions.get(id)?.revision === operation.id) { link(byFact, factId, id); link(bySource, assertions.get(id)!.source_id, id) }
+          // Parsed from an original log row by a file import of an analyst: the row is the record, so it counts as checked.
+          // Evidence written by hand, or rows an agent sent through REST or MCP (it could have written them itself), still
+          // need a review. Editing it or its source asks for one again.
+          const added = assertions.get(id), source = sources.get(added?.source_id ?? '')
+          if (added && !added.retracted_at && operation.author === 'Import' && !AGENT_CHANNELS.has(operation.channel ?? '') && source?.source_kind === 'primary' && added.locator && (added.observation || added.note)) {
+            added.review_status = 'confirmed'
+            added.reviewed_by = operation.actor
+            added.reviewed_at = operation.at
+            added.review_note = 'Parsed from the original log row by the import'
+            added.review_kind = 'import'
+            added.reviewer_name = 'Import'
+            added.reviewed_revision = added.revision
+            added.reviewed_source_revision = source.revision
+          }
           break
         }
         case 'assertion.update': {
@@ -411,13 +461,14 @@ export function project(boardId: string, operations: BoardAction[]): BoardProjec
             for (const field of ['locator', 'observation', 'interpretation'] as const) if (typeof item[field] === 'string') assertion[field] = item[field]
             if (item.stance === 'supports' || item.stance === 'refutes') assertion.stance = item.stance
             if (typeof item.confidence === 'number') assertion.confidence = Math.max(0, Math.min(1, item.confidence))
-            if (item.source_id === null) assertion.source_id = null
-            else if (typeof item.source_id === 'string') assertion.source_id = item.source_id
+            if (item.source_id === null || typeof item.source_id === 'string') {
+              unlink(bySource, assertion.source_id, assertion.id)
+              assertion.source_id = item.source_id as string | null
+              link(bySource, assertion.source_id, assertion.id)
+            }
             if (typeof item.note === 'string') assertion.note = item.note
-            if (item.valid_from === null) assertion.valid_from = null
-            else if (typeof item.valid_from === 'string') assertion.valid_from = item.valid_from
-            if (item.valid_to === null) assertion.valid_to = null
-            else if (typeof item.valid_to === 'string') assertion.valid_to = item.valid_to
+            if (item.valid_from === null || typeof item.valid_from === 'string') assertion.valid_from = utc(item.valid_from)
+            if (item.valid_to === null || typeof item.valid_to === 'string') assertion.valid_to = utc(item.valid_to)
           }
           break
         }
@@ -434,6 +485,8 @@ export function project(boardId: string, operations: BoardAction[]): BoardProjec
           evidence.reviewed_by = operation.actor
           evidence.reviewed_at = operation.at
           evidence.review_note = String(item.review_note)
+          evidence.review_kind = AGENT_CHANNELS.has(operation.channel ?? '') ? 'agent' : 'analyst'
+          evidence.reviewer_name = operation.author ?? null
           evidence.reviewed_revision = evidence.revision
           evidence.reviewed_source_revision = source.revision
           break
@@ -448,9 +501,11 @@ export function project(boardId: string, operations: BoardAction[]): BoardProjec
           if (assertion && !assertion.retracted_at) { assertion.retracted_at = String(item.retracted_at ?? operation.at); invalidateReview(assertion) }
           break
         }
-        case 'assertion.delete':
-          if (id) assertions.delete(id)
+        case 'assertion.delete': {
+          const assertion = assertions.get(id)
+          if (assertion) { assertions.delete(id); unlink(byFact, assertion.fact_id, id); unlink(bySource, assertion.source_id, id) }
           break
+        }
       }
     } catch {
       // A malformed imported or remote action cannot prevent the rest of the board rendering.
@@ -469,7 +524,7 @@ export function project(boardId: string, operations: BoardAction[]): BoardProjec
     groups: [...groups.values()].sort((a, b) => a.created_at.localeCompare(b.created_at)),
     views: [...views.values()],
     entity_types: [...entityTypes.values()],
-    entities: [...entities.values()].sort((a, b) => a.name.localeCompare(b.name, 'de')),
+    entities: [...entities.values()].sort((a, b) => a.name.localeCompare(b.name, 'en')),
     facts: factList.sort((a, b) => b.created_at.localeCompare(a.created_at)),
     sources: [...sources.values()].sort((a, b) => b.created_at.localeCompare(a.created_at)),
   } }
@@ -508,23 +563,37 @@ export function demoDrafts(): ActionDraft[] {
   return drafts.map(draft => ({ ...draft, author: 'Example' }))
 }
 
+/**
+ * A graph export from before the action log. Its evidence was not parsed from log rows by this browser, so it arrives
+ * unconfirmed ("Legacy file", not "Import") whatever the file says; earlier reviews are not taken over unchecked.
+ */
 export function legacyDrafts(value: unknown): ActionDraft[] {
   if (!value || typeof value !== 'object') throw new Error('Invalid JSON file')
   const graph = value as Partial<GraphData>
   if (!Array.isArray(graph.entities) || !Array.isArray(graph.facts) || !Array.isArray(graph.sources))
     throw new Error('Not a FactGraph export file')
-  const drafts: ActionDraft[] = (graph.entity_types ?? []).map(type => ({type: 'type.add', payload: {...type}, author: 'Import'}))
-  for (const source of graph.sources) drafts.push({ type: 'source.add', payload: { ...source }, author: 'Import' })
-  for (const entity of graph.entities) drafts.push({ type: 'entity.add', payload: {
+  const author = 'Legacy file'
+  const drafts: ActionDraft[] = (graph.entity_types ?? []).map(type => ({ type: 'type.add', payload: { ...type }, author }))
+  for (const source of graph.sources) drafts.push({ type: 'source.add', payload: { ...source }, author })
+  // Fields a file leaves out stay out (an undefined value would fail validation).
+  const defined = (payload: Record<string, unknown>) => Object.fromEntries(Object.entries(payload).filter(([, v]) => v !== undefined))
+  for (const entity of graph.entities) drafts.push({ type: 'entity.add', payload: defined({
     id: entity.id, name: entity.name, kind: entity.kind, description: entity.description, created_at: entity.created_at, color: entity.color, x: entity.position?.x, y: entity.position?.y, pinned: entity.pinned,
-  }, author: 'Import' })
+  }), author })
   for (const entity of graph.entities) for (const identifier of entity.identifiers ?? [])
-    drafts.push({ type: 'identifier.add', payload: { ...identifier }, author: 'Import' })
+    drafts.push({ type: 'identifier.add', payload: { ...identifier }, author })
   for (const fact of graph.facts) {
     drafts.push({ type: 'fact.add', payload: { id: fact.id, subject_id: fact.subject_id,
       predicate: fact.predicate, object_id: fact.object_id, valid_from: fact.valid_from,
-      valid_to: fact.valid_to, created_at: fact.created_at }, author: 'Import' })
-    for (const assertion of fact.assertions ?? []) drafts.push({ type: 'assertion.add', payload: { ...assertion }, author: 'Import' })
+      valid_to: fact.valid_to, created_at: fact.created_at,
+      // Activities keep their participants, technique and position.
+      ...(fact.participants?.length ? { participants: fact.participants } : {}), ...(fact.technique ? { technique: fact.technique } : {}),
+      ...(fact.position ? { x: fact.position.x, y: fact.position.y } : {}) }, author })
+    for (const assertion of fact.assertions ?? []) {
+      const { review_status: _status, reviewed_by: _by, reviewed_at: _at, review_note: _note, reviewed_revision: _revision, reviewed_source_revision: _sourceRevision,
+        review_kind: _kind, reviewer_name: _reviewer, revision: _own, created_by: _creator, created_via: _via, ...payload } = assertion
+      drafts.push({ type: 'assertion.add', payload: { ...payload }, author })
+    }
   }
   return drafts
 }
@@ -565,6 +634,13 @@ function resolveGroups(groups: Group[], entities: Entity[], facts: Fact[]) {
       claim(group, entity.id)
     }
   }
+  // Generated names used to start with the member count ("422 Repository · cloned"), which goes stale as members change:
+  // the count is shown next to the name instead.
+  const kindOf = new Map(entities.map(e => [e.id, e.kind]))
+  for (const group of ordered) {
+    const match = /^\d[\d,]* (.+)$/.exec(group.name)
+    if (match && group.member_ids.some(id => match[1].startsWith(kindOf.get(id) ?? '\u0000'))) group.name = match[1]
+  }
 }
 
 function invalidateReview(evidence: Assertion) {
@@ -573,6 +649,47 @@ function invalidateReview(evidence: Assertion) {
   evidence.reviewed_by = null
   evidence.reviewed_revision = null
   evidence.reviewed_source_revision = null
+  evidence.review_kind = null
+  evidence.reviewer_name = null
+}
+
+/** Whose change an action is for undo: the analyst's own (UI, file imports) or the agents' working through this browser. */
+export type UndoScope = 'analyst' | 'agent'
+export const undoScopeOf = (action: Pick<BoardAction, 'channel'>): UndoScope => AGENT_CHANNELS.has(action.channel ?? '') ? 'agent' : 'analyst'
+
+/** Every record an action points at: the record itself, its ends, its relationship, participants, members, container. */
+function references(payload: Record<string, unknown>): string[] {
+  const out: unknown[] = [payload.id, payload.subject_id, payload.object_id, payload.fact_id, payload.entity_id, payload.source_id, payload.target_id]
+  if (Array.isArray(payload.participants)) for (const p of payload.participants) out.push((p as Record<string, unknown>)?.entity_id)
+  for (const key of ['members', 'add_members', 'excluded', 'exclude']) if (Array.isArray(payload[key])) out.push(...(payload[key] as unknown[]))
+  const rule = payload.rule as Record<string, unknown> | null | undefined
+  if (rule && typeof rule === 'object') out.push(rule.container_id)
+  return out.filter((v): v is string => typeof v === 'string' && !!v)
+}
+
+/**
+ * The last change batch of `actor` in `scope` that can be undone. The analyst's Cmd+Z never takes back an agent's batch
+ * and an agent's undo never the analyst's edit, although both are written by the same browser. Refuses (throws) when
+ * someone else has built on these records since: a relationship to an entity being removed, a review of its evidence.
+ */
+export function undoTargets(actions: BoardAction[], actor: string, scope: UndoScope): BoardAction[] | null {
+  const undone = undoneActions(actions)
+  const mine = (item: BoardAction) => item.actor === actor && undoScopeOf(item) === scope
+  const target = [...actions].reverse().find(item => mine(item) && !item.type.startsWith('action.') && !undone.has(item.id))
+  if (!target) return null
+  const targets = actions.filter(item => item.id === target.id || (!!target.batch_id && item.batch_id === target.batch_id && mine(item)))
+  // The records these actions created or changed (a merge also changes both entities).
+  const touched = new Set(targets.flatMap(item => [item.payload.id, item.payload.source_id, item.payload.target_id]).filter((v): v is string => typeof v === 'string' && !!v))
+  if (actions.some(item => !mine(item) && item.clock > target.clock && !undone.has(item.id) && !item.type.startsWith('action.') && references(item.payload).some(id => touched.has(id))))
+    throw new Error(scope === 'analyst' ? 'Someone else (another analyst or an agent) has built on these records since. Review their changes before undoing.' : 'The analyst or someone else has changed these records since; undo refused.')
+  return targets
+}
+
+/** The last undo of `actor` in `scope` that can be redone. */
+export function redoTarget(actions: BoardAction[], actor: string, scope: UndoScope): BoardAction | null {
+  const undone = undoneActions(actions)
+  return [...actions].reverse().find(item => item.actor === actor && undoScopeOf(item) === scope && item.type === 'action.undo' &&
+    ((item.payload.action_ids as string[] | undefined) ?? [item.payload.action_id]).some(id => undone.has(String(id)))) ?? null
 }
 
 export function undoneActions(ordered: BoardAction[]) {

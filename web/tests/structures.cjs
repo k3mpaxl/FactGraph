@@ -6,7 +6,7 @@ const { buildViewModel, groupSuggestions, groupToggleDrafts, groupShiftDrafts, a
 const { layerOf } = require(path + '/layers.js')
 
 let clock = 0
-const act = (type, payload, actor = 'a1', extra = {}) => ({ id: `${actor}-${++clock}`, clock, at: '2026-09-29T00:00:00Z', actor, author: actor, boardId: 'b', type, payload, ...extra })
+const act = (type, payload, actor = 'a1', extra = {}) => ({ id: `${actor}-${++clock}`, clock, at: '2026-09-29T00:00:00.000Z', actor, author: actor, boardId: 'b', type, payload, ...extra })
 const view = (data, options = {}) => buildViewModel(data.entities, data.facts, data.groups, { visibleLayers: null, collapseActivities: false, showLanes: false, entityTypes: [], ...options })
 
 // Activities: one event, several role-tagged participants, evidence on the whole event.
@@ -203,18 +203,18 @@ console.log('Activities, layers, groups with exclusions, containers, suggestions
   assert.equal(before.nodes.filter(n => n.kind === 'activity').length, 18, 'one activity node per event while nothing is grouped')
 
   const found = autoGroups(data.entities, data.facts, data.groups)
-  assert.deepEqual(found.map(g => g.name), ['6 Azure Resource · write deployments', '4 Azure Resource · delete', '4 AKS Cluster · 2 operations'])
+  assert.deepEqual(found.map(g => g.name), ['Azure Resource · write deployments', 'Azure Resource · delete', 'AKS Cluster · 2 operations'])
   assert.deepEqual(found[1].members, ['d0', 'd1', 'd2', 'd3'])
   assert.match(found[2].reason, /different operations/)
   for (const id of ['odd', 'pin', 'kept', 'sp', 'ip']) assert.ok(!found.some(g => g.members.includes(id)), `${id} stays as it is`)
   assert.deepEqual(autoGroups(data.entities, data.facts, data.groups, { only: new Set(['w0', 'w1', 'w2', 'w3', 'd0']) }).map(g => g.members.length), [4], 'only new entities of an import')
   // Exact buckets below the minimum: the same counterparts are enough, whatever the operations.
-  assert.deepEqual(autoGroups(data.entities, data.facts, data.groups, { minSize: 7 }).map(g => [g.name, g.members.includes('odd')]), [['11 Azure Resource · 2 operations', true]])
+  assert.deepEqual(autoGroups(data.entities, data.facts, data.groups, { minSize: 7 }).map(g => [g.name, g.members.includes('odd')]), [['Azure Resource · 2 operations', true]])
   assert.deepEqual(autoGroups(data.entities, data.facts, data.groups, { minSize: 12 }), [])
 
   let n = 0
   const drafts = autoGroupDrafts(found, data.entities, () => `g${n++}`)
-  assert.deepEqual(drafts[1].payload, { id: 'g1', name: '4 Azure Resource · delete', members: ['d0', 'd1', 'd2', 'd3'], rule: null, excluded: [], collapsed: true,
+  assert.deepEqual(drafts[1].payload, { id: 'g1', name: 'Azure Resource · delete', members: ['d0', 'd1', 'd2', 'd3'], rule: null, excluded: [], collapsed: true,
     x: Math.round(data.entities.filter(e => found[1].members.includes(e.id)).reduce((s, e) => s + e.position.x, 0) / 4 / 20) * 20, y: 40 })
   validateDrafts(data, drafts)
   const grouped = project('b', [...ops, ...drafts.map(d => act(d.type, d.payload))]).data
@@ -243,7 +243,7 @@ console.log('Activities, layers, groups with exclusions, containers, suggestions
     act('fact.add', { id: `c${i}`, subject_id: `x${i}`, predicate: 'connects to', object_id: `d${i}` }))
   const data = project('b', ops).data
   const found = autoGroups(data.entities, data.facts, data.groups)
-  assert.deepEqual(found.map(g => [g.name, g.members.length]), [['5 File · repository file accessed', 5], ['5 Repository · repository file accessed', 5]])
+  assert.deepEqual(found.map(g => [g.name, g.members.length]), [['File · repository file accessed', 5], ['Repository · repository file accessed', 5]])
   assert.match(found[0].reason, /^Same operation with reader, 203\.0\.113\.9; each with its own Repository$/)
   assert.ok(!found.some(g => g.members.includes('x0') || g.members.includes('d0')), 'nothing shared: isolated pairs stay apart')
   const groups = found.map((g, i) => ({ id: `g${i}`, name: g.name, member_ids: g.members, collapsed: true, excluded: [], rule: null }))
@@ -252,4 +252,41 @@ console.log('Activities, layers, groups with exclusions, containers, suggestions
   assert.equal(v.edges.filter(e => !e.activityId).length, 4, 'the pairs keep their own relations')
   assert.equal(v.nodes.find(n => n.kind === 'activity').count, 5)
   console.log('Auto grouping by shared counterparts passed')
+}
+
+// A relationship of an entity with itself stays visible (here after a merge); links inside a collapsed group stay internal.
+{
+  const log = []
+  let c = 0
+  const put = (type, payload) => log.push({ id: `s${++c}`, clock: c, at: '2026-10-05T00:00:00.000Z', actor: 'a', author: 'Analyst', boardId: 's', type, payload })
+  put('entity.add', { id: 'a', name: 'host-a', kind: 'Device' }); put('entity.add', { id: 'b', name: 'host-b', kind: 'Device' }); put('entity.add', { id: 'c', name: 'host-c', kind: 'Device' })
+  put('fact.add', { id: 'self', subject_id: 'a', predicate: 'restarted', object_id: 'a' })
+  put('fact.add', { id: 'ab', subject_id: 'a', predicate: 'connected to', object_id: 'b' })
+  put('fact.add', { id: 'bc', subject_id: 'b', predicate: 'connected to', object_id: 'c' })
+  let data = project('s', log).data
+  assert.ok(view(data).edges.some(e => e.source === 'a' && e.target === 'a' && e.factIds.includes('self')))
+  put('entity.merge', { source_id: 'b', target_id: 'a' })
+  data = project('s', log).data
+  const loops = view(data).edges.filter(e => e.source === 'a' && e.target === 'a')
+  assert.deepEqual(loops.flatMap(e => e.factIds).sort(), ['ab', 'self'])
+  put('group.add', { id: 'g', name: 'Hosts', members: ['a', 'c'], collapsed: true })
+  data = project('s', log).data
+  const grouped = view(data)
+  assert.equal(grouped.edges.length, 0)
+  assert.equal(grouped.nodes.find(n => n.kind === 'group').internal, 3)
+  console.log('Self-relations stay visible; group-internal links stay aggregated passed')
+}
+
+// A generated name with a member count goes stale: the count is dropped from it; a name an analyst chose stays as is.
+{
+  const log = []
+  let c = 0
+  const put = (type, payload) => log.push({ id: `n${++c}`, clock: c, at: '2026-10-05T00:00:00.000Z', actor: 'a', author: 'Analyst', boardId: 'n', type, payload })
+  for (let i = 0; i < 3; i++) put('entity.add', { id: `r${i}`, name: `org/r${i}`, kind: 'Repository' })
+  put('entity.add', { id: 'h', name: 'host', kind: 'Device' })
+  put('group.add', { id: 'g1', name: '422 Repository · cloned', members: ['r0', 'r1', 'r2'], collapsed: true })
+  put('group.add', { id: 'g2', name: '3 hosts', members: ['h'], collapsed: true })
+  const groups = project('n', log).data.groups
+  assert.deepEqual(groups.map(g => [g.name, g.member_ids.length]), [['Repository · cloned', 3], ['3 hosts', 1]])
+  console.log('Group names without stale member counts passed')
 }

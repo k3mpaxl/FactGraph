@@ -12,7 +12,7 @@ export type Entity = {
   /** Explicit layer override; otherwise the type's layer or an inferred one applies. */
   layer?: string;
   /** Compromised (a stolen credential, an attacker's IP), optionally only from/until a time; drives the impact analysis. */
-  compromise?: { from?: string | null; to?: string | null; note?: string; by?: string; at?: string; cleared?: boolean } | null;
+  compromise?: { from?: string | null; to?: string | null; note?: string; by?: string; at?: string; via?: string; cleared?: boolean; level?: 'suspected' | 'confirmed' } | null;
   /** When the credential or the exposed secrets were last rotated; earlier than the attacker's last use means: again. */
   rotated_at?: string | null;
 }
@@ -28,6 +28,10 @@ export type Assertion = {
   locator?: string; observation?: string; interpretation?: string;
   reviewed_by?: string | null; reviewed_at?: string | null; review_note?: string;
   reviewed_revision?: string | null; reviewed_source_revision?: string | null;
+  /** Who added it and through which channel (UI, Import, REST, MCP). */
+  created_by?: string | null; created_via?: string | null;
+  /** What the confirmation is: the import parsed the original row, an analyst checked it, or an agent said so (REST/MCP). */
+  review_kind?: 'import' | 'analyst' | 'agent' | null; reviewer_name?: string | null;
 }
 export type TruthState = 'supported' | 'disputed' | 'refuted' | 'unknown'
 export type Fact = {

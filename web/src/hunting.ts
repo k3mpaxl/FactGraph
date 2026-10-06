@@ -1,5 +1,6 @@
 import type { Entity, GraphData } from './types'
-import { analyzeImpact, compromiseOf, sessionFindings, type Impact } from './impact'
+import { agentFindings, analyzeImpact, compromiseOf, sessionFindings, type Impact } from './impact'
+import { isUtc, utc } from './time'
 
 /**
  * KQL for Microsoft Sentinel / Log Analytics that shows how far the attacker got: filled with the IDs, IPs, resources
@@ -43,10 +44,12 @@ export function huntingQueries(data: Pick<GraphData, 'entities' | 'sources'>, im
   const queries: HuntQuery[] = []
   // A derived compromise is known from its first use on; hunt two weeks earlier to find when it really started.
   const DAY = 86_400_000
-  const froms = impact.seeds.map(s => s.derived ? new Date(Date.parse(s.derived.at) - 14 * DAY).toISOString() : compromiseOf(s.entity)?.from).filter((t): t is string => !!t).sort()
-  const tos = impact.seeds.map(s => compromiseOf(s.entity)?.to)
-  const start = froms[0] ? `datetime(${froms[0]})` : impact.first ? `datetime(${impact.first}) - 1d` : 'ago(30d)'
-  const end = tos.length && tos.every(Boolean) ? `datetime(${(tos as string[]).sort().at(-1)})` : 'now()'
+  // Times go into datetime(…) unquoted: only normalised ones (the projection stores them so; peers and old logs may not).
+  const froms = impact.seeds.map(s => s.derived ? utc(new Date(Date.parse(s.derived.at) - 14 * DAY).toISOString()) : utc(compromiseOf(s.entity)?.from)).filter(isUtc).sort()
+  const tos = impact.seeds.map(s => utc(compromiseOf(s.entity)?.to))
+  const first = utc(impact.first)
+  const start = froms[0] ? `datetime(${froms[0]})` : isUtc(first) ? `datetime(${first}) - 1d` : 'ago(30d)'
+  const end = tos.length && tos.every(isUtc) ? `datetime(${(tos as string[]).sort().at(-1)})` : 'now()'
   const window = `let start = ${start};\nlet end = ${end};\n`
   const add = (id: string, title: string, why: string, tables: string[], query: string, importable?: string) =>
     queries.push({ id, title, why, query: window + query, tables, imported: tables.some(t => imported.has(t)), ...(importable ? { importable } : {}) })
@@ -99,12 +102,22 @@ export function huntingQueries(data: Pick<GraphData, 'entities' | 'sources'>, im
     ['SigninLogs', 'AADNonInteractiveUserSignInLogs', 'AADServicePrincipalSignInLogs', 'AzureActivity', 'MicrosoftGraphActivityLogs'],
     `let utis = ${list(sessions.map(s => s.uti))};\nunion isfuzzy=true\n  (SigninLogs | where UniqueTokenIdentifier in (utis) | project TimeGenerated, Table = "SigninLogs", Session = UniqueTokenIdentifier, Identity = UserPrincipalName, IP = IPAddress, What = AppDisplayName),\n  (AADNonInteractiveUserSignInLogs | where UniqueTokenIdentifier in (utis) | project TimeGenerated, Table = "AADNonInteractiveUserSignInLogs", Session = UniqueTokenIdentifier, Identity = UserPrincipalName, IP = IPAddress, What = AppDisplayName),\n  (AADServicePrincipalSignInLogs | where UniqueTokenIdentifier in (utis) | project TimeGenerated, Table = "AADServicePrincipalSignInLogs", Session = UniqueTokenIdentifier, Identity = ServicePrincipalName, IP = IPAddress, What = ResourceDisplayName),\n  (AzureActivity | extend Session = tostring(parse_json(Claims).uti) | where Session in (utis) | project TimeGenerated, Table = "AzureActivity", Session, Identity = Caller, IP = CallerIpAddress, What = OperationNameValue),\n  (MicrosoftGraphActivityLogs | where SignInActivityId in (utis) | project TimeGenerated, Table = "MicrosoftGraphActivityLogs", Session = SignInActivityId, Identity = coalesce(UserId, AppId), IP = IPAddress, What = strcat(RequestMethod, " ", tostring(parse_url(RequestUri).Path)))\n| where TimeGenerated between (start .. now())\n| summarize Count = count(), First = min(TimeGenerated), Last = max(TimeGenerated) by Session, Identity, IP, Table, What\n| order by Session, First asc`)
 
+  const agents = agentFindings(data as Pick<GraphData, 'entities' | 'facts'>, impact).filter(f => !f.baseline).slice(0, 20).map(f => f.agent)
+  if (agents.length) add('agent-hunt', "Who else used the attacker's user agents?",
+    'Sign-ins with the user agents that came with the attacker and that the compromised identities never used before. The same tooling from other IPs or identities is a lead; combine it with IP, ASN and time, since common agents are weak on their own.',
+    ['AADServicePrincipalSignInLogs', 'SigninLogs', 'AADNonInteractiveUserSignInLogs'],
+    `let agents = ${list(agents)};\nunion isfuzzy=true\n  (AADServicePrincipalSignInLogs | where UserAgent in (agents) | project TimeGenerated, Table = "AADServicePrincipalSignInLogs", Identity = ServicePrincipalName, IP = IPAddress, UserAgent, ResultType),\n  (SigninLogs | where UserAgent in (agents) | project TimeGenerated, Table = "SigninLogs", Identity = UserPrincipalName, IP = IPAddress, UserAgent, ResultType),\n  (AADNonInteractiveUserSignInLogs | where UserAgent in (agents) | project TimeGenerated, Table = "AADNonInteractiveUserSignInLogs", Identity = UserPrincipalName, IP = IPAddress, UserAgent, ResultType)\n| where TimeGenerated between (start .. now())\n| where ResultType == "0"\n| summarize SignIns = count(), Identities = make_set(Identity, 20), First = min(TimeGenerated), Last = max(TimeGenerated) by UserAgent, IP\n| order by First asc`)
+  if (ips.length) add('credential-usage', 'Every key of the service principals seen from the attacker, per IP and hour',
+    'Which client secrets and certificates of those service principals were used from which IPs, hour by hour: the attacker\'s hours stand out against the regular automation, and keys used only from attacker IPs are the stolen ones.',
+    ['AADServicePrincipalSignInLogs'],
+    `let ips = ${list(ips)};\nlet principals = AADServicePrincipalSignInLogs\n    | where TimeGenerated between (start .. now())\n    | where IPAddress in (ips)\n    | distinct ServicePrincipalId;\nAADServicePrincipalSignInLogs\n| where TimeGenerated between (start - 30d .. now())\n| where ServicePrincipalId in (principals) and ResultType == "0"\n| summarize SignIns = count(), FromAttacker = countif(IPAddress in (ips)) by ServicePrincipalName, ServicePrincipalCredentialKeyId, IPAddress, bin(TimeGenerated, 1h)\n| order by TimeGenerated asc`)
+
   // Resources whose keys or credentials were read: was the stolen key used afterwards?
   const exposed = impact.impacted.filter(i => i.effect === 'secret')
   const byOperation = (pattern: RegExp) => exposed.filter(i => i.operations.some(o => pattern.test(o.operation.toLowerCase())))
   const resourceIds = (entries: typeof exposed) => [...new Set(entries.flatMap(i => ident(i.entity, 'resource_id')))].slice(0, MAX_VALUES)
   const firstOf = (entries: typeof exposed) => entries.map(i => i.first).filter((t): t is string => !!t).sort()[0]
-  const since = (entries: typeof exposed) => { const t = firstOf(entries); return t ? `datetime(${t})` : 'start' }
+  const since = (entries: typeof exposed) => { const t = utc(firstOf(entries)); return isUtc(t) ? `datetime(${t})` : 'start' }
   const aks = byOperation(/listcluster\w*credential/)
   if (aks.length) add('aks-admin', 'Was the stolen kubeconfig used?', 'listClusterAdminCredential hands out a cluster-admin certificate ("masterclient"); the Kubernetes audit log shows what was done with it.', ['AKSAudit', 'AKSAuditAdmin'],
     `let clusters = ${list(resourceIds(aks))};\nunion isfuzzy=true AKSAudit, AKSAuditAdmin\n| where TimeGenerated between (${since(aks)} .. end)\n| where _ResourceId in~ (clusters)\n| extend User = tostring(User.username), Resource = tostring(ObjectRef.resource), Namespace = tostring(ObjectRef.namespace)\n| where User in ("masterclient", "clusterAdmin", "clusterUser") or User startswith "system:serviceaccount:kube-system"\n| summarize Count = count(), First = min(TimeGenerated), Last = max(TimeGenerated) by _ResourceId, User, Verb, Resource, Namespace, SourceIps = tostring(SourceIps)\n| order by First asc`)
@@ -179,8 +192,9 @@ export function evidenceQuery(item: { locator?: string; valid_from: string | nul
   if (!table) return null
   const keys = pairs.filter(([key]) => !known?.keys || known.keys.includes(key)).filter(([key]) => /^[A-Za-z_][\w]*$/.test(key))
   const lines = [table]
-  if (item.valid_from) lines.push(`| where TimeGenerated between (datetime(${item.valid_from}) - 10m .. datetime(${item.valid_from}) + 10m)`)
+  const at = utc(item.valid_from)
+  if (isUtc(at)) lines.push(`| where TimeGenerated between (datetime(${at}) - 10m .. datetime(${at}) + 10m)`)
   if (keys.length) lines.push(`| where ${keys.map(([key, value]) => `${key} == ${literal(value)}`).join(' and ')}`)
-  if (!item.valid_from && !keys.length) return null
+  if (!isUtc(at) && !keys.length) return null
   return lines.join('\n')
 }

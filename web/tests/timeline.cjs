@@ -1,28 +1,28 @@
 const assert = require('node:assert/strict')
-const { timelineEntries, timelineEvents, timelineSteps, factIntersects } = require(require('node:path').resolve(process.argv[2]) + '/timeline.js')
+const { timelineEntries, timelineEvents, timelineSteps, factIntersects, fromUtcInput, toUtcInput } = require(require('node:path').resolve(process.argv[2]) + '/timeline.js')
 const { project } = require(require('node:path').resolve(process.argv[2]) + '/board.js')
 const base = {id:'f',valid_from:null,valid_to:null,created_at:'2030-01-01',assertions:[]}
 const evidence = (id, fields={}) => ({id,note:'',created_at:'2030-01-01',retracted_at:null,valid_from:null,valid_to:null,...fields})
 const entries = timelineEntries([{...base,assertions:[
- evidence('unknown'), evidence('late',{valid_from:'2026-01-02T00:00:00Z',valid_to:'2026-01-03T00:00:00Z'}),
- evidence('legacy',{note:'{"TimeGenerated":"2026-01-01T00:00:00Z"}'}),
+ evidence('unknown'), evidence('late',{valid_from:'2026-01-02T00:00:00.000Z',valid_to:'2026-01-03T00:00:00.000Z'}),
+ evidence('legacy',{note:'{"TimeGenerated":"2026-01-01T00:00:00.000Z"}'}),
  evidence('retracted',{valid_from:'2020-01-01',retracted_at:'2030-01-01'}),
 ]}])
 assert.deepEqual(entries.map(e=>e.assertion.id), ['legacy','late','unknown'])
 assert.equal(entries[2].from,null)
-assert.equal(entries[1].to,'2026-01-03T00:00:00Z')
+assert.equal(entries[1].to,'2026-01-03T00:00:00.000Z')
 const duplicatePeriodFact = {...base, assertions:[
- evidence('support',{stance:'supports',valid_from:'2026-01-02T00:00:00Z'}),
- evidence('refute',{stance:'refutes',valid_from:'2026-01-02T00:00:00Z'}),
+ evidence('support',{stance:'supports',valid_from:'2026-01-02T00:00:00.000Z'}),
+ evidence('refute',{stance:'refutes',valid_from:'2026-01-02T00:00:00.000Z'}),
 ]}
 assert.equal(timelineEvents([duplicatePeriodFact]).length,1)
 assert.equal(timelineEvents([duplicatePeriodFact])[0].assertions.length,2)
 assert.deepEqual(timelineSteps([entries[0].fact]), ['2026-01-01T00:00:00.000Z','2026-01-02T00:00:00.000Z','2026-01-03T00:00:00.000Z'])
-assert.equal(factIntersects(entries[1].fact, '2026-01-02T12:00:00Z', '2026-01-02T13:00:00Z'), true)
-assert.equal(factIntersects(entries[1].fact, '2026-01-04T00:00:00Z', null, false), false)
+assert.equal(factIntersects(entries[1].fact, '2026-01-02T12:00:00.000Z', '2026-01-02T13:00:00.000Z'), true)
+assert.equal(factIntersects(entries[1].fact, '2026-01-04T00:00:00.000Z', null, false), false)
 const unknownFact = {...base, assertions:[evidence('only-unknown')]}
-assert.equal(factIntersects(unknownFact, '2026-01-02T12:00:00Z', '2026-01-02T13:00:00Z', true), true)
-assert.equal(factIntersects(unknownFact, '2026-01-02T12:00:00Z', '2026-01-02T13:00:00Z', false), false)
+assert.equal(factIntersects(unknownFact, '2026-01-02T12:00:00.000Z', '2026-01-02T13:00:00.000Z', true), true)
+assert.equal(factIntersects(unknownFact, '2026-01-02T12:00:00.000Z', '2026-01-02T13:00:00.000Z', false), false)
 const ops = [
  {type:'entity.add',payload:{id:'a',name:'Old',kind:'IP'}},
  {type:'entity.update',payload:{id:'a',name:'New',kind:'Device',description:'Edited'}},
@@ -51,11 +51,11 @@ console.log('Timeline grouping, ranges, legacy logs, unknown dates, retractions,
   const t = require(require('node:path').resolve(process.argv[2]) + '/timeline.js')
   const fact = (id, assertions) => ({ id, subject_id: 'a', predicate: 'p', object_id: 'b', valid_from: null, valid_to: null, assertions, truth_state: 'supported' })
   const a = (id, from, extra = {}) => ({ id, fact_id: 'f', stance: 'supports', confidence: 1, source_id: 's', note: 'free text {not json', valid_from: from, valid_to: null, review_status: 'confirmed', ...extra })
-  const inside = fact('f1', [a('a1', '2026-09-10T00:00:00Z')])
-  const mixed = fact('f2', [a('a2', '2026-09-10T00:00:00Z'), a('a3', '2026-09-10T00:00:00Z', { retracted_at: '2026-09-11T00:00:00Z' })])
-  const outside = fact('f3', [a('a4', '2026-08-01T00:00:00Z')])
-  const legacy = fact('f4', [a('a5', null, { note: JSON.stringify({ TimeGenerated: '2026-09-09T12:00:00Z' }) })])
-  const result = t.factsInWindow([inside, mixed, outside, legacy], '2026-09-05T00:00:00Z', '2026-09-12T00:00:00Z', false)
+  const inside = fact('f1', [a('a1', '2026-09-10T00:00:00.000Z')])
+  const mixed = fact('f2', [a('a2', '2026-09-10T00:00:00.000Z'), a('a3', '2026-09-10T00:00:00.000Z', { retracted_at: '2026-09-11T00:00:00.000Z' })])
+  const outside = fact('f3', [a('a4', '2026-08-01T00:00:00.000Z')])
+  const legacy = fact('f4', [a('a5', null, { note: JSON.stringify({ TimeGenerated: '2026-09-09T12:00:00.000Z' }) })])
+  const result = t.factsInWindow([inside, mixed, outside, legacy], '2026-09-05T00:00:00.000Z', '2026-09-12T00:00:00.000Z', false)
   assert.deepEqual(result.map(f => f.id), ['f1', 'f2', 'f4'])
   assert.equal(result[0], inside, 'unchanged facts are not copied')
   assert.deepEqual(result[1].assertions.map(x => x.id), ['a2'], 'retracted evidence is left out')
@@ -63,4 +63,43 @@ console.log('Timeline grouping, ranges, legacy logs, unknown dates, retractions,
   const bounds = t.timelineBounds(many)
   assert.equal(bounds.from, '2026-01-01T00:00:00.000Z')
   console.log('Timeline window semantics and large boards passed')
+}
+
+// Dialog times are UTC whatever the browser's time zone (Europe/Berlin must not turn 10:00 into 08:00Z).
+{
+  assert.equal(fromUtcInput('2026-10-04T10:00'), '2026-10-04T10:00:00.000Z')
+  assert.equal(fromUtcInput('2026-01-15T10:00:30'), '2026-01-15T10:00:30.000Z')
+  assert.equal(fromUtcInput('2026-10-04T10:00:00+02:00'), '2026-10-04T08:00:00.000Z')
+  assert.equal(fromUtcInput(''), null)
+  assert.equal(fromUtcInput('nonsense'), null)
+  assert.equal(toUtcInput('2026-10-04T10:00:00.000Z'), '2026-10-04T10:00')
+  assert.equal(toUtcInput('2026-10-04T10:00:30.000Z', true), '2026-10-04T10:00:30')
+  console.log('UTC dialog times passed')
+}
+
+// One time format: zone-less times are UTC (not the browser's local time), offsets are converted, precision is fixed.
+{
+  const { utc, isUtc } = require(require('node:path').resolve(process.argv[2]) + '/time.js')
+  assert.equal(utc('2026-09-17T10:00:00'), '2026-09-17T10:00:00.000Z')
+  assert.equal(utc('2026-09-17 10:00:00'), '2026-09-17T10:00:00.000Z')
+  assert.equal(utc('2026-09-17T10:00:00+02:00'), '2026-09-17T08:00:00.000Z')
+  assert.equal(utc('2026-09-17T08:00:05.123456Z'), '2026-09-17T08:00:05.123Z')
+  assert.equal(utc('2026-09-17'), '2026-09-17T00:00:00.000Z')
+  assert.equal(utc('9/28/2026, 10:42:07 AM'), '2026-09-28T10:42:07.000Z')
+  assert.equal(utc('nonsense'), null)
+  assert.equal(utc(42), null)
+  assert.ok(isUtc('2026-09-17T08:00:05.123Z'))
+  assert.ok(!isUtc('2026-09-17T08:00:05Z) | union x'))
+  // The projection stores every time normalised, so text order is time order (an offset no longer sorts wrongly).
+  const ops = []
+  const add = (type, payload) => ops.push({ id: `u${ops.length}`, clock: ops.length + 1, at: '2026-10-06T00:00:00Z', actor: 'a', author: 'A', boardId: 'u', type, payload })
+  add('entity.add', { id: 'a', name: 'a', kind: 'IP' }); add('entity.add', { id: 'b', name: 'b', kind: 'File' })
+  add('fact.add', { id: 'f', subject_id: 'a', predicate: 'reads', object_id: 'b' })
+  add('assertion.add', { id: 'late', fact_id: 'f', stance: 'supports', valid_from: '2026-09-17T10:00:00+02:00' })
+  add('assertion.add', { id: 'early', fact_id: 'f', stance: 'supports', valid_from: '2026-09-17T07:30:00' })
+  const items = project('u', ops).data.facts[0].assertions
+  const at = id => items.find(a => a.id === id).valid_from
+  assert.deepEqual([at('early'), at('late')], ['2026-09-17T07:30:00.000Z', '2026-09-17T08:00:00.000Z'])
+  assert.ok(at('early') < at('late'))
+  console.log('UTC times: zone-less as UTC, offsets converted, one format in the projection passed')
 }

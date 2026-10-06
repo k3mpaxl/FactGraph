@@ -1,3 +1,4 @@
+import { utc } from './time'
 import { truth } from './board'
 import type { Assertion, Fact } from './types'
 
@@ -112,4 +113,15 @@ export function factsInWindow(facts: Fact[], from: string | null, to: string | n
     if (assertions.length) out.push(assertions.length === fact.assertions.length ? fact : { ...fact, assertions, truth_state: truth(assertions) })
   }
   return out
+}
+
+/** A `datetime-local` value read as UTC (the dialogs say UTC; the browser's time zone must not shift it). */
+export function fromUtcInput(value: string): string | null {
+  return utc(value)
+}
+/** An ISO time for a `datetime-local` input, in UTC. */
+export function toUtcInput(value: string | null | undefined, seconds = false): string {
+  if (!value) return ''
+  const parsed = Date.parse(value)
+  return Number.isNaN(parsed) ? '' : new Date(parsed).toISOString().slice(0, seconds ? 19 : 16)
 }

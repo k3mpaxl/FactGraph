@@ -16,7 +16,7 @@ export type ExportOptions = {
   measure?: (text: string, size: number, weight: number) => number;
   icon?: (kind: string, icon: string | undefined, color: string) => string;
   /** Attack impact: badges by entity ID (groups as "group:<id>") and the attacker's fact IDs, drawn like on the canvas. */
-  impact?: { badges: Map<string, { tone: 'bad' | 'warn' | 'pivot' | 'muted'; label: string }>; attack: Set<string> } | null;
+  impact?: { badges: Map<string, { tone: 'bad' | 'warn' | 'pivot' | 'muted' | 'good'; label: string }>; attack: Set<string> } | null;
 }
 
 type Palette = Record<'canvas' | 'node' | 'border' | 'text' | 'text2' | 'text3' | 'accent' | 'labelBg' | 'lane' | TruthState, string>
@@ -44,7 +44,8 @@ function hexToRgb(hex: string) {
 /** color-mix(in srgb, a p%, b) for hex colours, used for tinted icon tiles. */
 export function mix(a: string, b: string, weight: number) {
   const x = hexToRgb(a), y = hexToRgb(b)
-  if (!x || !y) return a
+  // The result goes into SVG attributes: a value that is not a colour falls back instead of being copied.
+  if (!x || !y) return /^#[\da-f]{3,8}$/i.test(a) ? a : '#8da9ce'
   return '#' + x.map((v, i) => Math.round(v * weight + y[i] * (1 - weight)).toString(16).padStart(2, '0')).join('')
 }
 
@@ -149,7 +150,7 @@ export function buildGraphSvg(options: ExportOptions) {
     }
   }
 
-  const tones = { bad: [p.refuted, '#ffffff'], warn: [p.disputed, '#1a1205'], pivot: [p.node, p.refuted], muted: [mix(p.text3, p.node, 0.25), p.text2] } as const
+  const tones = { bad: [p.refuted, '#ffffff'], warn: [p.disputed, '#1a1205'], pivot: [p.node, p.refuted], muted: [mix(p.text3, p.node, 0.25), p.text2], good: [p.supported, '#ffffff'] } as const
   for (const node of nodes) {
     const b = boxes.get(node.id)!
     const badge = (node.kind === 'entity' || node.kind === 'group') ? options.impact?.badges.get(node.id) : undefined
@@ -167,7 +168,7 @@ export function buildGraphSvg(options: ExportOptions) {
       const maxText = b.w - 62
       const ring = badge ? (badge.tone === 'pivot' ? p.refuted : badge.tone === 'muted' ? p.border : tones[badge.tone][0]) : p.border
       out.push(`<g filter="url(#shadow)"><rect x="${n(b.x)}" y="${n(b.y)}" width="${n(b.w)}" height="${n(b.h)}" rx="10" fill="${p.node}" stroke="${ring}"${badge && badge.tone !== 'muted' ? ` stroke-width="1.6"${badge.tone === 'pivot' ? ' stroke-dasharray="4 3"' : ''}` : ''}/></g>`)
-      out.push(`<rect x="${n(b.x - 0.5)}" y="${n(b.y + 10)}" width="3" height="${n(b.h - 20)}" rx="1.5" fill="${color}"/>`)
+      out.push(`<rect x="${n(b.x - 0.5)}" y="${n(b.y + 10)}" width="3" height="${n(b.h - 20)}" rx="1.5" fill="${escapeXml(color)}"/>`)
       out.push(`<rect x="${n(b.x + 8)}" y="${n(b.y + b.h / 2 - 15)}" width="30" height="30" rx="8" fill="${tile}"/>`)
       const icon = options.icon?.(node.entity.kind, type?.icon, glyph)
       out.push(icon ? `<svg x="${n(b.x + 15)}" y="${n(b.y + b.h / 2 - 8)}" width="16" height="16" viewBox="0 0 24 24">${icon}</svg>`
@@ -207,7 +208,7 @@ export function buildGraphSvg(options: ExportOptions) {
       const color = attack ? p.refuted : p[node.fact.truth_state]
       const cx = b.x + 14, cy = b.y + 14
       out.push(`<rect x="${n(cx - 12)}" y="${n(cy - 12)}" width="24" height="24" rx="6" transform="rotate(45 ${n(cx)} ${n(cy)})" fill="${p.node}" stroke="${color}" stroke-width="1.5"${node.fact.truth_state === 'unknown' ? ' stroke-dasharray="3 2"' : ''}/>`)
-      out.push(`<path d="M ${n(cx + 1)} ${n(cy - 6)} L ${n(cx - 4)} ${n(cy + 1)} L ${n(cx)} ${n(cy + 1)} L ${n(cx - 1)} ${n(cy + 6)} L ${n(cx + 4)} ${n(cy - 1)} L ${n(cx)} ${n(cy - 1)} Z" fill="${color}"/>`)
+      out.push(`<path d="M ${n(cx + 1)} ${n(cy - 6)} L ${n(cx - 4)} ${n(cy + 1)} L ${n(cx)} ${n(cy + 1)} L ${n(cx - 1)} ${n(cy + 6)} L ${n(cx + 4)} ${n(cy - 1)} L ${n(cx)} ${n(cy - 1)} Z" fill="${escapeXml(color)}"/>`)
       const when = node.fact.assertions.map(a => a.valid_from).filter(Boolean).sort()[0] ?? node.fact.valid_from
       const sub = `${when ? new Date(when).toISOString().slice(5, 16).replace('T', ' ') : ''}${node.fact.technique ? ` ${node.fact.technique}` : ''}`.trim()
       const label = node.count > 1 ? `${node.fact.predicate} ×${node.count}` : node.fact.predicate

@@ -35,7 +35,7 @@ from app.formats import ImportFormat, compile_format, inspect_rows, missing_colu
 WEB_DIR = Path(__file__).resolve().parents[1] / "web" / "dist"
 MCP_INSTRUCTIONS = """FactGraph is an evidence-first investigation graph that analysts and agents build together.
 
-Connection: every tool needs board_id and the board open in a browser (data lives in the browser; the server only relays). Pass the board's session token as session_token or header X-FactGraph-Token. HTTP 409 "offline" means nobody has the board open: ask the analyst to open it. There is no board listing; the analyst gives you board ID and token (plug icon in the board header → Connect an agent).
+Connection: you work on one board, chosen by the analyst's board token in the X-FactGraph-Token header (set up with the plug icon in the board header → Connect an agent). Leave board_id and board_token empty: the server takes the board from the token. Never ask the analyst for a board ID or a token. The data lives in the analyst's open browser tab (the server only relays): HTTP 409 means that tab is closed; ask the analyst to open the board again. Only clients that cannot send headers pass board_token in each call. Your changes are recorded as the analyst's agent, e.g. "MCP (Gregor)".
 
 Workflow
 1. Read first: find_entities (q = name or identifier) or get_graph, and reuse existing IDs. Never create a second entity for the same object; merge_entities fixes duplicates.
@@ -230,7 +230,7 @@ async def browser_command(board_id: str, operation: str, **values) -> dict:
                 raise HTTPException(403, "Token is not connected to this open board")
             actor, peer = matching[0]
         else:
-            raise HTTPException(401, "Session token is required")
+            raise HTTPException(401, "Board token is required (X-FactGraph-Token header)")
         future: asyncio.Future[dict] = loop.create_future()
         pending[request_id] = (peer.websocket, future)
     try:
@@ -753,10 +753,24 @@ async def import_activity_rows(board_id: str, body):
     return await globals()["import_activity_rows_impl"](board_id, body)
 
 
+async def board_of_session() -> str:
+    """The board of the current board token. Every browser tab makes its own token for each board it opens, so the
+    token names the board: agents connected with it never need the board ID."""
+    token = request_token.get()
+    async with rooms_lock:
+        boards = {board for board, room in rooms.items() if any(token_matches(peer.session_token, token) for peer in room.values())}
+    if len(boards) == 1:
+        return boards.pop()
+    if not boards:
+        raise HTTPException(409, "No open board for this board token: ask the analyst to open the board in the browser "
+                                 "(plug icon → Connect an agent shows the current token)")
+    raise HTTPException(422, "This board token is connected to several boards; pass board_id")
+
+
 async def run_mcp_session(session_token: str | None, operation):
     effective_token = session_token or request_token.get()
     if not effective_token:
-        raise HTTPException(401, "MCP requires X-FactGraph-Token or session_token")
+        raise HTTPException(401, "MCP requires the board token in the X-FactGraph-Token header (or board_token)")
     token_context = request_token.set(effective_token)
     channel_context = request_channel.set("MCP")
     try:

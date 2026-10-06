@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 import inspect
-from typing import Literal, get_type_hints
+from typing import Annotated, Literal, get_type_hints
 from uuid import uuid4
 from fastapi import HTTPException
 from fastapi.routing import APIRoute
+from fastmcp.tools import FunctionTool
 from pydantic import Field, ValidationError
 from app.contracts import LAYER_HELP, Layer, StrictModel
 from app.descriptions import describe_routes, purpose, tool_description
@@ -237,11 +238,11 @@ def register_extensions(app, mcp, core):
             continue
         method = next(iter(route.methods))
         name = route.endpoint.__name__
-        full_names.add(register_mcp_adapter(mcp, route, core['run_mcp_session'], annotations=annotations_for(method, name)))
+        full_names.add(register_mcp_adapter(mcp, route, core['run_mcp_session'], core['board_of_session'], annotations=annotations_for(method, name)))
         if name in AGENT_TOOLS:
             tool_name, purpose_text = AGENT_TOOLS[name]
-            agent_names.add(register_mcp_adapter(mcp, route, core['run_mcp_session'], name=tool_name,
-                description=purpose_text or purpose(route), annotations=annotations_for(method, name)))
+            agent_names.add(register_mcp_adapter(mcp, route, core['run_mcp_session'], core['board_of_session'], name=tool_name,
+                description=purpose_text or purpose(route), annotations=annotations_for(method, name), show_board=False))
     missing = set(AGENT_TOOLS) - {r.endpoint.__name__ for r in app.routes if isinstance(r, APIRoute)}
     if missing:
         raise RuntimeError(f'Agent tool profile references unknown REST operations: {missing}')
@@ -249,22 +250,39 @@ def register_extensions(app, mcp, core):
     core['MCP_TOOL_NAMES'] = {'agent': agent_names, 'full': full_names}
 
 
-def register_mcp_adapter(mcp, route, run_session, *, name: str | None = None, description: str | None = None, annotations=None) -> str:
+# The board token names the board (each browser tab makes its own token for each board it opens), so agents connected
+# with it in the X-FactGraph-Token header leave both empty; passing them stays possible for clients that cannot send headers.
+BOARD_ID = Annotated[str | None, Field(description='Leave empty: the board of your board token.')]
+BOARD_TOKEN = Annotated[str | None, Field(description='Omit if the header is set.')]
+
+
+def register_mcp_adapter(mcp, route, run_session, board_of_session, *, name: str | None = None, description: str | None = None, annotations=None,
+                         show_board: bool = True) -> str:
+    """An MCP tool for a REST operation. show_board=False (the agent profile) leaves board_id out of the schema agents see,
+    so they never ask for it; a board_id passed anyway (older prompts) is still accepted and checked against the token."""
     endpoint = route.endpoint
     signature = inspect.signature(endpoint)
     hints = get_type_hints(endpoint)
-    parameters = [p.replace(annotation=hints.get(p.name, p.annotation)) for p in signature.parameters.values()]
+    parameters = [p.replace(annotation=BOARD_ID, default=None) if p.name == 'board_id' else p.replace(annotation=hints.get(p.name, p.annotation))
+                  for p in signature.parameters.values()]
+    parameters.append(inspect.Parameter('board_token', inspect.Parameter.KEYWORD_ONLY, default=None, annotation=BOARD_TOKEN))
+    # The former name, still accepted from older clients, no longer shown.
     parameters.append(inspect.Parameter('session_token', inspect.Parameter.KEYWORD_ONLY, default=None, annotation=str | None))
     parameters = [p.replace(kind=inspect.Parameter.KEYWORD_ONLY) for p in parameters]
 
     async def invoke(**kwargs):
-        token = kwargs.pop('session_token', None)
+        token = kwargs.pop('board_token', None) or kwargs.pop('session_token', None)
+        kwargs.pop('session_token', None)
         try:
             for name, annotation in hints.items():
                 if name in kwargs and inspect.isclass(annotation) and issubclass(annotation, StrictModel) and isinstance(kwargs[name], dict):
                     kwargs[name] = annotation.model_validate(kwargs[name])
             if 'board_id' in signature.parameters:
-                return await run_session(token, lambda: endpoint(**kwargs))
+                async def run():
+                    if not kwargs.get('board_id'):
+                        kwargs['board_id'] = await board_of_session()
+                    return await endpoint(**kwargs)
+                return await run_session(token, run)
             result = endpoint(**kwargs)
             return await result if inspect.isawaitable(result) else result
         except HTTPException as exc:
@@ -277,5 +295,9 @@ def register_mcp_adapter(mcp, route, run_session, *, name: str | None = None, de
     invoke.__signature__ = signature.replace(parameters=parameters, return_annotation=dict)
     invoke.__name__ = name or 'rest_' + endpoint.__name__
     invoke.__doc__ = description or tool_description(route)
-    mcp.tool(invoke, name=invoke.__name__, annotations=annotations)
+    tool = FunctionTool.from_function(invoke, name=invoke.__name__, annotations=annotations)
+    # Only the advertised schema: arguments are validated against the function, which still accepts what is left out.
+    hidden = {'session_token'} | (set() if show_board else {'board_id'})
+    tool.parameters = {**tool.parameters, 'properties': {key: value for key, value in tool.parameters.get('properties', {}).items() if key not in hidden}}
+    mcp.add_tool(tool)
     return invoke.__name__

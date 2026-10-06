@@ -151,7 +151,10 @@ class RelayTest(unittest.IsolatedAsyncioTestCase):
                 headers={"X-FactGraph-Token": token},
             )
             async with Client(transport) as client:
-                graph_task = asyncio.create_task(client.call_tool("get_graph", {"board_id": board}))
+                # The token in the header names the board: agents pass no board_id (the agent tools do not even show it).
+                tools = {tool.name: tool for tool in await client.list_tools()}
+                self.assertNotIn("board_id", tools["get_graph"].input_schema["properties"])
+                graph_task = asyncio.create_task(client.call_tool("get_graph", {}))
                 command = await receive(websocket)
                 self.assertEqual(command["operation"], "snapshot")
                 await websocket.send(json.dumps({
@@ -162,6 +165,7 @@ class RelayTest(unittest.IsolatedAsyncioTestCase):
                 graph = await graph_task
                 self.assertEqual(graph.data["board_id"], board)
 
+                # A board_id passed anyway (older prompts) is still accepted.
                 entity_task = asyncio.create_task(client.call_tool("create_entity", {
                     "board_id": board, "body": {"name": "MCP entity", "kind": "Test"},
                 }))
@@ -195,6 +199,13 @@ class RelayTest(unittest.IsolatedAsyncioTestCase):
                     "accepted": 1,
                 }))
                 self.assertEqual((await delete_task).data["accepted_actions"], 1)
+
+            # A token whose browser tab is not open names no board: a clear answer instead of a question about IDs.
+            stranger = StreamableHttpTransport(f"http://127.0.0.1:{self.port}/mcp/", headers={"X-FactGraph-Token": "z" * 64})
+            async with Client(stranger) as client:
+                result = await client.call_tool("get_graph", {}, raise_on_error=False)
+                self.assertTrue(result.is_error)
+                self.assertIn("No open board for this board token", result.content[0].text)
 
     async def test_rest_patch_evidence_reaches_the_right_board(self):
         board, actor, token = str(uuid4()), str(uuid4()), "c" * 64

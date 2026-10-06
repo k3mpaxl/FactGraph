@@ -1,4 +1,5 @@
 import type { BoardAction } from './board'
+import { agentText } from './provenance'
 
 /**
  * Notifications: what agents, Enricher and colleagues changed on the board, the analyst's own imports and exports,
@@ -53,9 +54,10 @@ export function classify(actions: BoardAction[], me: string): { kind: 'agent' | 
   if (!first) return null
   if (actions.every(a => a.actor === me && (a.channel ?? 'UI') === 'UI')) return null
   // Enricher was called GTIEnricher before its 0.2 release; its earlier exports carry that name.
-  if (actions.some(a => a.author === 'Enricher' || a.author === 'GTIEnricher')) return { kind: 'enricher', author: 'Enricher' }
+  if (actions.some(a => /^(GTI)?Enricher\b/.test(a.author ?? ''))) return { kind: 'enricher', author: 'Enricher' }
   const channel = first.channel ?? 'UI'
-  if (channel === 'MCP' || channel === 'REST') return { kind: 'agent', author: first.author && first.author !== channel ? `${first.author} (${channel})` : `Agent via ${channel}` }
+  // "Agent via MCP (Gregor)": an agent working with Gregor's board token.
+  if (channel === 'MCP' || channel === 'REST') return { kind: 'agent', author: agentText(first.author, channel) }
   return { kind: 'colleague', author: first.author || 'A colleague' }
 }
 

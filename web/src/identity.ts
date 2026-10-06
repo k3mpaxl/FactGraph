@@ -1,7 +1,7 @@
 import { uuid } from './uuid'
 
 /**
- * A duplicated browser tab inherits sessionStorage, and with it the actor ID and session token of the original tab. Two
+ * A duplicated browser tab inherits sessionStorage, and with it the actor ID and board token of the original tab. Two
  * tabs with one actor make the relay replace one socket with the other in turn, and their actions share one identity.
  * Tabs that hold an actor answer a probe on a BroadcastChannel, so a duplicate takes a fresh identity before it connects.
  */

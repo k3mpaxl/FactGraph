@@ -16,7 +16,8 @@ class ParityContracts(unittest.IsolatedAsyncioTestCase):
         async with Client(mcp) as client:
             tools = {t.name: t for t in await client.list_tools()}
         self.assertTrue(all(name.startswith('rest_') for name in tools), 'full profile shows only rest_ tools')
-        routes = [r for r in app.routes if isinstance(r, APIRoute) and r.path.startswith('/api/') and not r.path.endswith('/imports/file')]
+        # File uploads (import, inspect) have no MCP equivalent: agents send rows to /imports/table and /imports/preview.
+        routes = [r for r in app.routes if isinstance(r, APIRoute) and r.path.startswith('/api/') and not r.path.endswith(('/imports/file', '/imports/inspect'))]
         self.assertGreater(len(routes), 40)
         for route in routes:
             tool = tools['rest_' + route.endpoint.__name__]
@@ -52,7 +53,7 @@ class AgentGuidance(unittest.IsolatedAsyncioTestCase):
     AGENT_TOOLS = {'get_graph', 'get_impact', 'import_defender_rows', 'find_entities', 'create_entity', 'update_entity', 'merge_entities', 'delete_entity', 'add_identifier',
                    'create_relation', 'update_relation', 'delete_relation', 'create_activity', 'update_activity', 'create_source', 'update_source',
                    'add_evidence', 'update_evidence', 'review_evidence', 'retract_evidence', 'import_rows', 'import_activities',
-                   'create_group', 'update_group', 'export_image', 'undo'}
+                   'create_group', 'update_group', 'export_image', 'undo', 'list_import_formats'}
 
     async def test_default_agent_profile_is_small_and_explained(self):
         async with Client(mcp) as client:
@@ -61,8 +62,9 @@ class AgentGuidance(unittest.IsolatedAsyncioTestCase):
         # Tool definitions are loaded into every agent session; keep them lean.
         size = sum(len(json.dumps(t.model_dump(exclude_none=True))) for t in tools)
         # 9,300: import_defender_rows (about 250 tokens) was added in v0.5.0; 9,500: get_impact and the compromise
-        # marking on update_entity (about 250 tokens) for attack impact. Keep further growth deliberate.
-        self.assertLess(size // 4, 9500, f'agent tool definitions use about {size // 4} tokens')
+        # marking on update_entity (about 250 tokens) for attack impact; 9,700: list_import_formats and the format of
+        # import_defender_rows (about 500 tokens) for saved import formats. Keep further growth deliberate.
+        self.assertLess(size // 4, 9700, f'agent tool definitions use about {size // 4} tokens')
         for tool in tools:
             self.assertGreater(len(tool.description or ''), 30, tool.name)
             self.assertNotIn('REST equivalent', tool.description, tool.name)

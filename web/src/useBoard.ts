@@ -10,6 +10,7 @@ import { trustedDrafts } from './importBatches'
 import { actorTaken, freshIdentity, holdActor, releaseActor, storedIdentity } from './identity'
 import { isSummary, summarize, syncPlan } from './sync'
 import { validateDrafts } from './validation'
+import { loadFormats } from './importFormats'
 import { buildViewModel } from './viewModel'
 import { browserMeasure, buildGraphSvg, svgToPng } from './exportGraph'
 import { iconMarkup, prepareIconMarkup } from './KindIcon'
@@ -321,6 +322,9 @@ export function useBoard(boardId: string, listener?: ChangeListener) {
                 reply(requestId, { ok: true, changed })
               } else if (message.operation === 'export') {
                 reply(requestId, { ok: true, export: await renderExport(projectCached(actionsRef.current), (message.options ?? {}) as Record<string, unknown>) })
+              } else if (message.operation === 'formats') {
+                // Import formats the analyst saved in this browser, for agents that import exports FactGraph does not recognise.
+                reply(requestId, { ok: true, formats: loadFormats() })
               } else if (message.operation === 'snapshot') {
                 const snapshot = projectCached(actionsRef.current)
                 reply(requestId, { ok: true, graph: {

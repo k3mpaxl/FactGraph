@@ -25,7 +25,7 @@ class StrictModel(BaseModel):
     @model_validator(mode="after")
     def field_invariants(self):
         nullable = {'id', 'source_id', 'valid_from', 'valid_to', 'color', 'x', 'y', 'subject_field', 'object_field', 'predicate_field', 'expected_source_revision', 'expected_revision',
-                    'layer', 'rule', 'technique', 'container_id', 'operation_field', 'layers', 'since', 'until', 'compromise', 'rotated_at'}
+                    'layer', 'rule', 'technique', 'container_id', 'operation_field', 'layers', 'since', 'until', 'compromise', 'rotated_at', 'format'}
         for key in self.model_fields_set:
             value = getattr(self, key)
             if value is None and key not in nullable:

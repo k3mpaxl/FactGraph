@@ -265,6 +265,51 @@ class RelayTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("max-age", headers["Strict-Transport-Security"])
 
 
+    async def test_import_formats_inspect_with_board_knowledge_preview_and_list(self):
+        board, actor, token = str(uuid4()), str(uuid4()), "formats-token"
+        csv = b"ts,caller_oid,verb,vault\n2026-09-28T11:00:00Z,11111111-2222-3333-4444-555555555555,SecretGet,kv-prod\n"
+        boundary = "factgraphboundary"
+        upload = (f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"vault.csv\"\r\nContent-Type: text/csv\r\n\r\n").encode() + csv + f"\r\n--{boundary}--\r\n".encode()
+
+        def call(method, path, body=None, content_type="application/json"):
+            request = Request(f"http://127.0.0.1:{self.port}/api/boards/{board}{path}", method=method, data=body,
+                              headers={"X-FactGraph-Token": token, **({"Content-Type": content_type} if body is not None else {})})
+            with urlopen(request, timeout=5) as response:
+                return json.load(response)
+
+        saved = {"version": 1, "id": "f1", "name": "Vault audit", "rows": "activity", "columns": ["ts", "caller_oid", "verb", "vault"],
+                 "entities": [{"column": "caller_oid", "kind": "User", "role": "actor", "ids": [{"column": "caller_oid", "type": "entra-object-id"}]},
+                              {"column": "vault", "kind": "Key Vault", "role": "target", "ids": []}],
+                 "operation": "observed", "operation_column": "verb", "time": "ts", "end": None, "locator": [], "details": []}
+        async with join(f"ws://127.0.0.1:{self.port}/ws/boards/{board}", actor, "Browser", token) as websocket:
+            await receive(websocket)
+            # Reading a file asks the browser for the board's entities, to recognise values it knows.
+            inspect = asyncio.create_task(asyncio.to_thread(call, "POST", "/imports/inspect", upload, f"multipart/form-data; boundary={boundary}"))
+            command = await receive(websocket)
+            self.assertEqual(command["operation"], "index")
+            await websocket.send(json.dumps({"type": "api-result", "requestId": command["requestId"], "ok": True, "index": {"entities": [
+                {"id": "u1", "kind": "User", "name": "j.doe@corp.example", "identifiers": [
+                    {"scheme": "external_id", "namespace": "entra-object-id", "normalized_value": "11111111-2222-3333-4444-555555555555"}]}], "facts": [], "sources": []}}))
+            report = await inspect
+            self.assertIsNone(report["builtin"])
+            column = next(c for c in report["columns"] if c["name"] == "caller_oid")
+            self.assertEqual((column["type"], column["known"]["kind"], column["known"]["id_type"]), ("guid", "User", "entra-object-id"))
+            self.assertEqual(report["board_names"], {"11111111-2222-3333-4444-555555555555": "j.doe@corp.example"})
+            # The preview needs no browser: it only applies the format to the rows it is given.
+            preview = await asyncio.to_thread(call, "POST", "/imports/preview", json.dumps({"rows": report["sample"], "format": saved}).encode())
+            self.assertEqual((preview["rows"][0]["operation"], preview["rows"][0]["time"], preview["missing"]), ("secret get", "2026-09-28T11:00:00Z", []))
+            # Agents list the formats saved in the analyst's browser.
+            listing = asyncio.create_task(asyncio.to_thread(call, "GET", "/imports/formats"))
+            command = await receive(websocket)
+            self.assertEqual(command["operation"], "formats")
+            await websocket.send(json.dumps({"type": "api-result", "requestId": command["requestId"], "ok": True, "formats": [saved]}))
+            self.assertEqual((await listing)["formats"][0]["name"], "Vault audit")
+            # A format that lacks columns of the rows is refused with the missing columns named.
+            with self.assertRaises(HTTPError) as caught:
+                await asyncio.to_thread(call, "POST", "/imports/table", json.dumps({"rows": [{"ts": "2026-09-28T11:00:00Z"}], "format": saved, "dry_run": True}).encode())
+            self.assertEqual(caught.exception.code, 422)
+            self.assertIn("caller_oid", json.load(caught.exception)["detail"])
+
     async def test_large_replies_arrive_in_parts_and_lists_query_the_browser(self):
         board, actor, token = str(uuid4()), str(uuid4()), "parts-token"
 

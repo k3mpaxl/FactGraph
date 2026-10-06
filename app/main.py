@@ -29,6 +29,7 @@ from app.contracts import (StrictModel, EntityInput, RelationInput, SourceInput,
 
 from app.ingest import OBJECT_FIELDS, SUBJECT_FIELDS, action, entity_actions, identifier_key, parse_rows, relation_actions, rows_to_actions, table_rows_to_actions
 from app.tables import clean_rows, detect
+from app.formats import ImportFormat, compile_format, inspect_rows, missing_columns, preview_rows
 
 
 WEB_DIR = Path(__file__).resolve().parents[1] / "web" / "dist"
@@ -46,7 +47,7 @@ Workflow
    Attribution ("this IP belongs to the attacker") is its own relationship with its own evidence.
 4. Evidence: create_source for the origin (source_kind=primary for logs, telemetry, repository files; original rows in excerpt, query text in query), then add_evidence on the relationship or activity (observation = what the record shows, locator = event ID/CorrelationId/row, valid_from/valid_to = when it happened, stance supports|refutes). A query without results proves nothing; secondary sources are context only.
 5. Review: everything you add starts unconfirmed, also rows you import (only the analyst's own file imports count as parsed and confirmed); a relationship is "unknown" until confirmed evidence exists, "disputed" when confirmed evidence points both ways. You may confirm with review_evidence only after checking the original record yourself: primary source with uri and excerpt, a concrete locator and observation, and a review_note stating what you compared. Keep contradicting evidence (stance refutes) instead of overwriting; retract_evidence instead of deleting.
-6. Bulk: import_rows for two-column rows, import_activities for rows with several participant columns; always dry_run first. Imports are idempotent.
+6. Bulk: import_defender_rows for Defender XDR / Sentinel rows (recognised automatically) or any rows with a format: list_import_formats returns the column mappings the analyst saved; pass one as format. import_rows for two-column rows, import_activities for rows with several participant columns; always dry_run first. Imports are idempotent.
 7. Large graphs: create_group bundles many similar entities into one collapsed node (members, or rule by kinds/name match, or a container's contents); excluded keeps anomalies visible on their own. Groups only change the view.
 8. Layers (identity, network, endpoint, workload = Kubernetes/containers, cloud = control plane/Key Vaults, data = buckets/blobs/databases, code = repositories/CI, other) are inferred from the kind; set layer only to correct it.
 9. export_image renders the graph as SVG (text) or PNG (base64) for reports.
@@ -308,6 +309,11 @@ async def import_table(board_id: str, rows: list[dict], *, title: str = "", quer
         title = f"{detection.table} ({detection.product})" if detection.product else detection.table
     if filename and filename not in title:
         title = f"{title} · {filename}"
+    return await import_mapped(board_id, rows, detection.mapping, title=title, query=query, dry_run=dry_run, detection=detection.summary())
+
+
+async def import_mapped(board_id: str, rows: list[dict], mapping, *, title: str, query: str, dry_run: bool, detection: dict) -> dict:
+    """Rows with a known mapping (a built-in table or a saved format): entities matched by their IDs with the board."""
     index = (await browser_command(board_id, "index"))["index"]
     entities = {(item["kind"].casefold(), item["name"].casefold()): item["id"] for item in index["entities"]}
     by_identifier, owned = {}, set()
@@ -317,12 +323,12 @@ async def import_table(board_id: str, rows: list[dict], *, title: str = "", quer
             by_identifier.setdefault(key, item["id"])
             owned.add((item["id"], *key[1:]))
     try:
-        drafts, summary = table_rows_to_actions(board_id, rows, detection.mapping, title=title, query=query,
+        drafts, summary = table_rows_to_actions(board_id, rows, mapping, title=title, query=query,
             existing_entities=entities, existing_identifiers=by_identifier, known_identifiers=owned,
             existing_facts={item["id"] for item in index["facts"]}, existing_sources={item["id"] for item in index["sources"]})
     except (ValueError, KeyError) as error:
         raise HTTPException(422, str(error)) from error
-    summary["detection"] = detection.summary()
+    summary["detection"] = detection
     summary["title"] = title
     if dry_run:
         return {**summary, "dry_run": True, "action_count": len(drafts)}
@@ -330,7 +336,32 @@ async def import_table(board_id: str, rows: list[dict], *, title: str = "", quer
     return summary
 
 
-async def import_rows(board_id: str, data: RowsInput) -> dict:
+async def import_with_format(board_id: str, rows: list[dict], fmt: ImportFormat, *, title: str = "", query: str = "",
+                             dry_run: bool = False, filename: str = "") -> dict:
+    """Rows of an export the analyst mapped in the import dialog and saved as a format."""
+    if not valid_uuid(board_id):
+        raise HTTPException(422, "Invalid board UUID")
+    if not rows:
+        raise HTTPException(422, "The file contains no result rows")
+    missing = missing_columns(fmt, set().union(*(row.keys() for row in rows)))
+    if missing:
+        raise HTTPException(422, f"{filename or 'The rows'} lack{'s' if filename else ''} columns of the format {fmt.name}: {', '.join(missing)}")
+    if not title or title in ("Activity logs", "Access Logs"):
+        title = fmt.name
+    if filename and filename not in title:
+        title = f"{title} · {filename}"
+    described = {"table": fmt.name, "product": "format", "format": fmt.name, "confident": True}
+    if fmt.rows == "relationship":
+        first, second = fmt.entities
+        summary = await import_rows(board_id, RowsInput(rows=rows, title=title, query=query, dry_run=dry_run, subject_field=first.column,
+                                                        object_field=second.column, predicate=fmt.operation.strip() or "related to",
+                                                        predicate_field=fmt.operation_column, subject_kind=first.kind, object_kind=second.kind),
+                                    time_field=fmt.time, end_field=fmt.end, locator_fields=tuple(fmt.locator))
+        return {**summary, "table": fmt.name, "product": "format", "detection": described, "title": title}
+    return await import_mapped(board_id, rows, compile_format(fmt), title=title, query=query, dry_run=dry_run, detection=described)
+
+
+async def import_rows(board_id: str, data: RowsInput, **columns) -> dict:
     if not valid_uuid(board_id):
         raise HTTPException(422, "Invalid board UUID")
     index = (await browser_command(board_id, "index"))["index"]
@@ -345,7 +376,7 @@ async def import_rows(board_id: str, data: RowsInput) -> dict:
             predicate_field=data.predicate_field,
             subject_kind=data.subject_kind, object_kind=data.object_kind,
             existing_entities=entity_index, existing_facts=fact_index,
-            existing_sources={item["id"] for item in index["sources"]})
+            existing_sources={item["id"] for item in index["sources"]}, **columns)
     except (ValueError, KeyError) as error:
         raise HTTPException(422, str(error)) from error
     if data.dry_run:
@@ -581,6 +612,8 @@ class TableRowsInput(StrictModel):
     title: str = Field(default="", max_length=200)
     query: str = Field(default="", max_length=20_000, description="KQL that produced the rows (provenance).")
     dry_run: bool = False
+    # An object, validated below: the full schema would cost every agent session about 800 tokens of tool definition.
+    format: dict | None = Field(default=None, description="An import format as list_import_formats returns it, used instead of recognising the table.")
 
 
 @app.post("/api/boards/{board_id}/imports/table")
@@ -591,12 +624,54 @@ async def import_table_export(board_id: str, body: TableRowsInput):
     IDs (DeviceId, Entra object ID, SID, hashes, resource IDs) with what is already on the board; each row becomes one
     evidence item of an activity with its timestamp and a locator such as ReportId. Rows sent through REST or MCP stay
     unconfirmed until an analyst reviews them (only an analyst's own file import counts as parsed and confirmed). Use dry_run first. An
-    unrecognised table returns 422 with a suggested column mapping; then use import_activities with explicit roles."""
+    unrecognised table returns 422 with a suggested column mapping; then pass a format (one the analyst saved, see list_import_formats,
+    or the suggestion completed) or use import_activities with explicit roles."""
     try:
         rows = clean_rows(body.rows)
     except ValueError as error:
         raise HTTPException(422, str(error)) from error
+    if body.format:
+        return await import_with_format(board_id, rows, parse_format(json.dumps(body.format)), title=body.title, query=body.query, dry_run=body.dry_run)
     return await import_table(board_id, rows, title=body.title, query=body.query, dry_run=body.dry_run)
+
+
+@app.post("/api/boards/{board_id}/imports/inspect")
+async def inspect_import(board_id: str, file: UploadFile = File(...)):
+    """Read an export without importing anything: its columns with value types and sample values (and which entities on the
+    board their values name or identify), the first rows, whether it is a built-in Defender XDR / Sentinel table, and a
+    suggested format (column mapping) to start from. Nothing is stored."""
+    rows = await read_upload(file)
+    try:
+        # The board's entities and their IDs: columns whose values are already known (e.g. object IDs from a Defender
+        # import) are recognised as those entities.
+        index = (await browser_command(board_id, "index"))["index"]
+    except HTTPException:
+        index = None
+    return inspect_rows(rows, file.filename or "", index)
+
+
+class FormatPreviewInput(StrictModel):
+    rows: list[dict] = Field(max_length=100, description="A few rows of the export, e.g. the sample from /imports/inspect.")
+    format: ImportFormat
+
+
+@app.post("/api/boards/{board_id}/imports/preview")
+async def preview_import(board_id: str, body: FormatPreviewInput):
+    """What a format makes of the given rows: participants with role and type, what happened, the UTC time, the locator, and
+    why a row would be skipped. Reads nothing from the board and stores nothing."""
+    try:
+        rows = clean_rows(body.rows)
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
+    columns = set().union(*(row.keys() for row in rows)) if rows else set()
+    return {"rows": preview_rows(rows, body.format), "missing": missing_columns(body.format, columns) if rows else []}
+
+
+@app.get("/api/boards/{board_id}/imports/formats")
+async def list_import_formats(board_id: str):
+    """Import formats the analyst saved in the browser of this session: column mappings for exports FactGraph does not know.
+    Pass one as format to /imports/table (rows) or /imports/file."""
+    return {"formats": (await browser_command(board_id, "formats")).get("formats", [])}
 
 
 @app.post("/api/boards/{board_id}/imports/kql")
@@ -619,27 +694,43 @@ async def import_file(board_id: str, file: UploadFile = File(...),
                       subject_kind: str = Form("IP"),
                       object_kind: str = Form("File"), roles: str = Form(""),
                       auto: bool = Form(False, description="Recognise Defender XDR / Sentinel exports and map their columns automatically."),
+                      format: str = Form("", description="A saved import format as JSON (see GET /imports/formats); used instead of the other mapping fields."),
                       batch_id: str = Form("", description="Optional UUID for the change batch, so the uploading browser recognises its own import.")):
     # File uploads are imports: the change log and the notifications show them as such, not as agent writes.
     channel_context = request_channel.set("Import")
     batch_context = request_batch.set(str(UUID(batch_id)) if batch_id and valid_uuid(batch_id) else None)
     try:
         return await _import_file(board_id, file, title, query, dry_run, subject_field, object_field, predicate, predicate_field,
-                                  subject_kind, object_kind, roles, auto)
+                                  subject_kind, object_kind, roles, auto, format)
     finally:
         request_channel.reset(channel_context)
         request_batch.reset(batch_context)
 
 
-async def _import_file(board_id, file, title, query, dry_run, subject_field, object_field, predicate, predicate_field,
-                       subject_kind, object_kind, roles, auto=False):
+async def read_upload(file: UploadFile) -> list[dict]:
     content = await file.read(20_000_001)
     if len(content) > 20_000_000:
         raise HTTPException(413, "File is larger than 20 MB")
     try:
-        rows = clean_rows(parse_rows(content, file.filename or ""))
+        return clean_rows(parse_rows(content, file.filename or ""))
     except (UnicodeError, ValueError, csv.Error) as error:
         raise HTTPException(422, str(error)) from error
+
+
+def parse_format(text: str) -> ImportFormat:
+    from pydantic import ValidationError
+    try:
+        return ImportFormat.model_validate_json(text)
+    except ValidationError as error:
+        problems = "; ".join(f"{'.'.join(str(p) for p in e['loc']) or 'format'}: {e['msg']}" for e in error.errors()[:5])
+        raise HTTPException(422, f"Invalid import format: {problems}") from error
+
+
+async def _import_file(board_id, file, title, query, dry_run, subject_field, object_field, predicate, predicate_field,
+                       subject_kind, object_kind, roles, auto=False, format=""):
+    rows = await read_upload(file)
+    if format.strip():
+        return await import_with_format(board_id, rows, parse_format(format), title=title, query=query, dry_run=dry_run, filename=file.filename or "")
     if auto:
         return await import_table(board_id, rows, title=title, query=query, dry_run=dry_run, filename=file.filename or "")
     if roles.strip():

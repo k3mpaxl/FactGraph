@@ -162,7 +162,11 @@ def rows_to_actions(board_id: str, rows: list[dict], *, title: str,
                     subject_kind: str = "IP", object_kind: str = "File",
                     existing_entities: dict[tuple[str, str], str] | None = None,
                     existing_facts: dict[tuple[str, str, str], str] | None = None,
-                    existing_sources: set[str] | None = None) -> tuple[list[dict], dict]:
+                    existing_sources: set[str] | None = None,
+                    time_field: str | None = None, end_field: str | None = None,
+                    locator_fields: tuple[str, ...] = ()) -> tuple[list[dict], dict]:
+    """Each row: subject → predicate → object, with the row as evidence. time_field, end_field and locator_fields come
+    from a saved import format; without them the usual column names are tried."""
     if not rows:
         raise ValueError("The file contains no result rows")
     if len(rows) > 50_000:
@@ -222,18 +226,20 @@ def rows_to_actions(board_id: str, rows: list[dict], *, title: str,
             duplicates += 1
             continue
         seen_evidence.add(assertion_id)
-        timestamp = _time(next((str(row[key]) for key in ("valid_from", "StartTime", *TIME_FIELDS) if row.get(key)), None))
-        end = _time(next((str(row[key]) for key in ("valid_to", "EndTime") if row.get(key)), None))
+        timestamp = _time(str(row.get(time_field) or "")) if time_field else \
+            _time(next((str(row[key]) for key in ("valid_from", "StartTime", *TIME_FIELDS) if row.get(key)), None))
+        end = _time(str(row.get(end_field) or "")) if end_field else _time(next((str(row[key]) for key in ("valid_to", "EndTime") if row.get(key)), None))
         undated += timestamp is None
+        locator = " ".join(f"{key}={str(row[key]).strip()}" for key in locator_fields if str(row.get(key) or "").strip()) if locator_fields else ""
         drafts.append(action("assertion.add", {"id": assertion_id, "fact_id": fact_id,
             "stance": "supports", "confidence": 1, "source_id": source_id,
-            "note": row_text, "observation": f"{subject} {row_predicate} {object_name}", "locator": str(row.get("EventId") or row.get("event_id") or f"result row {row_number}"), "created_at": now, "valid_from": timestamp, "valid_to": end},
+            "note": row_text, "observation": f"{subject} {row_predicate} {object_name}", "locator": locator or str(row.get("EventId") or row.get("event_id") or f"result row {row_number}"), "created_at": now, "valid_from": timestamp, "valid_to": end},
             action_id=_stable(board_id, "assertion-action", assertion_id), author="Import"))
         assertions += 1
     return drafts, {"rows": len(rows), "skipped": skipped, "entities": len(seen_entities),
                     "relations": len(seen_facts), "evidence": assertions,
                     "source_id": row_sources[0], "source_parts": len(set(row_sources)), "duplicates": duplicates, "subject_field": subject_field,
-                    "object_field": object_field, "undated": undated, "time_field": _time_field(rows)}
+                    "object_field": object_field, "undated": undated, "time_field": time_field or _time_field(rows)}
 
 
 def activity_rows_to_actions(board_id: str, rows: list[dict], *, title: str, roles: list[dict],

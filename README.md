@@ -301,7 +301,7 @@ The repository also contains [.vscode/mcp.json](.vscode/mcp.json); in VS Code ru
 
 ### MCP tools
 
-By default the server exposes a **compact agent profile with 26 tools** (about 9,400 tokens of tool descriptions). Fewer tools mean less context usage and better tool choice.
+By default the server exposes a **compact agent profile with 27 tools** (about 9,700 tokens of tool descriptions). Fewer tools mean less context usage and better tool choice.
 
 | Task | MCP tool | REST (relative to `/api/boards/{id}`) |
 | --- | --- | --- |
@@ -310,7 +310,7 @@ By default the server exposes a **compact agent profile with 26 tools** (about 9
 | Relationships | `create_relation`, `update_relation`, `delete_relation` | `/relations…` |
 | Activities | `create_activity`, `update_activity` | `/activities…` |
 | Sources and evidence | `create_source`, `update_source`, `add_evidence`, `update_evidence`, `review_evidence`, `retract_evidence` | `/sources…`, `/relations/{id}/evidence…` |
-| Imports | `import_rows`, `import_activities` | `/imports/activity`, `/imports/kql`, `/imports/activities` |
+| Imports | `import_defender_rows` (built-in tables or a `format`), `list_import_formats`, `import_rows`, `import_activities` | `/imports/table`, `/imports/formats`, `/imports/inspect`, `/imports/preview`, `/imports/file`, `/imports/activity`, `/imports/kql`, `/imports/activities` |
 | Attack impact | `get_impact`; mark with `update_entity` (`compromise: {from, to, note}`, `rotated_at`) | `GET /impact`, `PATCH /entities/{id}` |
 | Overview and export | `create_group`, `update_group`, `export_image` | `/groups…`, `/export` |
 | Undo | `undo` | `/undo` |
@@ -357,25 +357,38 @@ async with Client("http://127.0.0.1:8080/mcp/") as client:
 
 PATCH-style calls change only the fields they contain; an explicit `null` clears a field. Sources and evidence accept `expected_revision`; on a concurrent change the API answers `409`. For bulk work there is `POST /actions` (up to 50,000 actions; your own action IDs make retries idempotent) and the import endpoints. There is deliberately no endpoint that lists all boards.
 
-## Importing logs and KQL results
+## Importing logs and exports
 
-**Import logs / KQL** (board menu) accepts CSV, JSON arrays or JSONL up to 20 MB and 50,000 rows per file, always with a preview first. Several files can be selected at once: the preview shows each file, and the import runs in the background, one file after another, each with its own entry under the bell. Uploads from this dialog appear as channel **Import** in the change log.
+**Import logs and exports** (board menu) or **dropping files on the board** accepts CSV, JSON arrays or JSONL up to 20 MB and 50,000 rows per file. Every file is read first; nothing is stored until you import.
 
-- **Relationships · 2 columns:** a source and a target column (for example `IPAddress → accessed → FilePath`); common column names are detected.
-- **Activities · several roles:** several columns with roles, for example `CallerIPAddress → source → IP`, `AppId → identity → Service Principal`, `ResourceId → target → Key Vault`, with a fixed operation or one taken from a column (`OperationName`).
+- **Built-in formats:** Defender XDR and Sentinel tables (see below) and the classic two-column access log (`IPAddress → FilePath`) are recognised by their columns. Dropped on the board, they are imported right away.
+- **Your own formats:** any other export opens the column mapping. Every column is listed with its value type and a few sample values; say what it is:
+  - **Entity** with a type (IP, User, Service Principal, Key Vault …), a role (*actor* who did it, *identity* as whom, *source* from where, *tool* with what, *via* through what, *target* on what) and whether the value is the entity's name or an ID (Entra object ID, app ID, device ID, SID, SHA-256, resource ID …),
+  - **ID of an entity**, e.g. the object ID next to the UPN: entities are found by it, also those a Defender or Sentinel import created,
+  - **Event time** and **End time** (UTC unless the value names a zone), **What happened** (or one text for every row), **Detail for the evidence** (a result code, a status), **Row ID** (the locator, e.g. `CorrelationId`).
 
-Every row becomes its own unconfirmed evidence item with its timestamp (`TimeGenerated`, `timestamp`, `StartTime`/`EndTime` …). The same operation with the same participants becomes one shared activity. Existing entities are reused; importing the same rows again creates no duplicates. For scripts: `POST /imports/file` (multipart), `/imports/activity`, `/imports/kql` and `/imports/activities`, each with `dry_run`.
+  Each row is either **an event** (an activity with several participants) or **a relationship** (A → B, e.g. an inventory). A live preview shows the first rows as they will arrive, and which rows would be skipped. **Save as a format**: the next export with (mostly) the same columns, also in another order or with a column more, is recognised and imported without asking, also when dropped. Formats are kept in this browser for all boards; under *Saved formats* they can be exported as a file for colleagues, and theirs imported.
+- **The board helps with the mapping:** FactGraph compares the values with the names and IDs of the entities already on the board. A column of GUIDs that are the Entra object IDs of users a Sentinel import brought in is suggested as those users (*on board: User · Entra object ID*); the preview shows them by name, and the import adds to them instead of creating new entities. Column names and what the values look like (IPs, e-mail addresses, URLs, host and file names, times) fill in the rest of the suggestion.
+- **Check, then import:** *Check import* runs every file without storing anything (rows, new and known entities, activities, evidence, the time column); *Import* runs them in the background, one after another, each with its own entry under the bell. Uploads appear as channel **Import** in the change log.
+
+Every row becomes its own evidence item with its timestamp and locator; the same operation with the same participants becomes one shared activity. Importing the same rows again creates no duplicates.
+
+**Agents and scripts:** `POST /imports/inspect` (multipart) returns the columns, sample values, matches on the board and a suggested format; `POST /imports/preview` shows what a format makes of a few rows; `GET /imports/formats` lists the formats saved in the analyst's browser (MCP `list_import_formats`); `POST /imports/table` with the rows as JSON (MCP `import_defender_rows`) and `POST /imports/file` take a `format`. The earlier endpoints `/imports/activity`, `/imports/kql` and `/imports/activities` (with `roles`) remain. All support `dry_run`.
 
 ```json
 {
   "title": "Key Vault AuditEvent 2026-09-28",
   "query": "AzureDiagnostics | where OperationName startswith \"Secret\"",
-  "rows": [{"CallerIPAddress": "203.0.113.7", "AppId": "sp-deploy-prod", "ResourceId": "kv-prod-secrets",
-            "OperationName": "SecretList", "TimeGenerated": "2026-09-28T10:42:07Z"}],
-  "roles": [{"field": "CallerIPAddress", "role": "source", "kind": "IP"},
-            {"field": "AppId", "role": "identity", "kind": "Service Principal"},
-            {"field": "ResourceId", "role": "target", "kind": "Key Vault"}],
-  "operation_field": "OperationName",
+  "rows": [{"CallerIPAddress": "203.0.113.7", "identity_claim_oid_g": "11111111-2222-3333-4444-555555555555", "Resource": "KV-PROD-SECRETS",
+            "OperationName": "SecretList", "ResultSignature": "OK", "CorrelationId": "c-1", "TimeGenerated": "2026-09-28T10:42:07Z"}],
+  "format": {
+    "name": "Key Vault diagnostics",
+    "entities": [{"column": "CallerIPAddress", "kind": "IP", "role": "source"},
+                 {"column": "identity_claim_oid_g", "kind": "User", "role": "actor", "ids": [{"column": "identity_claim_oid_g", "type": "entra-object-id"}]},
+                 {"column": "Resource", "kind": "Key Vault", "role": "target"}],
+    "operation_column": "OperationName", "time": "TimeGenerated", "locator": ["CorrelationId"],
+    "details": [{"column": "ResultSignature", "label": "result"}]
+  },
   "dry_run": true
 }
 ```
@@ -389,7 +402,7 @@ Export the results of an advanced hunting query (Defender XDR) or a Log Analytic
 - **The same thing stays one entity:** devices, accounts, files, apps and Azure resources are stored with their identifiers (DeviceId, AadDeviceId, Entra object ID, SID, SHA-256/SHA-1/MD5, app ID, resource ID, FQDN, UPN, IP) and found by them on later imports, so `j.doe` from `DeviceProcessEvents` and from `SigninLogs` is one user. A different ID under the same name (another DeviceId, another hash) creates a separate entity instead of a wrong merge.
 - **Nested JSON columns** are read too: the service principal's app ID from the token claims in `AzureActivity` (`Claims.appid`, object ID from the `Caller`), the RBAC role and error code, `LocationDetails.countryOrRegion` (country as a location entity; city, ASN and named network in the observation), and the credential a service principal signed in with (`ServicePrincipalCredentialKeyId`, thumbprint) as its own entity. A service principal first seen only by its object ID gets its display name from the next sign-in export. Evidence notes store the row with JSON columns as objects.
 - **Export quirks** are handled: the ` [UTC]` suffix and the US date format of Log Analytics exports, 7-digit fractions, JSON columns such as `DeviceDetail` or `InitiatedBy`, a byte-order mark.
-- **Not recognised?** A plain two-column log (`IPAddress` → `FilePath`) is imported as relationships as before. Anything else opens the import dialog with the columns FactGraph could guess; adjust the roles and import.
+- **Not recognised?** A plain two-column log (`IPAddress` → `FilePath`) is imported as relationships as before. Anything else opens the import dialog with a suggested mapping (see above); saved as a format, the next export of that kind imports like a built-in table.
 - **Agents and scripts:** `POST /imports/table` with the rows (MCP `import_defender_rows`), or `POST /imports/file` with `auto=true`; both support `dry_run`.
 
 The table schemas (names, columns, types; no description text) are generated from the Microsoft Learn docs via [defender-docs-mirror](https://github.com/merill/defender-docs-mirror): `python scripts/build_table_schemas.py <path to a clone>` writes `app/data/table_schemas.json`.

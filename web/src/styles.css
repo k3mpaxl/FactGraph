@@ -1165,3 +1165,68 @@ button.impact-stat { text-align: left; font: inherit; color: inherit; cursor: po
 .replaced-banner svg { color: var(--warn); flex: none }
 .replaced-banner b { color: var(--text) }
 .replaced-banner button { flex: none }
+
+/* Import dialog: files, column mapping, saved formats */
+.modal.import-modal { width: min(1000px, 100%) }
+/* The body scrolls as a whole; its parts keep their height instead of being squeezed. */
+.import-modal .modal-body > * { flex-shrink: 0 }
+.import-modal .ok { color: var(--ok) } .import-modal .warn { color: var(--warn) } .import-modal .bad { color: var(--bad) }
+.import-modal .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center }
+.file-pick { flex-direction: row; align-items: center; gap: 8px; align-self: flex-start; height: 32px; padding: 0 12px; border: 1px dashed var(--border-strong); border-radius: var(--radius); cursor: pointer; color: var(--text-2); font-weight: 550 }
+.file-pick:hover { border-color: var(--accent); color: var(--accent) }
+.file-pick input { position: absolute; width: 1px; height: 1px; opacity: 0 }
+.import-file-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; max-height: 190px; overflow: auto }
+.import-file-list li { display: grid; grid-template-columns: 1fr auto; gap: 2px 6px; align-items: center; padding: 4px 6px; border-radius: var(--radius); border: 1px solid transparent }
+.import-file-list li.active { border-color: var(--accent); background: var(--accent-soft) }
+.import-file-list li > button:first-child { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; text-align: left; min-width: 0 }
+.import-file-list .file-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100% }
+.import-file-list small { color: var(--text-3); font-size: 11.5px }
+.import-file-list li > button:first-child > span:last-child { display: inline-flex; align-items: center; gap: 4px; font-size: 12px }
+.import-file-list .check-result { grid-column: 1 / -1; padding-left: 2px }
+.mapping { display: flex; flex-direction: column; gap: 12px; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface-2) }
+.mapping-head { display: grid; grid-template-columns: minmax(200px, 1fr) minmax(200px, 1fr); gap: 12px }
+.builtin-summary { display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; color: var(--text-2) }
+.builtin-summary ul { margin: 0; padding-left: 18px; columns: 2; font-size: 12px }
+.builtin-summary .text-button { align-self: flex-start }
+.column-table { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); max-height: 360px; overflow: auto }
+.column-row { display: grid; grid-template-columns: minmax(130px, 1fr) minmax(110px, 1fr) 150px minmax(320px, 2.2fr); gap: 8px; align-items: center; padding: 5px 8px; border-bottom: 1px solid var(--border); font-size: 12.5px }
+.column-row:last-child { border-bottom: 0 }
+.column-row.head { position: sticky; top: 0; z-index: 1; background: var(--surface); font-size: 11px; font-weight: 600; color: var(--text-3); text-transform: uppercase; letter-spacing: .04em }
+.column-row.unused .column-name code, .column-row.unused .column-samples { color: var(--text-3) }
+.column-name { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; min-width: 0 }
+.column-name code { overflow-wrap: anywhere }
+.column-name small { color: var(--text-3); font-size: 11px }
+.known-badge { font-size: 10.5px; padding: 0 5px; border-radius: 999px; background: var(--ok-soft); color: var(--ok); font-weight: 600; cursor: help }
+.type-badge { font-size: 10.5px; padding: 0 5px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-weight: 600 }
+.column-samples { color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); font-size: 11.5px }
+.column-row select, .column-row input { height: 28px; width: 100% }
+.column-extra { display: flex; gap: 6px; align-items: center; min-width: 0 }
+.column-extra > * { flex: 1 1 0; min-width: 0 }
+.column-extra .role-fixed, .column-extra small { flex: 0 1 auto }
+.role-fixed { font-size: 12px; font-weight: 600; color: var(--text-2); padding: 0 6px }
+.import-preview.live { background: var(--surface) ; border: 1px solid var(--border) }
+.preview-rows { list-style: none; margin: 4px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px }
+.preview-rows li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; padding: 4px 0; border-bottom: 1px dashed var(--border) }
+.preview-rows li:last-child { border-bottom: 0 }
+.preview-rows li.skipped { opacity: .7 }
+.preview-time { font-family: var(--mono); font-size: 11.5px; color: var(--text-3) }
+.preview-op { font-weight: 650 }
+.preview-parts { display: inline-flex; flex-wrap: wrap; gap: 4px }
+.preview-part { padding: 1px 6px; border-radius: 999px; background: var(--surface-2); border: 1px solid var(--border) }
+.preview-part small { color: var(--text-3) }
+.preview-part.known { border-color: var(--ok); }
+.check.remember { white-space: normal; flex-wrap: wrap }
+.check.remember small { flex-basis: 100%; padding-left: 22px; font-weight: 400 }
+.saved-formats summary { cursor: pointer; font-weight: 600; font-size: 12.5px; color: var(--text-2) }
+.saved-formats ul { list-style: none; margin: 8px 0; padding: 0; display: flex; flex-direction: column; gap: 2px }
+.saved-formats li { display: flex; align-items: center; gap: 4px; font-size: 12.5px }
+.saved-formats li > span { flex: 1; min-width: 0 }
+.import-modal .modal-actions { align-items: center }
+.import-modal .modal-actions .hint { margin-right: auto }
+@media (max-width: 760px) {
+  .mapping-head { grid-template-columns: 1fr }
+  .column-row { grid-template-columns: 1fr 1fr; }
+  .column-row.head { display: none }
+  .column-extra { grid-column: 1 / -1 }
+  .builtin-summary ul { columns: 1 }
+}

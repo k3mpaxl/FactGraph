@@ -179,13 +179,15 @@ test('layout: compact header and viewport on desktop/mobile, import file preview
   expect((await page.locator('.compact-header').boundingBox())!.height).toBeLessThanOrEqual(40)
   expect((await stage.boundingBox())!.height).toBeGreaterThanOrEqual(675)
   await page.getByLabel('Board menu').click()
-  await page.getByRole('button',{name:'Import logs / KQL',exact:true}).click()
-  const dialog=page.getByRole('dialog',{name:'Import activity logs'})
-  await dialog.getByLabel(/^Files/).setInputFiles({name:'access.csv',mimeType:'text/csv',buffer:Buffer.from('IPAddress,FilePath,TimeGenerated\n10.0.0.5,repo/.env,2026-09-28T10:00:00Z')})
-  await dialog.getByRole('button',{name:'Preview import'}).click()
-  await expect(dialog.getByText('Preview · no changes saved yet')).toBeVisible()
+  await page.getByRole('button',{name:'Import logs and exports',exact:true}).click()
+  const dialog=page.getByRole('dialog',{name:'Import logs and exports'})
+  await dialog.getByLabel('Files',{exact:true}).setInputFiles({name:'access.csv',mimeType:'text/csv',buffer:Buffer.from('IPAddress,FilePath,TimeGenerated\n10.0.0.5,repo/.env,2026-09-28T10:00:00Z')})
+  // The classic two-column log is a built-in format; checking stores nothing yet.
+  await expect(dialog.getByLabel('Files to import').getByText('Built-in: Log rows')).toBeVisible()
+  await dialog.getByRole('button',{name:'Check import'}).click()
+  await expect(dialog.locator('.check-result')).toContainText('1 rows')
   expect((await graph()).entities).toHaveLength(0)
-  await dialog.getByRole('button',{name:'Apply import'}).click()
+  await dialog.getByRole('button',{name:'Import',exact:true}).click()
   await expect(dialog).not.toBeVisible()
   // The import continues in the background and reports in the notifications.
   await expect.poll(async()=> (await graph()).entities.length).toBe(2)
@@ -194,7 +196,7 @@ test('layout: compact header and viewport on desktop/mobile, import file preview
   await page.setViewportSize({width:390,height:844})
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true)
   await page.getByLabel('Board menu').click()
-  await expect(page.getByRole('button',{name:'Import logs / KQL',exact:true})).toBeVisible()
+  await expect(page.getByRole('button',{name:'Import logs and exports',exact:true})).toBeVisible()
 })
 
 test('layout preserves pinned positions; browser back navigates views without undoing data',async({page,request})=>{
@@ -697,14 +699,14 @@ test('notifications: agent writes, several log files in a queue, remembered view
   await page.getByRole('tab',{name:'Graph'}).click()
   // Two log files at once: previewed together, imported one after another, each with its own notification.
   await page.getByLabel('Board menu').click()
-  await page.getByRole('button',{name:'Import logs / KQL',exact:true}).click()
-  const dialog=page.getByRole('dialog',{name:'Import activity logs'})
-  await dialog.getByLabel(/^Files/).setInputFiles([
+  await page.getByRole('button',{name:'Import logs and exports',exact:true}).click()
+  const dialog=page.getByRole('dialog',{name:'Import logs and exports'})
+  await dialog.getByLabel('Files',{exact:true}).setInputFiles([
     {name:'day1.csv',mimeType:'text/csv',buffer:Buffer.from('IPAddress,FilePath,TimeGenerated\n10.0.0.5,repo/.env,2026-09-28T10:00:00Z')},
     {name:'day2.csv',mimeType:'text/csv',buffer:Buffer.from('IPAddress,FilePath,TimeGenerated\n10.0.0.6,repo/secrets.yml,2026-09-29T10:00:00Z')},
   ])
-  await dialog.getByRole('button',{name:'Preview import'}).click()
-  await expect(dialog.getByText('2 of 2 files')).toBeVisible()
+  await dialog.getByRole('button',{name:'Check 2 files'}).click()
+  await expect(dialog.locator('.check-result')).toHaveCount(2)
   await dialog.getByRole('button',{name:'Import 2 files'}).click()
   await expect(dialog).not.toBeVisible()
   await expect.poll(async()=> (await graph()).entities.length).toBe(6)
@@ -760,19 +762,44 @@ test('drop: Defender XDR and Sentinel exports are recognised, mapped and joined 
   await expect(page.getByRole('dialog',{name:'Notifications'}).locator('.notice.done').filter({hasText:'DeviceNetworkEvents (Defender XDR)'})).toBeVisible()
   await expect(page.getByRole('dialog',{name:'Notifications'}).locator('.notice.done').filter({hasText:'SigninLogs (Sentinel)'})).toBeVisible()
   await page.keyboard.press('Escape')
-  // An unknown export: no automatic import, the mapping dialog opens with the columns it could guess.
+  // An unknown export: no automatic import. The dialog lists its columns with what FactGraph guessed from names and values;
+  // the analyst completes the mapping once and it is saved as a format.
   await drop([{name:'proxy.csv',text:'when,ClientIP,UserPrincipalName,Operation,Workload\n2026-09-28T10:00:00Z,198.51.100.9,eve@corp.example,FileDownloaded,SharePoint'}])
-  const dialog=page.getByRole('dialog',{name:'Import activity logs'})
+  const dialog=page.getByRole('dialog',{name:'Import logs and exports'})
   await expect(dialog).toBeVisible()
-  await expect(dialog.getByLabel('Column 1')).toHaveValue('UserPrincipalName')
-  await expect(dialog.getByLabel('Column 2')).toHaveValue('ClientIP')
-  await dialog.getByRole('button',{name:'Add column'}).click()
-  await dialog.getByLabel('Column 3').fill('Workload')
-  await dialog.getByLabel('Role 3').selectOption('target')
-  await dialog.getByLabel('Type 3').fill('Service')
-  await dialog.getByRole('button',{name:'Preview import'}).click()
-  await dialog.getByRole('button',{name:'Apply import'}).click()
-  await expect.poll(async()=>(await graph()).facts.some((f:any)=>f.predicate==='FileDownloaded'),{timeout:15000}).toBe(true)
+  await expect(dialog.getByLabel('Use of UserPrincipalName')).toHaveValue('entity')
+  await expect(dialog.getByLabel('Type of UserPrincipalName')).toHaveValue('User')
+  await expect(dialog.getByLabel('Use of ClientIP')).toHaveValue('entity')
+  await expect(dialog.getByLabel('Use of when')).toHaveValue('time')
+  await expect(dialog.getByLabel('Use of Operation')).toHaveValue('operation')
+  await dialog.getByLabel('Use of Workload').selectOption('entity')
+  await dialog.getByLabel('Type of Workload').fill('Service')
+  await dialog.getByLabel('Role of Workload').selectOption('target')
+  await dialog.getByLabel('Format name').fill('Proxy downloads')
+  // The live preview shows the row as it will arrive.
+  await expect(dialog.locator('.preview-rows li').first()).toContainText('file downloaded')
+  await expect(dialog.locator('.preview-rows li').first()).toContainText('SharePoint')
+  await dialog.getByRole('button',{name:'Check import'}).click()
+  await dialog.getByRole('button',{name:'Import',exact:true}).click()
+  await expect.poll(async()=>(await graph()).facts.some((f:any)=>f.predicate==='file downloaded' && f.participants.length===3),{timeout:15000}).toBe(true)
+  // The next export of the same kind (other order, one column more) is recognised by the saved format: no dialog.
+  await drop([{name:'proxy-2.csv',text:'Workload,when,UserPrincipalName,ClientIP,Operation,Bytes\nOneDrive,2026-09-29T08:00:00Z,eve@corp.example,198.51.100.9,FileUploaded,10'}])
+  await expect.poll(async()=>(await graph()).facts.some((f:any)=>f.predicate==='file uploaded'),{timeout:15000}).toBe(true)
+  await expect(dialog).toHaveCount(0)
+  // Values the board already knows: the object ID from the SigninLogs export above is recognised as that user.
+  await drop([{name:'vault.csv',text:'ts,caller_oid,verb,vault\n2026-09-28T11:00:00Z,11111111-2222-3333-4444-555555555555,SecretGet,kv-prod'}])
+  await expect(dialog.getByLabel('Use of caller_oid')).toHaveValue('entity')
+  await expect(dialog.getByLabel('Type of caller_oid')).toHaveValue('User')
+  await expect(dialog.getByLabel('Value of caller_oid')).toHaveValue('entra-object-id|')
+  await expect(dialog.getByText('on board: User · Entra object ID')).toBeVisible()
+  await dialog.getByLabel('Use of vault').selectOption('entity')
+  await dialog.getByLabel('Type of vault').fill('Key Vault')
+  await expect(dialog.locator('.preview-rows li').first()).toContainText('j.doe@corp.example')
+  await dialog.getByRole('button',{name:'Check import'}).click()
+  await expect(dialog.locator('.check-result')).toContainText('1 new of 2 entities')
+  await dialog.getByRole('button',{name:'Import',exact:true}).click()
+  await expect.poll(async()=>(await graph()).facts.some((f:any)=>f.predicate==='secret get'),{timeout:15000}).toBe(true)
+  expect((await graph()).entities.filter((e:any)=>e.kind==='User'&&e.name.startsWith('j.doe'))).toHaveLength(1)
 })
 
 test('large payloads: 9 MiB source and evidence keep lists small, records complete, sync intact (REST and MCP)',async({page,browser,request})=>{

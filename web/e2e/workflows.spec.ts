@@ -439,7 +439,7 @@ test('large boards: the entity picker tells same-named files apart; merge shows 
 
 test('trust: a file upload with the shared token is not the analyst\'s import; the UI\'s own upload is',async({page,request})=>{
   const {id,token,graph}=await setup(page,request)
-  // An agent (or script) holding the session token posts a file to the import endpoint.
+  // An agent (or script) holding the board token posts a file to the import endpoint.
   const csv='IPAddress,FilePath,TimeGenerated\n198.51.100.9,/srv/app/.env,2026-09-28T10:00:00Z\n'
   const response=await request.fetch(`${base}/api/boards/${id}/imports/file`,{method:'POST',headers:{'X-FactGraph-Token':token},multipart:{file:{name:'agent.csv',mimeType:'text/csv',buffer:Buffer.from(csv)},title:'Agent rows'}})
   expect(response.ok(),await response.text()).toBeTruthy()
@@ -598,7 +598,9 @@ test('first visit asks for a name; help explains browser storage; agent snippets
   await expect(connect.locator('pre').nth(1)).toContainText("--scope project")
   await expect(connect.locator('pre').nth(1)).toContainText("'X-FactGraph-Token: ${FACTGRAPH_TOKEN}'")
   await expect(connect.locator('pre').nth(1)).not.toContainText(token)
-  await expect(connect.getByText(`Board ID: ${id}`)).toBeVisible()
+  // The token names the board: the suggested first message needs no board ID.
+  await expect(connect.getByText('connected to my board through my board token')).toBeVisible()
+  await expect(connect.getByText(`Board ID: ${id}`)).toHaveCount(0)
   await context.close()
 })
 
@@ -689,11 +691,15 @@ test('notifications: agent writes, several log files in a queue, remembered view
   await expect(bell.locator('.notifications-badge')).toBeVisible()
   await bell.click()
   const panel=page.getByRole('dialog',{name:'Notifications'})
-  // The agent's three MCP calls are one notice; the REST call is another client.
-  const mcpNotice=panel.locator('.notice').filter({hasText:'Agent via MCP changed the board'})
+  // The agent's three MCP calls are one notice; the REST call is another client. Both used this analyst's board token.
+  const mcpNotice=panel.locator('.notice').filter({hasText:'Agent via MCP (Test analyst) changed the board'})
   await expect(mcpNotice).toHaveCount(1)
   await expect(mcpNotice).toContainText('1 entity, 1 relationship, 1 new evidence item')
-  await expect(panel.locator('.notice').filter({hasText:'Agent via REST changed the board'})).toHaveCount(1)
+  await expect(panel.locator('.notice').filter({hasText:'Agent via REST (Test analyst) changed the board'})).toHaveCount(1)
+  expect((await graph()).entities.length).toBeGreaterThan(0)
+  const authors=await page.evaluate(async()=>{const id=location.pathname.split('/').pop();const db:any=await new Promise(r=>{const q=indexedDB.open('factgraph-browser');q.onsuccess=()=>r(q.result)})
+    const all:any[]=await new Promise(r=>{const q=db.transaction('actions').objectStore('actions').index('byBoard').getAll(id);q.onsuccess=()=>r(q.result)});return [...new Set(all.filter(a=>a.channel==='MCP'||a.channel==='REST').map(a=>a.author))]})
+  expect(authors.sort()).toEqual(['MCP (Test analyst)','REST (Test analyst)'])
   await panel.getByRole('button',{name:'Review'}).first().click()
   await expect(page.getByRole('tab',{name:/Evidence review/})).toHaveAttribute('aria-selected','true')
   await page.getByRole('tab',{name:'Graph'}).click()

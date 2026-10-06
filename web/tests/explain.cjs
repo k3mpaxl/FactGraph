@@ -34,7 +34,7 @@ console.log('Explanations: truth reasons match the projection, glossary complete
 // The original row: which column the event time came from; key fields first; who confirmed what.
 {
   const { timeSourceOf, orderedKeys } = require(dir + '/rows.js')
-  const { reviewKind, reviewText, addedText, reviewCounts } = require(dir + '/provenance.js')
+  const { reviewKind, reviewText, addedText, reviewCounts, onBehalf } = require(dir + '/provenance.js')
   const row = { TenantId: 't', CreatedDateTime: '2026-09-17T08:00:03.000Z', TimeGenerated: '2026-09-17T08:00:05.123Z', OperationName: 'Sign-in', IPAddress: '192.0.2.5', Empty: '' }
   assert.equal(timeSourceOf(row, '2026-09-17T08:00:05.123Z'), 'TimeGenerated')
   assert.equal(timeSourceOf(row, '2026-09-17T08:00:03.000Z'), 'CreatedDateTime')
@@ -48,7 +48,16 @@ console.log('Explanations: truth reasons match the projection, glossary complete
   assert.match(reviewText({ ...base, review_kind: 'agent', reviewer_name: 'Claude' }), /not checked by an analyst/)
   assert.equal(reviewText({ ...base, review_kind: 'analyst', reviewer_name: 'Jo' }), 'Reviewed by Jo')
   assert.equal(addedText({ created_by: 'Claude', created_via: 'MCP' }), 'Claude via MCP')
-  assert.equal(addedText({ created_by: 'Import', created_via: 'MCP' }), 'An agent via MCP (import)')
+  assert.equal(addedText({ created_by: 'Import', created_via: 'MCP' }), 'Import by an agent via MCP')
+  // The analyst whose board token the agent used.
+  assert.equal(addedText({ created_by: 'MCP (Gregor)', created_via: 'MCP' }), 'Agent via MCP (Gregor)')
+  assert.equal(addedText({ created_by: 'Claude (Gregor)', created_via: 'MCP' }), 'Claude via MCP (Gregor)')
+  assert.equal(addedText({ created_by: 'Import (Gregor)', created_via: 'REST' }), 'Import by an agent via REST (Gregor)')
+  assert.equal(reviewText({ review_status: 'confirmed', review_kind: 'agent', reviewer_name: 'REST (Gregor)' }), 'Confirmed by an agent via REST (Gregor), not checked by an analyst')
+  assert.equal(reviewText({ review_status: 'confirmed', review_kind: 'agent', reviewer_name: null }), 'Confirmed by an agent via REST/MCP, not checked by an analyst')
+  assert.equal(onBehalf('MCP', 'MCP', 'Gregor'), 'MCP (Gregor)')
+  assert.equal(onBehalf('API', 'REST', 'Gregor'), 'REST (Gregor)')
+  assert.equal(onBehalf('Claude (Gregor)', 'MCP', 'Gregor'), 'Claude (Gregor)', 'never twice')
   assert.equal(addedText({ created_by: 'Import', created_via: 'Import' }), 'File import by an analyst')
   assert.deepEqual(reviewCounts([{ ...base, review_kind: 'import' }, { ...base, review_status: 'unconfirmed' }, { ...base, review_kind: 'analyst' }]), { import: 1, analyst: 1, agent: 0, open: 1 })
   console.log('Original rows: event time column, field order; evidence provenance passed')

@@ -73,6 +73,9 @@ class AgentGuidance(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(by_name['find_entities'].annotations.readOnlyHint)
         self.assertTrue(by_name['delete_entity'].annotations.destructiveHint)
         self.assertIn('role', json.dumps(by_name['create_activity'].input_schema))
+        # The board token names the board: agents are never asked for a board ID.
+        self.assertFalse([t.name for t in tools if 'board_id' in t.input_schema.get('properties', {})])
+        self.assertFalse([t.name for t in tools if 'board_id' in (t.input_schema.get('required') or [])])
 
     async def test_full_profile_describes_every_tool(self):
         set_mcp_tool_profile('full')
@@ -88,5 +91,5 @@ class AgentGuidance(unittest.IsolatedAsyncioTestCase):
 
     def test_instructions_cover_workflow(self):
         from app.main import MCP_INSTRUCTIONS
-        for phrase in ('find_entities', 'create_activity', 'unconfirmed', 'review_evidence', 'review_note', 'create_group', 'dry_run', 'session_token', '409', 'FACTGRAPH_MCP_TOOLS'):
+        for phrase in ('find_entities', 'create_activity', 'unconfirmed', 'review_evidence', 'review_note', 'create_group', 'dry_run', 'board_token', '409', 'FACTGRAPH_MCP_TOOLS'):
             self.assertIn(phrase, MCP_INSTRUCTIONS)

@@ -90,7 +90,7 @@ FactGraph is meant to be spun up during an incident, often in a hurry and someti
 
 **Access**
 - The board ID in the URL is a random UUID (122 bits) and acts as the board's access key. Treat a board link like a password and share it only through a trusted channel.
-- REST and MCP need the **session token** of a browser tab that has the board open. Tokens are random per tab, only valid while that tab is connected, accepted **only in the `X-FactGraph-Token` header** (never in URLs, so they do not end up in proxy or platform logs) and compared in constant time.
+- REST and MCP need the **board token** of a browser tab that has the board open. Tokens are random per tab and board, only valid while that tab is connected, accepted **only in the `X-FactGraph-Token` header** (never in URLs, so they do not end up in proxy or platform logs) and compared in constant time.
 - The WebSocket relay accepts browsers only from pages served by FactGraph itself (Origin check against cross-site WebSocket hijacking). Identity and token are sent in the first message, not in the connection URL.
 
 **Browser hardening (HTTP headers)**
@@ -108,9 +108,9 @@ FactGraph is meant to be spun up during an incident, often in a hurry and someti
 **What it does not do**
 - There is no user authentication. Anyone with network access and a board link has full access to that board, so restrict network access to the response team.
 - Board data lives in the analysts' browsers (IndexedDB). Use trusted devices, and remember that exported JSON files contain the full investigation.
-- A session token proves that a browser tab has the board open, not that a human reviewed something. Technically enforced human approval would require separate permissions.
+- A board token proves that a browser tab has the board open, not that a human reviewed something. Technically enforced human approval would require separate permissions.
 - Provenance labels (*parsed by the import*, *reviewed by …*, *confirmed by an agent*, who marked a compromise) are recorded by the browsers, not signed. Anyone with the board link can connect to the relay and write actions with any author or channel, so treat these labels as reliable within a trusted team, not as proof against a hostile participant. The relay operator can also see board content in transit (it stores none).
-- Agents share the tab's session token. Only the tab that started a file upload treats its rows as the analyst's own import; the same upload by anything else (an agent, a script) is handled like any other REST write, so its evidence starts unconfirmed.
+- Agents share the tab's board token, and their changes are recorded as that analyst's agent ("MCP (Gregor)"). Only the tab that started a file upload treats its rows as the analyst's own import; the same upload by anything else (an agent, a script) is handled like any other REST write, so its evidence starts unconfirmed.
 - **Remove board from this browser** (board menu) deletes a board's data from this browser's storage; colleagues keep their copies.
 
 ## Deploying on Azure App Service
@@ -286,14 +286,14 @@ In the graph, failed attempts are hidden by default and locations show as a flag
 
 ## Connecting AI agents (MCP and REST)
 
-When a board is opened, the browser creates a random **session token**. REST and MCP expect it in the `X-FactGraph-Token` header (MCP also accepts the `session_token` parameter). The token binds calls to this browser tab; it is not a user account. A new tab or browser creates a new token.
+When a board is opened, the browser creates a random **board token**: one per tab and board, valid while that tab has the board open (reloads keep it). REST and MCP expect it in the `X-FactGraph-Token` header (MCP also accepts the `board_token` parameter; the former name `session_token` still works). The token binds calls to this browser tab and its analyst; it is not a user account. A new tab or browser creates a new token. Changes an agent makes with your token are recorded as yours: the change log, notifications and evidence show *MCP (Gregor)* or *REST (Gregor)*, or the agent's own name, e.g. *Claude (Gregor)*.
 
 **Connect an agent** (API/MCP menu or command palette) provides ready-to-copy snippets:
 
 - `.vscode/mcp.json` for VS Code / GitHub Copilot. By default VS Code asks for the token when the server starts, so the file can be committed; optionally with the token embedded.
 - Two commands for Claude Code: one with the token for your own configuration, and one with `--scope project` that stores the placeholder `${FACTGRAPH_TOKEN}` in `.mcp.json` (safe to commit; each analyst exports the variable).
 - Endpoint, header, a paginated REST example (`/entities?q=…&limit=50`) and what the error codes mean for other clients.
-- A first message for the agent containing the board ID; it asks the agent to look things up with `find_entities` instead of reading the whole board.
+- A first message for the agent; it asks the agent to look things up with `find_entities` instead of reading the whole board. No board ID is needed: the token names the board.
 
 ![Connect an agent](docs/images/connect-agent.png)
 
@@ -302,6 +302,8 @@ The repository also contains [.vscode/mcp.json](.vscode/mcp.json); in VS Code ru
 ### MCP tools
 
 By default the server exposes a **compact agent profile with 27 tools** (about 9,700 tokens of tool descriptions). Fewer tools mean less context usage and better tool choice.
+
+The board token in the `X-FactGraph-Token` header names the board (every browser tab makes its own token for each board), so agent tools take no board ID and agents never need to ask for one. A `board_id` passed anyway is accepted and must match the token. Clients that cannot send headers pass `board_token` in each call; the full profile also shows `board_id` as an optional parameter.
 
 | Task | MCP tool | REST (relative to `/api/boards/{id}`) |
 | --- | --- | --- |
@@ -326,7 +328,7 @@ On connect the server sends binding **working rules** to the agent (also availab
 ### REST examples
 
 ```bash
-TOKEN=...   # from "Connect an agent" or "Copy session token"
+TOKEN=...   # board token, from "Connect an agent" or "Copy board token"
 BOARD=...   # board UUID
 
 curl -X POST "http://127.0.0.1:8080/api/boards/$BOARD/entities" \
@@ -342,16 +344,15 @@ curl -X POST "http://127.0.0.1:8080/api/boards/$BOARD/activities" \
        "observation":"SecretList from 203.0.113.7 as sp-deploy-prod","locator":"CorrelationId=7f3a"}'
 ```
 
-Python with FastMCP:
+Python with FastMCP (the token in the header names the board):
 
 ```python
 from fastmcp import Client
+from fastmcp.client.transports import StreamableHttpTransport
 
-async with Client("http://127.0.0.1:8080/mcp/") as client:
-    result = await client.call_tool("create_entity", {
-        "board_id": "BOARD_UUID", "session_token": "TOKEN",
-        "body": {"name": "Azure credential", "kind": "Credential"},
-    })
+transport = StreamableHttpTransport("http://127.0.0.1:8080/mcp/", headers={"X-FactGraph-Token": "TOKEN"})
+async with Client(transport) as client:
+    result = await client.call_tool("create_entity", {"body": {"name": "Azure credential", "kind": "Credential"}})
     print(result.data)
 ```
 

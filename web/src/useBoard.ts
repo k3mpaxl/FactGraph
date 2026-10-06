@@ -7,6 +7,7 @@ import { placeNew } from './layout'
 import { actionChunks, messageParts, queryRecords, COMPRESS_ABOVE, COMPRESSED_RAW_LIMIT, RELAY_LIMIT, gzipText, packFrame, unpackFrame } from './query'
 import { uuid } from './uuid'
 import { trustedDrafts } from './importBatches'
+import { onBehalf } from './provenance'
 import { actorTaken, freshIdentity, holdActor, releaseActor, storedIdentity } from './identity'
 import { isSummary, summarize, syncPlan } from './sync'
 import { validateDrafts } from './validation'
@@ -213,14 +214,16 @@ export function useBoard(boardId: string, listener?: ChangeListener) {
   const undo = useCallback(async (scope: UndoScope = 'analyst') => {
     const targets = undoTargets(actionsRef.current, actor, scope)
     if (!targets) return false
-    await emitMany([{ type: 'action.undo', payload: { action_ids: targets.map(item => item.id) }, channel: scope === 'agent' ? 'REST' : 'UI' }])
+    await emitMany([{ type: 'action.undo', payload: { action_ids: targets.map(item => item.id) }, channel: scope === 'agent' ? 'REST' : 'UI',
+      ...(scope === 'agent' ? { author: onBehalf(null, 'REST', nameRef.current) } : {}) }])
     return true
   }, [actor, emitMany])
 
   const redo = useCallback(async (scope: UndoScope = 'analyst') => {
     const target = redoTarget(actionsRef.current, actor, scope)
     if (!target) return false
-    await emitMany([{ type: 'action.redo', payload: target.payload, channel: scope === 'agent' ? 'REST' : 'UI' }])
+    await emitMany([{ type: 'action.redo', payload: target.payload, channel: scope === 'agent' ? 'REST' : 'UI',
+      ...(scope === 'agent' ? { author: onBehalf(null, 'REST', nameRef.current) } : {}) }])
     return true
   }, [actor, emitMany])
 
@@ -350,7 +353,10 @@ export function useBoard(boardId: string, listener?: ChangeListener) {
                 } })
               } else if (message.operation === 'apply' && Array.isArray(message.drafts) &&
                          message.drafts.length <= 200 && message.drafts.every(isDraft)) {
-                const accepted = await emitMany(trustedDrafts(message.drafts), message.deferRender === true)
+                // An agent works with this tab's board token: its changes are recorded as "MCP (Gregor)", "Claude (Gregor)".
+                const drafts = trustedDrafts(message.drafts).map(draft => draft.channel === 'MCP' || draft.channel === 'REST'
+                  ? { ...draft, author: onBehalf(draft.author, draft.channel, nameRef.current) } : draft)
+                const accepted = await emitMany(drafts, message.deferRender === true)
                 reply(requestId, { ok: true, accepted })
               } else reply(requestId, { ok: false, error: 'Invalid API request' })
             } catch (error) {

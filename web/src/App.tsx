@@ -816,19 +816,20 @@ function HelpDialog({ boardCount, onExport, onClose, initialTab = 'data' }: { bo
 
 type AgentClient = 'vscode' | 'claude' | 'other'
 /** Copy-ready MCP/REST configuration for this board, including the token header. */
-function AgentConnectDialog({ boardId, token, onCopy, onClose }: { boardId: string; token: string; onCopy: (value: string, label: string) => void; onClose: () => void }) {
+function AgentConnectDialog({ boardId, token, name, onCopy, onClose }: { boardId: string; token: string; name: string; onCopy: (value: string, label: string) => void; onClose: () => void }) {
   const [client, setClient] = useState<AgentClient>('vscode')
   const [embed, setEmbed] = useState(false)
   const origin = window.location.origin
   const mcpUrl = `${origin}/mcp/`
   const vscode = JSON.stringify(embed
     ? { servers: { factgraph: { type: 'http', url: mcpUrl, headers: { 'X-FactGraph-Token': token } } } }
-    : { inputs: [{ type: 'promptString', id: 'factgraph-token', description: 'FactGraph session token (header: plug icon → Copy session token)', password: true }],
+    : { inputs: [{ type: 'promptString', id: 'factgraph-token', description: 'FactGraph board token (plug icon → Copy board token)', password: true }],
         servers: { factgraph: { type: 'http', url: mcpUrl, headers: { 'X-FactGraph-Token': '${input:factgraph-token}' } } } }, null, 2)
   const claude = `claude mcp add --transport http factgraph ${mcpUrl} --header "X-FactGraph-Token: ${token}"`
   // Single quotes keep the variable unexpanded: .mcp.json stores the placeholder and Claude Code reads the token at start.
   const claudeShared = `claude mcp add --scope project --transport http factgraph ${mcpUrl} --header 'X-FactGraph-Token: \${FACTGRAPH_TOKEN}'`
-  const prompt = `Use the FactGraph MCP server for this investigation. Board ID: ${boardId}. Before adding anything, look up what exists with find_entities (q = a name or identifier, paginate with offset/limit) and get_impact; read the whole board with get_graph only when it is small.`
+  // The token in the MCP configuration names the board: the prompt needs no board ID.
+  const prompt = `Use the FactGraph MCP server for this investigation; it is connected to my board through my board token. Before adding anything, look up what exists with find_entities (q = a name or identifier, paginate with offset/limit) and get_impact; read the whole board with get_graph only when it is small.`
   // A targeted, paginated read: large boards are thousands of records, a full graph read is megabytes.
   const curl = `curl -s "${origin}/api/boards/${boardId}/entities?q=203.0.113.7&limit=50" -H "X-FactGraph-Token: ${token}"`
   const Snippet = ({ label, value, hint }: { label: string; value: string; hint?: string }) => <div className="snippet">
@@ -841,10 +842,11 @@ function AgentConnectDialog({ boardId, token, onCopy, onClose }: { boardId: stri
         {([['vscode', 'VS Code / Copilot'], ['claude', 'Claude Code'], ['other', 'Other / REST']] as [AgentClient, string][]).map(([id, label]) =>
           <button key={id} role="tab" aria-selected={client === id} className={client === id ? 'active' : ''} onClick={() => setClient(id)}>{label}</button>)}</div></div>
       <div className="modal-body">
+        <p className="hint">Your <b>board token</b> connects an agent to this board as you: it is valid while this tab has the board open, a colleague has their own, and the agent needs no board ID. Its changes appear as yours, for example “MCP ({name})”.</p>
         {client === 'vscode' && <>
           <Snippet label=".vscode/mcp.json" value={vscode} hint={embed ? 'Contains this session’s token — do not commit it.' : 'VS Code asks for the token when the server starts, so the file can be committed.'} />
           <label className="check"><input type="checkbox" checked={embed} onChange={e => setEmbed(e.target.checked)} /> Put the token into the file instead of asking</label>
-          <Snippet label="Token" value={token} hint="Paste it when VS Code asks for “FactGraph session token”." />
+          <Snippet label="Token" value={token} hint="Paste it when VS Code asks for “FactGraph board token”." />
           <p className="hint">Then run <strong>MCP: List Servers</strong> → factgraph → Start, and pick the FactGraph tools in the agent tool picker.</p>
         </>}
         {client === 'claude' && <>
@@ -854,12 +856,12 @@ function AgentConnectDialog({ boardId, token, onCopy, onClose }: { boardId: stri
         </>}
         {client === 'other' && <>
           <Snippet label="MCP endpoint (Streamable HTTP)" value={mcpUrl} />
-          <Snippet label="Header" value={`X-FactGraph-Token: ${token}`} hint="Or pass session_token in every tool call." />
+          <Snippet label="Header" value={`X-FactGraph-Token: ${token}`} hint="The token names this board: MCP tools need no board ID. Clients that cannot send headers pass board_token in every tool call." />
           <Snippet label="REST example: find an entity" value={curl} hint="Lists are paginated (offset, limit up to 1000) and searched with q; the same for /relations, /activities, /sources. Full reference under /docs." />
           <div className="agent-errors"><strong>When a call fails</strong><dl>
-            <dt>401 / 403</dt><dd>Token missing or wrong: copy it again (plug icon → Copy session token). It changes when this tab is reloaded in a new session.</dd>
+            <dt>401 / 403</dt><dd>Token missing or wrong: copy it again (plug icon → Copy board token). A new tab or browser has its own token.</dd>
             <dt>404</dt><dd>Wrong board ID, or the record no longer exists: list again with q.</dd>
-            <dt>409 “Board offline”</dt><dd>No browser has the board open: the data lives in browsers, keep this tab open while agents work.</dd>
+            <dt>409 “Board offline”, “No open board for this board token”</dt><dd>No browser has the board open, or not this tab: the data lives in browsers, keep this tab open while agents work.</dd>
             <dt>409 “changed”</dt><dd>Someone changed the record meanwhile: read it again and retry with the new revision.</dd>
             <dt>503</dt><dd>The browser connection dropped during the call: retry; repeated IDs are not stored twice.</dd></dl></div>
         </>}
@@ -1457,7 +1459,7 @@ export default function App() {
       { id: 'b-export', group: 'Board', label: 'Export board JSON', icon: <ArrowDownToLine size={15} />, run: download },
       { id: 'b-import', group: 'Board', label: 'Import board JSON…', icon: <Upload size={15} />, run: () => importInput.current?.click() },
       { id: 'b-link', group: 'Board', label: 'Copy board link', icon: <Copy size={15} />, run: () => void copyValue(window.location.href, 'Board link') },
-      { id: 'b-token', group: 'Board', label: 'Copy session token (REST + MCP)', icon: <Plug size={15} />, run: () => void copyValue(board.sessionToken, 'Session token') },
+      { id: 'b-token', group: 'Board', label: 'Copy board token (REST + MCP)', icon: <Plug size={15} />, run: () => void copyValue(board.sessionToken, 'Session token') },
       { id: 'b-connect', group: 'Board', label: 'Connect an agent (VS Code, Claude Code)…', icon: <Plug size={15} />, run: () => setShowConnect(true) },
       { id: 'b-help', group: 'Board', label: 'Keyboard & mouse controls', hint: '?', icon: <Keyboard size={15} />, run: () => setShowHelp('keys') },
       { id: 'b-glossary', group: 'Board', label: 'Glossary: status, evidence, review…', icon: <CircleHelp size={15} />, run: () => setShowHelp('glossary') },
@@ -1536,7 +1538,7 @@ export default function App() {
           <button onClick={() => setShowConnect(true)}><Plug size={14} /> Connect an agent…</button>
           <button onClick={() => void copyValue(mcpEndpoint, 'MCP endpoint')}><Copy size={14} /> Copy MCP endpoint</button>
           <button onClick={() => void copyValue(`${window.location.origin}/api/boards/${boardId}`, 'REST endpoint')}><Copy size={14} /> Copy REST board endpoint</button>
-          <button onClick={() => void copyValue(board.sessionToken, 'Session token')}><Copy size={14} /> Copy session token</button>
+          <button onClick={() => void copyValue(board.sessionToken, 'Board token')}><Copy size={14} /> Copy board token</button>
           <a href={restDocsEndpoint} target="_blank" rel="noreferrer"><FileText size={14} /> REST documentation</a>
           <p className="menu-note">Same token for REST + MCP. Keep this board open while agents write.</p>
         </Menu>
@@ -1607,7 +1609,7 @@ export default function App() {
       kinds={[...new Set([...kinds, ...(data?.entity_types ?? []).map(type => type.name), ...(data?.entities ?? []).map(entity => entity.kind)])]}
       onClose={() => { setShowLogImport(false); setImportRequest(null) }} onApply={runImports} />}
     {showPalette && <CommandPalette items={paletteItems} onClose={() => setShowPalette(false)} />}
-    {showConnect && <AgentConnectDialog boardId={boardId} token={board.sessionToken} onCopy={(value, label) => void copyValue(value, label)} onClose={() => setShowConnect(false)} />}
+    {showConnect && <AgentConnectDialog boardId={boardId} token={board.sessionToken} name={board.name} onCopy={(value, label) => void copyValue(value, label)} onClose={() => setShowConnect(false)} />}
     {askName && board.ready && !showHelp && <WelcomeDialog current={board.name} onSave={name => { board.setName(name); setAskName(false) }} onLearnMore={() => setShowHelp('data')} />}
     {showHelp && <HelpDialog key={showHelp} initialTab={showHelp} boardCount={board.boards.length} onExport={download} onClose={() => setShowHelp(false)} />}
     <input ref={importInput} type="file" accept="application/json,.json" hidden onChange={event => { const file = event.target.files?.[0]; event.target.value = ''; void importFile(file) }} />

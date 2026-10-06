@@ -2,7 +2,7 @@ import type { ActionDraft } from './board'
 
 /**
  * Change batches of this tab's own file uploads. The server marks every upload to /imports/file as channel "Import", but
- * the session token that authorises it is also the agents' token: only the tab that started an upload knows its batch.
+ * the board token that authorises it is also the agents' token: only the tab that started an upload knows its batch.
  */
 export const ownImportBatches = new Set<string>()
 

@@ -71,7 +71,7 @@ def tool_description(route: APIRoute) -> str:
     method = next(iter(route.methods))
     notes = [f'REST equivalent: {method} {route.path}.']
     if any(p.name == 'board_id' for p in route.dependant.path_params):
-        notes.append('The board must be open in a browser; authenticate with session_token or the X-FactGraph-Token header.')
+        notes.append('The board must be open in a browser. With the board token in the X-FactGraph-Token header, leave board_id and board_token empty: the token names the board.')
     if method == 'PATCH':
         notes.append('Omitted fields stay unchanged; explicit null clears nullable fields.')
     return f"{purpose(route)}\n\n{' '.join(notes)}"

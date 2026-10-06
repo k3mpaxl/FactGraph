@@ -9,8 +9,12 @@ const act = (type, payload = {}, extra = {}) => ({ id: `a${++n}`, boardId: 'b', 
 ;(async () => {
   // Who changed it: own canvas is silent; agents, Enricher and colleagues are told apart.
   assert.equal(classify([act('entity.add')], 'me'), null)
-  assert.deepEqual(classify([act('entity.add', {}, { channel: 'MCP', author: 'Claude' })], 'me'), { kind: 'agent', author: 'Claude (MCP)' })
+  assert.deepEqual(classify([act('entity.add', {}, { channel: 'MCP', author: 'Claude' })], 'me'), { kind: 'agent', author: 'Claude via MCP' })
   assert.deepEqual(classify([act('entity.add', {}, { channel: 'REST', author: 'REST' })], 'me'), { kind: 'agent', author: 'Agent via REST' })
+  // Agents work with an analyst's board token: whose agent it was is part of the author.
+  assert.deepEqual(classify([act('entity.add', {}, { channel: 'MCP', author: 'MCP (Gregor)' })], 'me'), { kind: 'agent', author: 'Agent via MCP (Gregor)' })
+  assert.deepEqual(classify([act('entity.add', {}, { channel: 'MCP', author: 'Claude (Gregor)' })], 'me'), { kind: 'agent', author: 'Claude via MCP (Gregor)' })
+  assert.equal(classify([act('entity.add', {}, { channel: 'REST', author: 'Enricher (Gregor)' })], 'me').kind, 'enricher')
   assert.equal(classify([act('entity.add', {}, { channel: 'REST', author: 'Enricher' })], 'me').kind, 'enricher')
   assert.equal(classify([act('entity.add', {}, { channel: 'Import', author: 'GTIEnricher' })], 'me').author, 'Enricher', 'exports from before the rename')
   assert.equal(classify([act('entity.add', {}, { actor: 'other', author: 'Ben' })], 'me').kind, 'colleague')
@@ -20,7 +24,7 @@ const act = (type, payload = {}, extra = {}) => ({ id: `a${++n}`, boardId: 'b', 
   assert.equal(describe(count(batch)), '2 entities, 1 relationship, 2 new evidence items')
   const first = noticesFor(new Map([['b1', batch]]), 'me', [])
   assert.equal(first.created.length, 1)
-  assert.equal(first.created[0].title, 'Claude (MCP) changed the board')
+  assert.equal(first.created[0].title, 'Claude via MCP changed the board')
   assert.deepEqual(first.created[0].target, { kind: 'review' })
   // A later chunk of the same batch updates the notice instead of adding one.
   const more = noticesFor(new Map([['b1', [act('fact.add', {}, { channel: 'MCP', author: 'Claude', batch_id: 'b1' })]]]), 'me', first.created)

@@ -56,9 +56,9 @@ Editing: update tools change only the fields you pass; explicit null clears null
 Times: ISO 8601; a time without a zone is UTC. Compromise marks you set are "suspected" unless you pass level "confirmed" and the evidence proves it.
 Tool profile: this server shows a compact agent tool set by default; with FACTGRAPH_MCP_TOOLS=full it exposes one rest_<operation> tool per REST endpoint instead.
 """
-mcp = FastMCP("FactGraph Browser Boards", version="0.5.2", instructions=MCP_INSTRUCTIONS)
+mcp = FastMCP("FactGraph Browser Boards", version="0.5.3", instructions=MCP_INSTRUCTIONS)
 mcp_app = mcp.http_app(path="/")
-app = FastAPI(title="FactGraph API", version="0.5.2", lifespan=mcp_app.lifespan)
+app = FastAPI(title="FactGraph API", version="0.5.3", lifespan=mcp_app.lifespan)
 
 
 @dataclass

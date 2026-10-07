@@ -15,8 +15,9 @@ async function setup(page:Page,request:APIRequestContext) {
   const id=randomUUID();await page.goto(`/boards/${id}`)
   await expect(page.getByText('1 online',{exact:true})).toBeVisible()
   const token=await page.evaluate(id=>sessionStorage.getItem(`factgraph:sessionToken:${id}`)!,id)
-  const call=async(method:string,path:string,body?:object)=>{
-    const result=await request.fetch(`${base}/api/boards/${id}${path}`,{method,data:body,headers:{'X-FactGraph-Token':token}})
+  // timeout: for the few calls that legitimately take longer than an action (large imports); default actionTimeout.
+  const call=async(method:string,path:string,body?:object,timeout?:number)=>{
+    const result=await request.fetch(`${base}/api/boards/${id}${path}`,{method,data:body,headers:{'X-FactGraph-Token':token},...(timeout?{timeout}:{})})
     expect(result.ok(),await result.text()).toBeTruthy();return result.json()
   }
   return {id,token,call,graph:()=>call('GET','/graph')}
@@ -219,7 +220,8 @@ test('layout preserves pinned positions; browser back navigates views without un
 test('large import retains 10000 evidence rows and renders a 1000-node graph',async({page,request})=>{
   const {call,graph}=await setup(page,request)
   const rows=Array.from({length:10000},(_,i)=>({EventId:String(i),IPAddress:'10.0.0.5',FilePath:`repo/file-${i%999}`,TimeGenerated:'2026-09-28T10:00:00Z'}))
-  await call('POST','/imports/kql',{query:'AccessLogs',rows,title:'Large result'})
+  // 10,000 rows: the browser stores them in 50 acknowledged chunks, which on shared CI runners can take longer than 10 s.
+  await call('POST','/imports/kql',{query:'AccessLogs',rows,title:'Large result'},60_000)
   const data=await graph()
   expect(data.entities).toHaveLength(1000)
   expect(data.facts.flatMap((f:any)=>f.assertions)).toHaveLength(10000)

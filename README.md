@@ -51,7 +51,7 @@ With Docker Compose from the repository:
 docker compose -f deploy/compose.yaml up --build
 ```
 
-Directly with Python 3.11+ (the Docker image and CI use 3.14) and Node.js 20+:
+Directly with Python 3.11+ and Node.js 20+ (the Docker image and CI use Python 3.14 and Node.js 26):
 
 ```bash
 python3 -m venv .venv

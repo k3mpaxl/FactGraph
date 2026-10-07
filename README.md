@@ -102,7 +102,8 @@ FactGraph is meant to be spun up during an incident, often in a hurry and someti
 
 **Container**
 - Runs as an unprivileged user (UID 10001) on a slim Python image.
-- No access log (request URLs contain board IDs) and no server banner.
+- No access log (request URLs contain board IDs) and no server banner. The connection lines Uvicorn still logs show `/ws/boards/<board>` instead of the ID.
+- Logs show the client's real IP: the image trusts `X-Forwarded-For` only from loopback and link-local proxies (`169.254.0.0/16`, e.g. Azure App Service front ends), so a client cannot fake it. Behind another reverse proxy, set `FORWARDED_ALLOW_IPS` to its address.
 - Single port 8080, plain HTTP; TLS is terminated in front (Azure App Service, Caddy, nginx, Traefik, an ingress). The browser automatically uses `wss://` for the relay when the page is served over HTTPS.
 
 **What it does not do**

@@ -9,8 +9,12 @@ RUN npm run build
 # Latest stable Python on an explicitly named Debian release (3.15 is only a release candidate as of October 2026).
 FROM python:3.14-slim-trixie
 WORKDIR /app
+# Logs show the client's real IP from X-Forwarded-For, trusted only from loopback and link-local proxies (169.254.0.0/16:
+# Azure App Service front ends; not reachable as a client, so nobody can fake an IP in the log). Behind another reverse
+# proxy, set FORWARDED_ALLOW_IPS to its address.
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    FORWARDED_ALLOW_IPS=127.0.0.1,::1,169.254.0.0/16
 # Apply Debian security updates at build time (e.g. libpcre2-8-0), even when the base image lags behind.
 RUN apt-get update \
     && apt-get -y upgrade --no-install-recommends \

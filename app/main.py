@@ -10,7 +10,9 @@ import asyncio
 import csv
 import contextvars
 import json
+import logging
 import os
+import re
 import secrets
 import zlib
 from dataclasses import dataclass
@@ -79,6 +81,24 @@ request_token: contextvars.ContextVar[str | None] = contextvars.ContextVar("fact
 request_channel: contextvars.ContextVar[str] = contextvars.ContextVar("factgraph_request_channel", default="REST")
 # A batch ID chosen by the client (file import from the board UI), so the browser recognises its own import exactly.
 request_batch: contextvars.ContextVar[str | None] = contextvars.ContextVar("factgraph_request_batch", default=None)
+
+BOARD_IN_PATH = re.compile(r"(/boards/)[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+
+
+class HideBoardIds(logging.Filter):
+    """The board ID is the board's access key. Uvicorn logs every WebSocket connection with its path (/ws/boards/<id>), also
+    with --no-access-log, and hosting platforms keep container logs (App Service log stream and storage): the ID is
+    replaced in every Uvicorn record, and in access log lines should someone switch them on."""
+    def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.msg, str):
+            record.msg = BOARD_IN_PATH.sub(r"\1<board>", record.msg)
+        if isinstance(record.args, tuple):
+            record.args = tuple(BOARD_IN_PATH.sub(r"\1<board>", arg) if isinstance(arg, str) else arg for arg in record.args)
+        return True
+
+
+for _logger in ("uvicorn.error", "uvicorn.access"):
+    logging.getLogger(_logger).addFilter(HideBoardIds())
 
 
 def token_matches(expected: str | None, given: str) -> bool:
@@ -824,21 +844,32 @@ async def receive_message(websocket: WebSocket):
         return None
 
 
+async def refuse(websocket: WebSocket, code: int = 1008) -> None:
+    """Close a connection whose browser may already be gone: a reload or a closed tab right after connecting, many at once
+    after a server restart. Closing it again is no error worth a traceback."""
+    try:
+        await websocket.close(code=code)
+    except (RuntimeError, OSError, WebSocketDisconnect):  # OSError: uvicorn's ClientDisconnected
+        pass
+
+
 @app.websocket("/ws/boards/{board_id}")
 async def board_socket(websocket: WebSocket, board_id: str):
     if not valid_uuid(board_id) or not allowed_origin(websocket):
-        await websocket.close(code=1008)
+        await refuse(websocket)
         return
     await websocket.accept()
     # Identity and token arrive in the first message, never in the URL, so they stay out of access logs.
     try:
         hello = json.loads(await asyncio.wait_for(websocket.receive_text(), timeout=10))
-    except (asyncio.TimeoutError, ValueError, WebSocketDisconnect, RuntimeError):
-        await websocket.close(code=1008)
+    except WebSocketDisconnect:
+        return  # the browser left before saying hello
+    except (asyncio.TimeoutError, ValueError, RuntimeError, KeyError):
+        await refuse(websocket)
         return
     actor = str(hello.get("actor", "")) if isinstance(hello, dict) and hello.get("type") == "hello" else ""
     if not valid_uuid(actor):
-        await websocket.close(code=1008)
+        await refuse(websocket)
         return
     name = str(hello.get("name", "Guest")).strip()[:40] or "Guest"
     session_token = str(hello.get("token", "")).strip()[:200] or None
@@ -855,7 +886,7 @@ async def board_socket(websocket: WebSocket, board_id: str):
         # one actor would otherwise replace each other every few seconds) and offers a new identity instead.
         try:
             await previous.websocket.close(code=4001, reason="replaced")
-        except RuntimeError:
+        except (RuntimeError, OSError, WebSocketDisconnect):  # the replaced tab may be gone already
             pass
         for request_id, (writer, future) in list(pending.items()):
             if writer is previous.websocket and not future.done():

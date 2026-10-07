@@ -66,3 +66,19 @@ console.log('Targeted queries, shortened lists, reply parts and size-bounded act
   assert.ok(isSummary(summarize(mine)) && !isSummary({ a: [1, 2] }) && !isSummary([1]))
   console.log('Sync by summary: deltas, gaps, unknown actors, older peers passed')
 }
+
+// Send backpressure: wait until the socket's backlog is below the limit before sending more, so pong and heartbeat are
+// not stuck behind a whole large sync.
+;(async () => {
+  const { drained } = require(require('node:path').resolve(process.argv[2]) + '/query.js')
+  globalThis.WebSocket ??= { OPEN: 1 }
+  const socket = { readyState: 1, bufferedAmount: 3_000_000 }
+  const shrink = setInterval(() => { socket.bufferedAmount = Math.max(0, socket.bufferedAmount - 1_000_000) }, 60)
+  const started = Date.now()
+  await drained(socket)
+  clearInterval(shrink)
+  assert.ok(socket.bufferedAmount <= 1_000_000 && Date.now() - started >= 100, 'waited until the backlog was small')
+  const closed = { readyState: 3, bufferedAmount: 9_000_000 }
+  await drained(closed)
+  console.log('Send backpressure passed')
+})()

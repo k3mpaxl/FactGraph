@@ -321,6 +321,28 @@ class RelayTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(caught.exception.code, 422)
             self.assertIn("caller_oid", json.load(caught.exception)["detail"])
 
+    async def test_heartbeat_keeps_browsers_and_silence_frees_their_connection(self):
+        """Hosting front ends may keep a vanished browser's connection open (and answer pings for it); a browser that
+        announced a heartbeat and stays silent for six of them is closed, which frees the platform's connection slot."""
+        url = f"ws://127.0.0.1:{self.port}/ws/boards/{uuid4()}"
+        async with websockets.connect(url) as websocket:
+            await websocket.send(json.dumps({"type": "hello", "actor": str(uuid4()), "name": "Beat", "heartbeat": 0.5}))
+            self.assertEqual((await receive(websocket))["type"], "welcome")
+            # Heartbeats are answered and keep the connection beyond the 3 s silence limit.
+            for _ in range(5):
+                await websocket.send(json.dumps({"type": "heartbeat"}))
+                self.assertEqual((await receive(websocket))["type"], "heartbeat")
+                await asyncio.sleep(1)
+            # Then silence: closed with 4000.
+            with self.assertRaises(websockets.ConnectionClosed) as closed:
+                await asyncio.wait_for(websocket.recv(), timeout=6)
+            self.assertEqual(closed.exception.rcvd.code, 4000)
+        # Browsers without a heartbeat (older versions) are not closed for silence.
+        async with join(url, str(uuid4()), "Old") as websocket:
+            await receive(websocket)
+            with self.assertRaises(asyncio.TimeoutError):
+                await asyncio.wait_for(websocket.recv(), timeout=4)
+
     async def test_large_replies_arrive_in_parts_and_lists_query_the_browser(self):
         board, actor, token = str(uuid4()), str(uuid4()), "parts-token"
 

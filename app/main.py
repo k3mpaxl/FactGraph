@@ -15,7 +15,7 @@ import os
 import re
 import secrets
 import zlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlsplit
 from uuid import UUID
@@ -68,6 +68,11 @@ class Peer:
     websocket: WebSocket
     name: str
     session_token: str | None = None
+    # Messages for this browser, sent by its own writer at its pace (see deliver).
+    outbox: asyncio.Queue = field(default_factory=asyncio.Queue)
+    queued: int = 0
+    writer: asyncio.Task | None = None
+    dropped: bool = False
 
 
 # Presence only. No board data or action history is retained on the server.
@@ -207,27 +212,66 @@ def valid_uuid(value: str) -> bool:
         return False
 
 
+# A browser may fall this far behind (a large sync to a stalled or very slow browser) before it is disconnected; it
+# fetches what it lacks when it reconnects (sync by summary).
+MAX_OUTBOX_BYTES = 64 * 1024 * 1024
+background: set[asyncio.Task] = set()
+
+
+def deliver(peer: Peer, message: str | bytes) -> None:
+    """Queue a message for one browser. Its own writer sends it at that browser's pace, so a slow browser holds back
+    neither the sender nor the others: waiting for it inside the sender's loop stopped reading the sender (uvicorn reads one
+    message ahead), the sender's pong stayed unread and uvicorn closed the healthy sender ("keepalive ping timeout"); on
+    large boards the sync then started over and over."""
+    if peer.dropped:
+        return
+    if peer.queued + len(message) > MAX_OUTBOX_BYTES:
+        peer.dropped = True
+        task = asyncio.create_task(refuse(peer.websocket, 1013))  # try again later
+        background.add(task)
+        task.add_done_callback(background.discard)
+        return
+    peer.queued += len(message)
+    peer.outbox.put_nowait(message)
+
+
+async def write(peer: Peer) -> None:
+    """Send what is queued for one browser, in order; ends with its connection."""
+    try:
+        while True:
+            message = await peer.outbox.get()
+            try:
+                if isinstance(message, bytes):
+                    await peer.websocket.send_bytes(message)
+                else:
+                    await peer.websocket.send_text(message)
+            finally:
+                peer.queued -= len(message)
+    except (RuntimeError, OSError, WebSocketDisconnect):
+        pass
+
+
+def start_peer(peer: Peer) -> Peer:
+    peer.writer = asyncio.create_task(write(peer))
+    return peer
+
+
 async def send_to_room(board_id: str, message: dict, *, exclude: str | None = None,
                        target: str | None = None) -> None:
+    text = json.dumps(message)
     async with rooms_lock:
-        recipients = [peer.websocket for actor, peer in rooms.get(board_id, {}).items()
+        recipients = [peer for actor, peer in rooms.get(board_id, {}).items()
                       if actor != exclude and (target is None or actor == target)]
-    for websocket in recipients:
-        try:
-            await websocket.send_json(message)
-        except (RuntimeError, WebSocketDisconnect):
-            pass
+    for peer in recipients:
+        deliver(peer, text)
 
 
 async def send_bytes_to_room(board_id: str, data: bytes, *, exclude: str | None = None, target: str | None = None) -> None:
     async with rooms_lock:
-        recipients = [peer.websocket for actor, peer in rooms.get(board_id, {}).items()
+        recipients = [peer for actor, peer in rooms.get(board_id, {}).items()
                       if actor != exclude and (target is None or actor == target)]
-    for websocket in recipients:
-        try:
-            await websocket.send_bytes(data)
-        except (RuntimeError, WebSocketDisconnect):
-            pass
+    for peer in recipients:
+        deliver(peer, data)
 
 
 async def browser_command(board_id: str, operation: str, **values) -> dict:
@@ -254,8 +298,8 @@ async def browser_command(board_id: str, operation: str, **values) -> dict:
         future: asyncio.Future[dict] = loop.create_future()
         pending[request_id] = (peer.websocket, future)
     try:
-        await peer.websocket.send_json({"type": "api-command", "requestId": request_id,
-                                        "boardId": board_id, "operation": operation, **values})
+        deliver(peer, json.dumps({"type": "api-command", "requestId": request_id,
+                                  "boardId": board_id, "operation": operation, **values}))
         result = await asyncio.wait_for(future, timeout=30)
         if not result.get("ok"):
             error = str(result.get("error") or "Browser rejected the command")
@@ -844,6 +888,18 @@ async def receive_message(websocket: WebSocket):
         return None
 
 
+def idle_timeout(heartbeat) -> float | None:
+    """How long a browser may stay silent: six of the heartbeat intervals it announced in hello (25 s → 150 s). Browsers
+    without a heartbeat (older versions) are only closed by WebSocket pings, as before.
+
+    Hosting platforms count WebSocket connections (Azure App Service: 5 on the free plan, 350 from Basic) and their front
+    end may keep a connection alive whose browser vanished (closed laptop, changed network): the slot stays taken until a
+    restart. Application data cannot be answered by a proxy, so a silent browser is detected and its slot freed."""
+    if isinstance(heartbeat, bool) or not isinstance(heartbeat, (int, float)) or heartbeat <= 0:
+        return None
+    return min(max(float(heartbeat), 0.5), 60.0) * 6
+
+
 async def refuse(websocket: WebSocket, code: int = 1008) -> None:
     """Close a connection whose browser may already be gone: a reload or a closed tab right after connecting, many at once
     after a server restart. Closing it again is no error worth a traceback."""
@@ -873,6 +929,7 @@ async def board_socket(websocket: WebSocket, board_id: str):
         return
     name = str(hello.get("name", "Guest")).strip()[:40] or "Guest"
     session_token = str(hello.get("token", "")).strip()[:200] or None
+    idle = idle_timeout(hello.get("heartbeat"))
 
     board_id = str(UUID(board_id))
     async with rooms_lock:
@@ -880,10 +937,13 @@ async def board_socket(websocket: WebSocket, board_id: str):
         previous = room.get(actor)
         peers = [{"id": peer_id, "name": peer.name} for peer_id, peer in room.items()
                  if peer_id != actor]
-        room[actor] = Peer(websocket=websocket, name=name, session_token=session_token)
+        own = room[actor] = start_peer(Peer(websocket=websocket, name=name, session_token=session_token))
     if previous:
         # 4001: replaced by a connection with the same identity. The browser does not reconnect on it (two tabs with
         # one actor would otherwise replace each other every few seconds) and offers a new identity instead.
+        previous.dropped = True
+        if previous.writer:
+            previous.writer.cancel()
         try:
             await previous.websocket.close(code=4001, reason="replaced")
         except (RuntimeError, OSError, WebSocketDisconnect):  # the replaced tab may be gone already
@@ -891,12 +951,17 @@ async def board_socket(websocket: WebSocket, board_id: str):
         for request_id, (writer, future) in list(pending.items()):
             if writer is previous.websocket and not future.done():
                 future.set_result({"ok": False, "error": "Browser connection replaced"})
-    await websocket.send_json({"type": "welcome", "peers": peers})
-    await send_to_room(board_id, {"type": "peer-joined", "peer": {"id": actor, "name": name}}, exclude=actor)
-
     try:
+        # Inside the try: a browser that leaves right now is still removed from the room below.
+        deliver(own, json.dumps({"type": "welcome", "peers": peers}))
+        await send_to_room(board_id, {"type": "peer-joined", "peer": {"id": actor, "name": name}}, exclude=actor)
         while True:
-            message = await receive_message(websocket)
+            try:
+                message = await (asyncio.wait_for(receive_message(websocket), timeout=idle) if idle else receive_message(websocket))
+            except asyncio.TimeoutError:
+                # Silent for six heartbeats: the browser is gone, even if a proxy still answers WebSocket pings for it.
+                await refuse(websocket, 4000)
+                break
             if isinstance(message, tuple):
                 header, data = message
                 target = header.get("target")
@@ -906,7 +971,10 @@ async def board_socket(websocket: WebSocket, board_id: str):
             if not isinstance(message, dict):
                 continue
             kind = message.get("type")
-            if kind == "actions":
+            if kind == "heartbeat":
+                # Answered, so the browser knows the whole path is alive (a laptop waking up finds a dead connection).
+                deliver(own, '{"type":"heartbeat"}')
+            elif kind == "actions":
                 actions = message.get("actions")
                 if isinstance(actions, list) and len(actions) <= 1000:
                     target = message.get("target")
@@ -954,6 +1022,9 @@ async def board_socket(websocket: WebSocket, board_id: str):
     except (WebSocketDisconnect, RuntimeError):
         pass
     finally:
+        own.dropped = True
+        if own.writer:
+            own.writer.cancel()
         async with rooms_lock:
             room = rooms.get(board_id)
             if room and room.get(actor, None) and room[actor].websocket is websocket:

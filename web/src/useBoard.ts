@@ -8,7 +8,7 @@ import { actionChunks, drained, messageParts, queryRecords, COMPRESS_ABOVE, COMP
 import { uuid } from './uuid'
 import { trustedDrafts } from './importBatches'
 import { onBehalf } from './provenance'
-import { actorTaken, freshIdentity, holdActor, releaseActor, storedIdentity } from './identity'
+import { actorTaken, freshIdentity, holdActor, holdBoard, onBoardTabs, otherTabs as countOtherTabs, releaseActor, releaseBoard, storedIdentity } from './identity'
 import { isSummary, summarize, syncPlan } from './sync'
 import { validateDrafts } from './validation'
 import { loadFormats } from './importFormats'
@@ -75,6 +75,8 @@ export function useBoard(boardId: string, listener?: ChangeListener) {
   const [boards, setBoards] = useState<BoardMeta[]>([])
   const [peers, setPeers] = useState<Peer[]>([])
   const [ready, setReady] = useState(false)
+  /** Other tabs of this browser that show this board. */
+  const [otherTabs, setOtherTabs] = useState(0)
   // A fresh browser joining analysts who are online: the board is on its way, not empty.
   const [joining, setJoining] = useState(false)
   const joinTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
@@ -262,6 +264,7 @@ export function useBoard(boardId: string, listener?: ChangeListener) {
 
   useEffect(() => {
     let cancelled = false
+    let holding = false
     let retry: number | undefined
     let websocket: WebSocket | null = null
 
@@ -427,6 +430,8 @@ export function useBoard(boardId: string, listener?: ChangeListener) {
         if (cancelled) return
         if (taken) { setIdentity(freshIdentity(boardId)); return }
         holdActor(actor)
+        holdBoard(boardId)
+        holding = true
         const stored = sortActions(loaded)
         actionsRef.current = stored
         actionIdsRef.current = new Set(stored.map(item => item.id))
@@ -444,6 +449,7 @@ export function useBoard(boardId: string, listener?: ChangeListener) {
     return () => {
       cancelled = true
       releaseActor(actor)
+      if (holding) releaseBoard(boardId)
       if (retry) window.clearTimeout(retry)
       window.clearInterval(heartbeat)
       if (flushTimer.current) window.clearTimeout(flushTimer.current)
@@ -452,6 +458,19 @@ export function useBoard(boardId: string, listener?: ChangeListener) {
     }
   }, [actor, boardId, emitMany, merge, projectCached, reply, send, sendActions, sessionToken, undo, redo])
 
-  return { actor, name, setName, actions, boards, peers, ready, joining, replaced, reidentify, connected, storageError, unsynced, sync,
+  // Count again when a tab opens or closes the board or someone leaves the board (a tab killed without closing, which
+  // never says so), and now and then.
+  const peerCount = peers.length
+  useEffect(() => {
+    if (!ready) return
+    let alive = true
+    const count = () => void countOtherTabs(boardId).then(tabs => { if (alive) setOtherTabs(tabs) })
+    count()
+    const stop = onBoardTabs(board => { if (board === boardId) count() })
+    const timer = window.setInterval(count, 60_000)
+    return () => { alive = false; stop(); window.clearInterval(timer) }
+  }, [boardId, ready, peerCount])
+
+  return { actor, name, setName, actions, boards, peers, ready, joining, replaced, reidentify, connected, storageError, unsynced, sync, otherTabs,
     boardName: projection.name, data: projection.data, emit, emitMany, undo, redo, importActions, sessionToken }
 }

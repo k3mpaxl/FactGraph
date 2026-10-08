@@ -80,5 +80,11 @@ console.log('Targeted queries, shortened lists, reply parts and size-bounded act
   assert.ok(socket.bufferedAmount <= 1_000_000 && Date.now() - started >= 100, 'waited until the backlog was small')
   const closed = { readyState: 3, bufferedAmount: 9_000_000 }
   await drained(closed)
+  // A tab in the background sends at once (its timers are throttled).
+  globalThis.document = { hidden: true }
+  const quick = Date.now()
+  await drained({ readyState: 1, bufferedAmount: 9_000_000 })
+  assert.ok(Date.now() - quick < 50, 'a hidden tab does not wait')
+  delete globalThis.document
   console.log('Send backpressure passed')
 })()

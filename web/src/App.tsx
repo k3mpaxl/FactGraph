@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, Fragment } from 'react'
 import {
   Activity, ArrowDownToLine, ArrowLeft, ArrowRight, ChevronDown, ChevronRight, Clock, Command, Copy, CornerDownLeft,
-  FileText, GitBranch, Keyboard, Link2, HardDrive, Server, Users, AlertTriangle, Lock, CircleHelp, ListTree, Merge, Moon, Pause, Pencil, Play, Plus, Plug, Search, ShieldCheck,
+  FileText, GitBranch, Keyboard, Link2, HardDrive, Info, Server, Users, AlertTriangle, Lock, CircleHelp, ListTree, Merge, Moon, Pause, Pencil, Play, Plus, Plug, Search, ShieldCheck,
   SkipBack, SkipForward, Sparkles, Sun, Trash2, Undo2, Redo2, Upload, X, Crosshair, CheckCircle2, CircleDashed, Boxes, Zap, Layers, Ungroup, ImageDown,
   RotateCcw, ShieldAlert, Braces, Bot, FileCheck2,
 } from 'lucide-react'
@@ -961,6 +961,9 @@ export default function App() {
   const changes: ChangeListener = useRef(null)
   const board = useBoard(boardId, changes)
   const data = board.ready ? board.data : null
+  // The hint that this board is open in other tabs too: once dismissed, not again in this tab.
+  const [tabsHintSeen, setTabsHintSeen] = useState(() => { try { return sessionStorage.getItem(`factgraph:tabsHint:${boardId}`) === '1' } catch { return false } })
+  const dismissTabsHint = () => { setTabsHintSeen(true); try { sessionStorage.setItem(`factgraph:tabsHint:${boardId}`, '1') } catch { /* private mode */ } }
   // Filters, layers, time window, selection and zoom are this analyst's own: per board in this browser, never synced.
   const saved = useMemo(() => loadView(boardId), [boardId])
   const [selection, setSelectionState] = useState<Selection>(saved.selection)
@@ -1615,6 +1618,8 @@ export default function App() {
     <input ref={importInput} type="file" accept="application/json,.json" hidden onChange={event => { const file = event.target.files?.[0]; event.target.value = ''; void importFile(file) }} />
     {board.replaced && <div className="replaced-banner" role="alert"><AlertTriangle size={15} /><span><b>This board was opened with this tab's identity in another tab</b> (for example a duplicated tab), so this tab is no longer connected. Your changes here are kept.</span>
         <button className="primary-button small" onClick={board.reidentify}>Continue here as a new session</button></div>}
+    {board.otherTabs > 0 && !tabsHintSeen && !board.replaced && <div className="tabs-banner" role="status"><Info size={15} /><span><b>This board is also open in {board.otherTabs === 1 ? 'another tab' : `${board.otherTabs} other tabs`} of this browser.</b> Every tab loads and syncs the whole board, so a large board stays faster with one tab.</span>
+        <button className="secondary-button small" onClick={dismissTabsHint}>Got it</button></div>}
     <div className="toasts" aria-live="polite">
       {board.storageError && <div className="toast error">{board.storageError}</div>}
       {error && !dialog && <div className="toast error" onClick={() => setError('')}>{error} <X size={14} /></div>}

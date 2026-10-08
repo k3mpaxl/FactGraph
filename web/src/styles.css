@@ -1161,10 +1161,13 @@ button.impact-stat { text-align: left; font: inherit; color: inherit; cursor: po
 .agent-errors dl { display: grid; grid-template-columns: max-content 1fr; gap: 3px 10px; margin: 6px 0 0 }
 .agent-errors dt { font-family: var(--mono); color: var(--text) } .agent-errors dd { margin: 0 }
 .export-preview { display: flex; flex-direction: column; gap: 4px } .export-preview img { width: 100%; max-height: 180px; object-fit: contain; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--canvas) } .export-preview small { font-size: 11px; color: var(--text-3) }
-.replaced-banner { position: fixed; left: 50%; top: 52px; transform: translateX(-50%); z-index: 90; display: flex; align-items: center; gap: 10px; max-width: min(720px, calc(100% - 32px)); padding: 10px 14px; border-radius: var(--radius-lg); background: var(--surface); border: 1px solid var(--warn); box-shadow: var(--shadow-lg); font-size: 12.5px; color: var(--text-2) }
+.replaced-banner, .tabs-banner { position: fixed; left: 50%; top: 52px; transform: translateX(-50%); z-index: 90; display: flex; align-items: center; gap: 10px; max-width: min(720px, calc(100% - 32px)); padding: 10px 14px; border-radius: var(--radius-lg); background: var(--surface); border: 1px solid var(--warn); box-shadow: var(--shadow-lg); font-size: 12.5px; color: var(--text-2) }
 .replaced-banner svg { color: var(--warn); flex: none }
-.replaced-banner b { color: var(--text) }
-.replaced-banner button { flex: none }
+.replaced-banner b, .tabs-banner b { color: var(--text) }
+.replaced-banner button, .tabs-banner button { flex: none }
+/* The hint that a board is open in other tabs of this browser too. */
+.tabs-banner { border-color: var(--accent) }
+.tabs-banner svg { color: var(--accent); flex: none }
 
 /* Import dialog: files, column mapping, saved formats */
 .modal.import-modal { width: min(1000px, 100%) }

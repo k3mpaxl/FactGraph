@@ -464,7 +464,15 @@ test('identity: a duplicated tab gets its own identity; a tab replaced by its ow
   await page.waitForTimeout(4500)
   await expect(page.getByText('2 online',{exact:true})).toBeVisible()
   await expect(dup.getByText('2 online',{exact:true})).toBeVisible()
+  // Both tabs say that the board is open twice in this browser; the hint can be dismissed.
+  const twice=(tab:typeof page)=>tab.getByRole('status').filter({hasText:'also open in another tab'})
+  await expect(twice(page)).toBeVisible()
+  await expect(twice(dup)).toBeVisible()
+  await dup.getByRole('button',{name:'Got it'}).click()
+  await expect(twice(dup)).toHaveCount(0)
   await dup.close()
+  // The other tab is gone, and so is the hint.
+  await expect(twice(page)).toHaveCount(0)
   // Something connects with this tab's identity anyway: the tab says so and does not push it out again.
   const socket=new WebSocket(`${base.replace('http','ws')}/ws/boards/${id}`)
   await new Promise(resolve=>socket.addEventListener('open',resolve))

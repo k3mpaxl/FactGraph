@@ -12,9 +12,12 @@ WORKDIR /app
 # Logs show the client's real IP from X-Forwarded-For, trusted only from loopback and link-local proxies (169.254.0.0/16:
 # Azure App Service front ends; not reachable as a client, so nobody can fake an IP in the log). Behind another reverse
 # proxy, set FORWARDED_ALLOW_IPS to its address.
+# WebSocket keepalive: a pong may wait behind megabytes of a large sync (and a hosting front end's buffers); 20 s closed
+# healthy browsers mid-sync. The application heartbeat (2.5 min) detects browsers that are really gone.
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    FORWARDED_ALLOW_IPS=127.0.0.1,::1,169.254.0.0/16
+    FORWARDED_ALLOW_IPS=127.0.0.1,::1,169.254.0.0/16 \
+    UVICORN_WS_PING_TIMEOUT=120
 # Apply Debian security updates at build time (e.g. libpcre2-8-0), even when the base image lags behind.
 RUN apt-get update \
     && apt-get -y upgrade --no-install-recommends \

@@ -4,11 +4,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { type ActionDraft, type BoardAction, type UndoScope, isAction, isDraft, participantKey, project, redoTarget, sortActions, undoTargets } from './board'
 import { listBoards, loadActions, saveActions, touchBoard, type BoardMeta } from './store'
 import { placeNew } from './layout'
-import { actionChunks, messageParts, queryRecords, COMPRESS_ABOVE, COMPRESSED_RAW_LIMIT, RELAY_LIMIT, gzipText, packFrame, unpackFrame } from './query'
+import { actionChunks, drained, messageParts, queryRecords, COMPRESS_ABOVE, COMPRESSED_RAW_LIMIT, RELAY_LIMIT, gzipText, packFrame, unpackFrame } from './query'
 import { uuid } from './uuid'
 import { trustedDrafts } from './importBatches'
 import { onBehalf } from './provenance'
-import { actorTaken, freshIdentity, holdActor, releaseActor, storedIdentity } from './identity'
+import { actorTaken, freshIdentity, holdActor, holdBoard, onBoardTabs, otherTabs as countOtherTabs, releaseActor, releaseBoard, storedIdentity } from './identity'
 import { isSummary, summarize, syncPlan } from './sync'
 import { validateDrafts } from './validation'
 import { loadFormats } from './importFormats'
@@ -17,6 +17,14 @@ import { browserMeasure, buildGraphSvg, svgToPng } from './exportGraph'
 import { iconMarkup, prepareIconMarkup } from './KindIcon'
 
 const MAX_EXPORT_CHARS = 12_000_000
+/**
+ * Keepalive on the relay. Every HEARTBEAT_MS the browser sends a small message the server answers. The server closes a
+ * browser that stays silent for six of them (frees the connection slot hosting platforms count, also when their front
+ * end still answers WebSocket pings for a vanished browser), and the browser reconnects when the server stays silent for
+ * SILENCE_MS (a laptop waking up finds a connection that only looks open). Timers in hidden tabs may run once a minute.
+ */
+const HEARTBEAT_MS = 25_000
+const SILENCE_MS = 150_000
 
 /** Render the board for REST/MCP with a saved perspective (or everything) and the stored group state. */
 async function renderExport({ data, name }: ReturnType<typeof project>, options: Record<string, unknown>) {
@@ -67,6 +75,8 @@ export function useBoard(boardId: string, listener?: ChangeListener) {
   const [boards, setBoards] = useState<BoardMeta[]>([])
   const [peers, setPeers] = useState<Peer[]>([])
   const [ready, setReady] = useState(false)
+  /** Other tabs of this browser that show this board. */
+  const [otherTabs, setOtherTabs] = useState(0)
   // A fresh browser joining analysts who are online: the board is on its way, not empty.
   const [joining, setJoining] = useState(false)
   const joinTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
@@ -117,17 +127,21 @@ export function useBoard(boardId: string, listener?: ChangeListener) {
     if (count) { syncCounts.current.outgoing += count; reportSync() }
     const done = () => { if (count) { syncCounts.current.outgoing -= count; reportSync() } }
     sendQueue.current = sendQueue.current.then(async () => {
-      if (socketRef.current?.readyState !== WebSocket.OPEN) return
+      const socket = socketRef.current
+      if (socket?.readyState !== WebSocket.OPEN) return
+      // One message at a time into the network: pong and heartbeat must not wait behind a whole large sync.
+      await drained(socket)
+      if (socketRef.current !== socket || socket.readyState !== WebSocket.OPEN) return
       if (text.length > COMPRESS_ABOVE) {
         const packed = await gzipText(text)
         if (packed) {
           if (packed.byteLength > RELAY_LIMIT) { onTooLarge?.(); return }
           const { type, target, deferRender } = message as Record<string, unknown>
-          if (socketRef.current?.readyState === WebSocket.OPEN) socketRef.current.send(packFrame({ type, ...(target ? { target } : {}), deferRender: deferRender === true }, packed))
+          if (socket.readyState === WebSocket.OPEN) socket.send(packFrame({ type, ...(target ? { target } : {}), deferRender: deferRender === true }, packed))
           return
         }
       }
-      socketRef.current.send(text)
+      socket.send(text)
     }).catch(() => {}).finally(done)
   }, [reportSync])
 
@@ -145,9 +159,14 @@ export function useBoard(boardId: string, listener?: ChangeListener) {
   }, [send, actor])
   // Replies to REST/MCP commands; large ones go in parts that the server reassembles.
   const reply = useCallback((requestId: string, payload: Record<string, unknown>) => {
-    const socket = socketRef.current
-    if (socket?.readyState !== WebSocket.OPEN) return
-    for (const part of messageParts(requestId, payload)) socket.send(part)
+    void (async () => {
+      for (const part of messageParts(requestId, payload)) {
+        const socket = socketRef.current
+        if (socket?.readyState !== WebSocket.OPEN) return
+        await drained(socket)
+        socket.send(part)
+      }
+    })()
   }, [])
 
   const merge = useCallback((incoming: unknown[], deferRender = false): Promise<number> => {
@@ -245,6 +264,7 @@ export function useBoard(boardId: string, listener?: ChangeListener) {
 
   useEffect(() => {
     let cancelled = false
+    let holding = false
     let retry: number | undefined
     let websocket: WebSocket | null = null
 
@@ -257,6 +277,15 @@ export function useBoard(boardId: string, listener?: ChangeListener) {
       settleJoin(300)
       requestSync()
     }
+    // Failed attempts in a row: the next one waits longer (2 s, 4 s … 30 s), so a refusing server is not hammered.
+    let failures = 0
+    let heartbeat: number | undefined
+    const reconnect = () => {
+      const delay = Math.min(30_000, 2000 * 2 ** failures) * (0.8 + Math.random() * 0.4)
+      failures++
+      window.clearTimeout(retry)
+      retry = window.setTimeout(connect, delay)
+    }
     const connect = () => {
       if (cancelled) return
       const scheme = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
@@ -264,14 +293,32 @@ export function useBoard(boardId: string, listener?: ChangeListener) {
       const socket = new WebSocket(`${scheme}//${window.location.host}/ws/boards/${boardId}`)
       websocket = socket
       socketRef.current = socket
+      let lastHeard = Date.now()
       socket.onopen = () => {
         if (cancelled) return
-        socket.send(JSON.stringify({ type: 'hello', actor, name: nameRef.current, token: sessionToken }))
+        socket.send(JSON.stringify({ type: 'hello', actor, name: nameRef.current, token: sessionToken, heartbeat: HEARTBEAT_MS / 1000 }))
         setConnected(true)
+        lastHeard = Date.now()
+        window.clearInterval(heartbeat)
+        heartbeat = window.setInterval(() => {
+          if (socketRef.current !== socket || socket.readyState !== WebSocket.OPEN) return
+          if (Date.now() - lastHeard > SILENCE_MS) {
+            // The connection only looks open: give it up and connect again (its late close event is ignored).
+            window.clearInterval(heartbeat)
+            socketRef.current = null
+            try { socket.close(4000, 'silent') } catch { /* already closing */ }
+            setConnected(false)
+            setPeers([])
+            reconnect()
+            return
+          }
+          socket.send('{"type":"heartbeat"}')
+        }, HEARTBEAT_MS)
         // Syncing starts with the welcome (who is online), with summaries instead of the whole log.
       }
       socket.binaryType = 'arraybuffer'
       socket.onmessage = event => {
+        lastHeard = Date.now()
         // Large batches arrive as compressed binary frames (forwarded unchanged by the relay).
         if (event.data instanceof ArrayBuffer) { void unpackFrame(event.data).then(message => { if (message && socketRef.current === socket) handle(message) }); return }
         let message: Record<string, unknown>
@@ -280,6 +327,7 @@ export function useBoard(boardId: string, listener?: ChangeListener) {
       }
       const handle = (message: Record<string, unknown>) => {
         if (message.type === 'welcome' && Array.isArray(message.peers)) {
+          failures = 0
           const others = message.peers.filter((peer): peer is Peer => !!peer && typeof peer === 'object' && typeof (peer as Peer).id === 'string' && (peer as Peer).id !== actor)
           if (!actionsRef.current.length && others.length) { setJoining(true); settleJoin(15000) }
           // First one peer (it answers with what is missing here), then the others for what only they have.
@@ -367,11 +415,12 @@ export function useBoard(boardId: string, listener?: ChangeListener) {
       }
       socket.onclose = event => {
         if (cancelled || socketRef.current !== socket) return
+        window.clearInterval(heartbeat)
         setConnected(false)
         setPeers([])
         // Another tab connected with this identity: reconnecting would push it out again, and so on every 2 s.
         if (event.code === 4001) { setReplaced(true); return }
-        retry = window.setTimeout(connect, 2000)
+        reconnect()
       }
     }
 
@@ -381,6 +430,8 @@ export function useBoard(boardId: string, listener?: ChangeListener) {
         if (cancelled) return
         if (taken) { setIdentity(freshIdentity(boardId)); return }
         holdActor(actor)
+        holdBoard(boardId)
+        holding = true
         const stored = sortActions(loaded)
         actionsRef.current = stored
         actionIdsRef.current = new Set(stored.map(item => item.id))
@@ -398,13 +449,28 @@ export function useBoard(boardId: string, listener?: ChangeListener) {
     return () => {
       cancelled = true
       releaseActor(actor)
+      if (holding) releaseBoard(boardId)
       if (retry) window.clearTimeout(retry)
+      window.clearInterval(heartbeat)
       if (flushTimer.current) window.clearTimeout(flushTimer.current)
       websocket?.close()
       socketRef.current = null
     }
   }, [actor, boardId, emitMany, merge, projectCached, reply, send, sendActions, sessionToken, undo, redo])
 
-  return { actor, name, setName, actions, boards, peers, ready, joining, replaced, reidentify, connected, storageError, unsynced, sync,
+  // Count again when a tab opens or closes the board or someone leaves the board (a tab killed without closing, which
+  // never says so), and now and then.
+  const peerCount = peers.length
+  useEffect(() => {
+    if (!ready) return
+    let alive = true
+    const count = () => void countOtherTabs(boardId).then(tabs => { if (alive) setOtherTabs(tabs) })
+    count()
+    const stop = onBoardTabs(board => { if (board === boardId) count() })
+    const timer = window.setInterval(count, 60_000)
+    return () => { alive = false; stop(); window.clearInterval(timer) }
+  }, [boardId, ready, peerCount])
+
+  return { actor, name, setName, actions, boards, peers, ready, joining, replaced, reidentify, connected, storageError, unsynced, sync, otherTabs,
     boardName: projection.name, data: projection.data, emit, emitMany, undo, redo, importActions, sessionToken }
 }

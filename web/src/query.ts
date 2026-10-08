@@ -73,6 +73,20 @@ export const COMPRESSED_RAW_LIMIT = 60 * 1024 * 1024
 /** Messages above this are sent gzip-compressed in a binary frame (the relay inflates them). */
 export const COMPRESS_ABOVE = 1_000_000
 
+/** Keep at most this much queued on a socket before sending more (see drained). */
+export const SEND_BACKLOG = 1_000_000
+
+/**
+ * Wait until the browser has passed most of what is queued on a socket to the network. Queuing a whole large sync at
+ * once put the browser's own pong and heartbeat behind megabytes of upload: the server took the healthy browser for gone
+ * and closed it, and the sync of a large board started over and over. A tab in the background does not wait: browsers run
+ * its timers once a second or even once a minute, which would leave another tab waiting for its sync answer for minutes.
+ */
+export async function drained(socket: WebSocket, limit = SEND_BACKLOG) {
+  while (socket.readyState === WebSocket.OPEN && socket.bufferedAmount > limit && !hidden()) await new Promise(resolve => setTimeout(resolve, 50))
+}
+const hidden = () => typeof document !== 'undefined' && document.hidden
+
 /** gzip in the browser (CompressionStream); null where it is not available. */
 export async function gzipText(text: string): Promise<Uint8Array | null> {
   if (typeof CompressionStream === 'undefined') return null

@@ -2,6 +2,7 @@
 import asyncio
 import json
 import unittest
+from uuid import uuid4
 
 from fastapi.testclient import TestClient
 from fastmcp import Client
@@ -9,6 +10,7 @@ from fastmcp import Client
 from app.main import app, mcp
 from app.relations import catalog, find_joins
 from app.tables import MAPPINGS, participants_of
+from tests.test_tables import NETWORK, SIGNIN, run
 
 LINKED = "aad-managed-identity-sign-in-logs-aad-graph-activity-logs-sign-in-activity-id"
 
@@ -89,6 +91,56 @@ class Catalog(unittest.TestCase):
         self.assertIn({"scheme": "external_id", "namespace": "entra-device-id", "raw": "dev-guid-1"}, device["identifiers"])
 
 
+class Inventory(unittest.TestCase):
+    """DeviceInfo, IdentityInfo and OAuthAppInfo describe what is already on the board; they never fill it."""
+
+    def test_rows_enrich_entities_on_the_board_and_add_nothing_else(self):
+        board, index = str(uuid4()), {"entities": [], "facts": [], "sources": []}
+        run(board, [dict(r) for r in NETWORK], index)  # device a1b2c3d4e5f6, user j.doe
+        device = next(e for e in index["entities"] if e["kind"] == "Device")
+        devices = [
+            {"Timestamp": "2026-09-28T09:00:00Z", "DeviceId": "a1b2c3d4e5f6", "DeviceName": "ws-0142.corp.example", "OSPlatform": "Windows11",
+             "PublicIP": "198.51.100.20", "AadDeviceId": "dev-guid-1", "JoinType": "Hybrid Azure AD Join", "ReportId": "7"},
+            {"Timestamp": "2026-09-28T09:00:00Z", "DeviceId": "ffff0000", "DeviceName": "other.corp.example", "OSPlatform": "Windows11",
+             "PublicIP": "198.51.100.21", "ReportId": "8"}]
+        detection, drafts, summary = run(board, devices, index)
+        self.assertEqual(detection.table, "DeviceInfo")
+        self.assertEqual((summary["not_on_board"], summary["evidence"], summary["new_entities"]), (1, 1, 1), "only the public IP is new")
+        activity = next(d["payload"] for d in drafts if d["type"] == "fact.add")
+        self.assertEqual(activity["predicate"], "reported from public IP")
+        self.assertIn({"entity_id": device["id"], "role": "actor"}, activity["participants"])
+        added = {(d["payload"]["entity_id"], d["payload"]["namespace"], d["payload"]["raw_value"]) for d in drafts if d["type"] == "identifier.add"}
+        self.assertIn((device["id"], "entra-device-id", "dev-guid-1"), added)
+        self.assertNotIn("other.corp.example", {d["payload"]["name"] for d in drafts if d["type"] == "entity.add"})
+
+        identities = [{"AccountObjectId": "11111111-2222-3333-4444-555555555555", "AccountUpn": "J.Doe@corp.example", "OnPremSid": "S-1-5-21-1-2-3-1104",
+                       "AccountDisplayName": "Jane Doe", "ReportId": "1"},
+                      {"AccountObjectId": "99999999-2222-3333-4444-555555555555", "AccountUpn": "someone@corp.example", "OnPremSid": "S-1-5-21-1-2-3-1105", "ReportId": "2"}]
+        detection, drafts, summary = run(board, identities, index)
+        self.assertEqual(detection.table, "IdentityInfo")
+        self.assertEqual((summary["enriched"], summary["not_on_board"], summary["new_entities"], summary["evidence"]), (1, 1, 0, 0))
+        self.assertIn(("windows-sid", "S-1-5-21-1-2-3-1104"), {(d["payload"]["namespace"], d["payload"]["raw_value"]) for d in drafts if d["type"] == "identifier.add"})
+
+    def test_an_app_known_only_by_its_id_gets_its_name_and_both_sides_are_linked(self):
+        board, index = str(uuid4()), {"entities": [], "facts": [], "sources": []}
+        # The app as users sign in to it (Service "Azure Portal", app ID c44b4083-…) and its service principal, known only
+        # by its object ID (as AzureActivity knows it): two entities until OAuthAppInfo says they are one app.
+        run(board, [dict(r) for r in SIGNIN], index)
+        spn = [{"TimeGenerated": "2026-09-28T10:00:00Z", "ServicePrincipalName": "0b7f0c1e-1111-4222-8333-444444444444", "ServicePrincipalId": "0b7f0c1e-1111-4222-8333-444444444444",
+                "ResourceDisplayName": "Microsoft Graph", "ResultType": "0", "IPAddress": "203.0.113.7", "CorrelationId": "s-1"}]
+        run(board, spn, index)
+        principal = next(e for e in index["entities"] if e["kind"] == "Service Principal")
+        self.assertEqual(principal["name"], "0b7f0c1e-1111-4222-8333-444444444444")
+        apps = [{"OAuthAppId": "c44b4083-3bb0-49c1-b47d-974e53cbdf3c", "ServicePrincipalId": "0b7f0c1e-1111-4222-8333-444444444444", "AppName": "Azure Portal",
+                 "PrivilegeLevel": "High", "ReportId": "a-1", "Timestamp": "2026-09-28T11:00:00Z"}]
+        detection, drafts, summary = run(board, apps, index)
+        self.assertEqual(detection.table, "OAuthAppInfo")
+        self.assertIn({"id": principal["id"], "name": "Azure Portal"}, [d["payload"] for d in drafts if d["type"] == "entity.update"])
+        link = next(d["payload"] for d in drafts if d["type"] == "fact.add")
+        self.assertEqual((link["predicate"], sorted(p["role"] for p in link["participants"])), ("service principal of", ["identity", "target"]))
+        self.assertEqual(summary["new_entities"], 0)
+
+
 class Interfaces(unittest.TestCase):
     def test_rest_needs_no_board_or_token(self):
         client = TestClient(app)
@@ -104,7 +156,7 @@ class Interfaces(unittest.TestCase):
                 result = await client.call_tool("find_joins", {"table": "EntraIdSignInEvents", "column": "UniqueTokenId", "limit": 50})
             return tools["find_joins"], result.data
         tool, data = asyncio.run(call())
-        self.assertTrue(tool.annotations.readOnlyHint)
+        self.assertTrue(tool.annotations.read_only_hint)
         self.assertNotIn("board_token", json.dumps(tool.input_schema))
         self.assertIn("GraphAPIAuditEvents", {i["there"]["table"] for i in data["items"]})
 

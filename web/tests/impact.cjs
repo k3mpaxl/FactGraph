@@ -2,7 +2,7 @@ const assert = require('node:assert/strict')
 const path = require('node:path').resolve(process.argv[2])
 const { project } = require(path + '/board.js')
 const { validateDrafts } = require(path + '/validation.js')
-const { tokenId, analyzeImpact, derivedCompromises, rotationProofs, effectOf, variableListingScript, impactMarkdown, sessionFindings, adviceFor, traceBack, agentFindings, attackSessions, startingPoints, caseSummary, firstUseOf, activityBefore, defaultSince, gapText, subnet } = require(path + '/impact.js')
+const { tokenId, signInSessionFindings, analyzeImpact, derivedCompromises, rotationProofs, effectOf, variableListingScript, impactMarkdown, sessionFindings, adviceFor, traceBack, agentFindings, attackSessions, startingPoints, caseSummary, firstUseOf, activityBefore, defaultSince, gapText, subnet } = require(path + '/impact.js')
 const { huntingQueries, impactReport, evidenceQuery } = require(path + '/hunting.js')
 
 let clock = 0
@@ -181,6 +181,39 @@ assert.match(markdown, /## Rotate, revoke, block/); assert.match(markdown, /```k
     assert.equal(tokenId(note), value, `${end.table}.${end.column}${end.path ? '.' + end.path : ''}`)
   }
 }
+// Sign-in sessions (sid): alice signs in at home, then her session turns up at the attacker's IP with a new token (a
+// stolen session cookie). Hijacked, with both tokens; nothing is derived from a session alone.
+{
+  const more = []
+  let n = 0
+  const add = (type, payload) => more.push({ id: `h${++n}`, clock: n, at: '2026-10-04T00:00:00.000Z', actor: 'me', author: 'Analyst', boardId: 'h', type, payload })
+  const sid = '6f1c2d3e-4a5b-4c6d-8e9f-0a1b2c3d4e5f'
+  for (const [id, kind, name] of [['alice', 'User', 'alice@contoso.example'], ['home', 'IP', '203.0.113.30'], ['evil', 'IP', '198.51.100.7'], ['later', 'IP', '192.0.2.50'], ['mail', 'Service', 'Exchange Online']])
+    add('entity.add', { id, name, kind })
+  const ev = (id, predicate, ip, note, at) => { add('fact.add', { id, predicate, participants: [{ entity_id: 'alice', role: 'identity' }, { entity_id: ip, role: 'source' }, { entity_id: 'mail', role: 'target' }] })
+    add('assertion.add', { id: `${id}-e`, fact_id: id, stance: 'supports', valid_from: at, note: JSON.stringify(note), source_id: null }) }
+  ev('s1', 'signed in', 'home', { UniqueTokenIdentifier: 'tokenHOME0000aaaa', SessionId: sid.toUpperCase() }, '2026-09-25T08:00:00.000Z')
+  ev('s2', 'signed in (non-interactive)', 'evil', { UniqueTokenIdentifier: 'tokenEVIL0000bbbb', SessionId: sid }, '2026-09-25T09:00:00.000Z')
+  ev('s3', 'mailitemsaccessed', 'evil', { AppAccessContext: { AADSessionId: sid, UniqueTokenId: 'tokenEVIL0000bbbb' } }, '2026-09-25T09:10:00.000Z')
+  add('entity.update', { id: 'evil', compromise: {} })
+  const data = project('h', more).data
+  const impact = analyzeImpact(data)
+  const [finding] = signInSessionFindings(data, impact)
+  assert.deepEqual([finding.sid, finding.kind, finding.others, finding.attacker, finding.tokens.sort()], [sid, 'hijacked', ['home'], ['evil'], ['tokenEVIL0000bbbb', 'tokenHOME0000aaaa']])
+  const advice = adviceFor(data, impact).find(a => a.id === `sid-${sid}`)
+  assert.equal(advice.severity, 'high'); assert.match(advice.title, /hijacked from 203\.0\.113\.30/); assert.equal(advice.mark, undefined, 'a session roams with its user: nothing to mark')
+  assert.ok(!derivedCompromises(data).has('home'), 'the victim is not derived from a shared session')
+  assert.equal(attackSessions(data, impact).find(s => s.uti === 'tokenEVIL0000bbbb').sid, sid)
+  const hunt = huntingQueries(data, impact).find(q => q.id === 'signin-session')
+  assert.ok(hunt.query.includes(`let sids = dynamic(["${sid}"])`)); assert.ok(hunt.query.includes('extend SignInSession = tolower(tostring(parse_json(AppAccessContext).AADSessionId))'))
+  assert.ok(!hunt.tables.includes('AzureActivity'), 'only tables with a session column')
+  // Only after the attacker: the owner still working in it, or another exit. Medium, no mark.
+  ev('s4', 'signed in (non-interactive)', 'later', { UniqueTokenIdentifier: 'tokenLATE0000cccc', SessionId: sid }, '2026-09-25T12:00:00.000Z')
+  const shared = project('h', more.filter(a => a.payload.id !== 's1' && a.payload.fact_id !== 's1')).data
+  const sharedFinding = signInSessionFindings(shared, analyzeImpact(shared))[0]
+  assert.equal(sharedFinding.kind, 'shared'); assert.deepEqual(sharedFinding.others, ['later'])
+  assert.equal(adviceFor(shared, analyzeImpact(shared)).find(a => a.id === `sid-${sid}`).severity, 'medium')
+}
 // Sessions (Entra UniqueTokenIdentifier / uti claim), "likely regular" activity, trace back, advice, KQL per evidence item.
 {
   const more = []
@@ -260,7 +293,9 @@ assert.match(markdown, /## Rotate, revoke, block/); assert.match(markdown, /```k
   assert.match(queries.find(q => q.id === 'session-replay').query, /"tokenCCCC2222dddd"/)
   const replayQuery = queries.find(q => q.id === 'session-replay')
   assert.ok(['AADManagedIdentitySignInLogs', 'AADGraphActivityLogs', 'EntraIdSignInEvents', 'GraphAPIAuditEvents'].every(t => replayQuery.tables.includes(t)))
-  assert.match(replayQuery.query, /\(AADGraphActivityLogs \| extend Session = trim_end\(@"=\+", SignInActivityId\) \| where Session in \(utis\) \| project TimeGenerated = TimeRequested,/)
+  // Each branch filters on time first (the store is partitioned by TimeGenerated), then on the token with padding trimmed.
+  assert.ok(replayQuery.query.includes('(AADGraphActivityLogs | where TimeGenerated between (start .. now()) | where trim_end(@"=+", SignInActivityId) in (utis) | extend Token = trim_end(@"=+", SignInActivityId) | project TimeGenerated = TimeRequested,'))
+  assert.equal(replayQuery.query.split('where TimeGenerated between (start .. now())').length - 1, 12, 'one time filter per table, none after the union')
   assert.equal(evidenceQuery({ locator: 'AzureActivity CorrelationId=c-9 EventDataId=e-9', valid_from: '2026-09-20T11:00:00.000Z', source_id: null }, []),
     'AzureActivity\n| where TimeGenerated between (datetime(2026-09-20T11:00:00.000Z) - 10m .. datetime(2026-09-20T11:00:00.000Z) + 10m)\n| where CorrelationId == "c-9" and EventDataId == "e-9"')
   assert.match(evidenceQuery({ locator: 'GitLab audit events id=42', valid_from: '2026-09-20T11:00:00.000Z', source_id: 'g' }, [{ id: 'g', title: 'GitLab audit events (GitLab) · x.csv', excerpt: '[{"Type": "GitLabAudit_CL"}]' }]), /^GitLabAudit_CL\n.*\n\| where id == "42"$/)

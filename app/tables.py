@@ -175,6 +175,8 @@ class Part:
     # entity is identified by device and path, never by its file name alone.
     path: tuple[str, ...] = ()
     scope: tuple[str, ...] = ()
+    # False: only an entity already on the board is used (and gets the row's IDs and name); none is created for it.
+    create: bool = True
 
 
 SCOPED_KINDS = ("File", "Process")
@@ -203,6 +205,10 @@ class Mapping:
     locator: tuple[str, ...] = ("ReportId", "DeviceId")
     # Context for the observation text ("status Failure · role Owner"): label and column/path or function.
     details: tuple[tuple[str, object], ...] = ()
+    # Inventory tables (DeviceInfo, IdentityInfo, OAuthAppInfo) describe what is already on the board: a row is used only
+    # when one of its entities that are not created (create=False, listed first) is there; it adds that entity's IDs and
+    # name, and an activity only when the row names a second entity.
+    inventory: bool = False
 
 
 def url_kind(value: str) -> str:
@@ -445,6 +451,30 @@ MAPPINGS: tuple[Mapping, ...] = (
         Part("target", "File", ("FileName",), HASHES(), path=("FolderPath",)),
         Part("target", "Email Address", ("EmailSubject",))),
         operation=lambda r, g: f"alert evidence ({text(g('EvidenceRole')).lower() or 'related'})", locator=("AlertId", "ReportId")),
+
+    # Inventory: what a device, user or app is, for entities already on the board. A DeviceInfo row with a public IP
+    # says where the device was online (the egress a baseline needs); the others only add IDs and names.
+    Mapping("DeviceInfo", "Defender XDR", ("DeviceId", "DeviceName", "OSPlatform", "PublicIP"), (
+        Part("actor", "Device", ("DeviceName",), DEVICE_IDS + (Ident("DeviceName", "fqdn"),), lower=True, create=False),
+        Part("source", "IP", ("PublicIP",), (Ident("PublicIP", "ip"),))),
+        operation="reported from public IP", locator=("ReportId", "DeviceId"), inventory=True,
+        details=(("OS", "OSPlatform"), ("join type", "JoinType"), ("device group", "MachineGroup"), ("exposure", "ExposureLevel"))),
+    Mapping("IdentityInfo", "Defender XDR", ("AccountObjectId", "AccountUpn", "OnPremSid"), (
+        Part("identity", "User", ("AccountUpn", "AccountDisplayName"), (Ident("AccountObjectId", namespace="entra-object-id"), Ident("AccountUpn", "email"),
+             Ident("OnPremSid", namespace="windows-sid")), lower=True, create=False),),
+        operation="identity inventory", locator=("ReportId", "AccountObjectId"), inventory=True),
+    # Sentinel UEBA's IdentityInfo spells the columns differently.
+    Mapping("IdentityInfo (UEBA)", "Sentinel", ("AccountObjectId", "AccountUPN", "AccountSID"), (
+        Part("identity", "User", ("AccountUPN", "AccountDisplayName"), (Ident("AccountObjectId", namespace="entra-object-id"), Ident("AccountUPN", "email"),
+             Ident("AccountSID", namespace="windows-sid")), lower=True, create=False),),
+        operation="identity inventory", time=("TimeGenerated",), locator=("AccountObjectId",), inventory=True),
+    # An app as service principal (sign-ins of the app itself) and as the application users sign in to: one app, so the
+    # row links the two when both are on the board.
+    Mapping("OAuthAppInfo", "Defender XDR", ("OAuthAppId", "ServicePrincipalId", "AppName"), (
+        Part("identity", "Service Principal", ("AppName",), (Ident("ServicePrincipalId", namespace="entra-object-id"), Ident("OAuthAppId", namespace="entra-app-id")), create=False),
+        Part("target", "Service", ("AppName",), (Ident("OAuthAppId", namespace="entra-app-id"),), create=False)),
+        operation="service principal of", locator=("ReportId", "OAuthAppId"), inventory=True,
+        details=(("privilege", "PrivilegeLevel"), ("status", "AppStatus"), ("publisher verified", "VerifiedPublisher"), ("consented users", "ConsentedUsersCount"))),
 
     # -------------------------------------------------------------------------------------------- Sentinel
     Mapping("SigninLogs", "Sentinel", ("UserPrincipalName", "AppDisplayName", "ResultType", "IPAddress", "ConditionalAccessStatus"), (
@@ -714,7 +744,7 @@ def participants_of(mapping: Mapping, row: Row) -> list[dict]:
                 identifiers.append({"scheme": "external_id", "namespace": "device-path", "raw": f"{device}|{path}"})
             elif device:
                 identifiers.append({"scheme": "external_id", "namespace": "device-file", "raw": f"{device}|{name}"})
-        out.append({"role": part.role, "kind": kind, "name": name, "identifiers": identifiers, "by_name": not scoped})
+        out.append({"role": part.role, "kind": kind, "name": name, "identifiers": identifiers, "by_name": not scoped, "create": part.create})
     return out
 
 

@@ -1060,3 +1060,20 @@ test('attack impact: mark a stolen secret since a time, pivot to the new IP, see
   await mcp(token,'update_entity',{board_id:id,entity_id:sp.id,body:{compromise:{from:'2026-09-15T00:00:00Z',note:'agent'}}})
   await expect.poll(async()=>(await call('GET','/impact')).seeds.find((s:any)=>s.name==='deploy-bot')?.note).toBe('agent')
 })
+
+test('linked by ID: an activity leads to the process launch it ran in and to what that process did',async({page,request})=>{
+  const {call}=await setup(page,request)
+  const device={DeviceId:'dev-0142',DeviceName:'ws-0142.corp.example'}
+  await call('POST','/imports/table',{title:'DeviceProcessEvents',rows:[{...device,Timestamp:'2026-09-28T10:00:00Z',ActionType:'ProcessCreated',FileName:'powershell.exe',
+    FolderPath:'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',ProcessCommandLine:'powershell -enc SQBFAFgA',InitiatingProcessFileName:'winword.exe',
+    ProcessUniqueId:'200',InitiatingProcessUniqueId:'100',ReportId:'1'}]})
+  await call('POST','/imports/table',{title:'DeviceNetworkEvents',rows:[{...device,Timestamp:'2026-09-28T10:00:05Z',ActionType:'ConnectionSuccess',RemoteIP:'203.0.113.7',
+    RemotePort:'443',InitiatingProcessFileName:'powershell.exe',InitiatingProcessUniqueId:'200',ReportId:'2'}]})
+  await page.locator('.activity-node',{hasText:'connection success'}).click()
+  const linked=page.locator('.linked-list')
+  await expect(linked.getByText('Process launched by')).toBeVisible()
+  await linked.locator('.linked-row',{hasText:'process created'}).click()
+  await expect(page.locator('.inspector h2')).toHaveText('process created')
+  await expect(page.locator('.linked-list').getByText('Then the process it started')).toBeVisible()
+  await expect(page.locator('.linked-list .linked-row',{hasText:'connection success'})).toBeVisible()
+})

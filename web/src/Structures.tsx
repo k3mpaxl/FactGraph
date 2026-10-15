@@ -7,6 +7,7 @@ import { groupDrift, groupToggleDrafts } from './viewModel'
 import { EFFECT_LABEL, type Impact } from './impact'
 import { fromUtcInput } from './timeline'
 import { EntityPicker } from './EntityPicker'
+import { KEY_LABEL, type Linked } from './correlation'
 
 export const ROLES = ['actor', 'identity', 'source', 'tool', 'via', 'target', 'other']
 export const roleHint: Record<string, string> = {
@@ -199,4 +200,24 @@ export function ActivityDialog({ data, initialEntity, onClose, onCommand, onCrea
       </form>
     </div>
   </div>
+}
+
+const LINK_LABEL: Record<Linked['relation'], string> = { 'launched by': 'Process launched by', then: 'Then the process it started', also: 'The same process also', same: '' }
+/**
+ * Activities tied to this one by an ID in their original rows (token, sign-in session, process launch, email): a session,
+ * a process tree or one email across tables, without a query.
+ */
+export function LinkedActivities({ data, linked, onSelect }: { data: GraphData; linked: Linked[]; onSelect: Select }) {
+  const facts = useMemo(() => new Map(data.facts.map(f => [f.id, f])), [data.facts])
+  const names = useMemo(() => new Map(data.entities.map(e => [e.id, e.name])), [data.entities])
+  const when = (at: string | null) => at ? at.slice(0, 16).replace('T', ' ') : 'no time'
+  return <div className="linked-list">{linked.map(group => <div key={`${group.kind}|${group.value}|${group.relation}`} className="linked-group">
+    <div className="linked-head"><strong>{LINK_LABEL[group.relation] || KEY_LABEL[group.kind]}</strong><code title={group.value}>{group.kind === 'process' ? `process ${group.value.split('|')[1]}` : `${group.value.slice(0, 12)}…`}</code>
+      <span className="count">{group.total}</span></div>
+    {group.facts.map(({ fact: id, at }) => { const fact = facts.get(id); if (!fact) return null
+      const who = (fact.participants ?? [{ entity_id: fact.subject_id, role: '' }, { entity_id: fact.object_id, role: '' }]).slice(0, 3).map(p => names.get(p.entity_id) ?? '?').join(' · ')
+      return <button key={id} className="linked-row" onClick={() => onSelect({ kind: 'fact', id }, true)} title={who}>
+        <span className="linked-time">{when(at)}</span><span className="linked-what">{fact.predicate}</span><small className="muted">{who}</small></button> })}
+    {group.total > group.facts.length && <small className="muted">+{group.total - group.facts.length} more</small>}
+  </div>)}</div>
 }

@@ -1,5 +1,6 @@
 import type { Entity, Fact, GraphData } from './types'
 import { CONTAINS_PREDICATES } from './board'
+import { sessionId, tokenId } from './correlation'
 
 /**
  * Attack impact: what was done with compromised credentials, identities and IPs, what it touched, what else to look
@@ -507,19 +508,10 @@ export type SessionUse = { at: string; fact: string; item: string; ip: string | 
  */
 export type SessionFinding = { uti: string; kind: 'redirector' | 'theft' | 'replay'; identity: string | null; uses: SessionUse[]; sources: string[]; attacker: string[]; others: string[]; first: string; last: string }
 
-/**
- * The token ID under every name the logs use (Sentinel UniqueTokenIdentifier, Defender XDR UniqueTokenId, the uti claim,
- * Graph SignInActivityId), with trailing Base64 padding dropped: Azure AD Graph pads some values. Case is kept, a UTI is
- * case-sensitive. GUID-shaped SignInActivityIds are no token IDs and are not matched with sign-ins.
- */
-const UTI = /"(?:UniqueTokenIdentifier|UniqueTokenId|uniqueTokenId|uti|SignInActivityId)":\s*"([A-Za-z0-9_-]{12,})=*"/g
-const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-export function tokenId(note: string): string | undefined {
-  for (const match of note.matchAll(UTI)) if (!GUID.test(match[1])) return match[1]
-  return undefined
-}
+export { tokenId }
 const AGENT = /"(?:UserAgent|userAgent|user_agent)":\s*"([^"]{3,300})"/
-type Signals = { sessions: Map<string, SessionUse[]>; agents: Map<string, SessionUse[]>; agentOf: Map<string, string> }
+/** sessions: per token ID; signIns: per sign-in session ID (sid); sidOf: the sign-in session a token was issued in. */
+type Signals = { sessions: Map<string, SessionUse[]>; signIns: Map<string, SessionUse[]>; sidOf: Map<string, string>; agents: Map<string, SessionUse[]>; agentOf: Map<string, string> }
 const signalCache = new WeakMap<object, Signals>()
 
 /**
@@ -530,24 +522,28 @@ export function rowSignals(data: Pick<GraphData, 'entities' | 'facts'>): Signals
   const cached = signalCache.get(data.facts)
   if (cached) return cached
   const kinds = new Map(data.entities.map(e => [e.id, e.kind]))
-  const sessions = new Map<string, SessionUse[]>(), agents = new Map<string, SessionUse[]>(), agentOf = new Map<string, string>()
+  const sessions = new Map<string, SessionUse[]>(), signIns = new Map<string, SessionUse[]>(), sidOf = new Map<string, string>()
+  const agents = new Map<string, SessionUse[]>(), agentOf = new Map<string, string>()
   for (const fact of data.facts) {
     const parts = fact.participants ?? []
     const ip = parts.find(p => p.role === 'source' && /\bip\b/i.test(kinds.get(p.entity_id) ?? ''))?.entity_id ?? null
     const identity = parts.find(p => (p.role === 'identity' || p.role === 'actor') && USABLE.test(kinds.get(p.entity_id) ?? ''))?.entity_id ?? null
     for (const item of fact.assertions) {
       if (item.retracted_at || !item.valid_from || !item.note) continue
-      const hasSession = item.note.includes('niqueTokenId') || item.note.includes('"uti"') || item.note.includes('SignInActivityId')
+      const hasSession = item.note.includes('niqueTokenId') || item.note.includes('"uti"') || item.note.includes('SignInActivityId') ||
+        item.note.includes('SessionId') || item.note.includes('"sid"')
       const hasAgent = item.note.includes('serAgent') || item.note.includes('user_agent')
       if (!hasSession && !hasAgent) continue
       const uti = hasSession ? tokenId(item.note) : undefined
+      const sid = hasSession ? sessionId(item.note) : undefined
       const agent = hasAgent ? AGENT.exec(item.note)?.[1] ?? null : null
       const use = { at: item.valid_from, fact: fact.id, item: item.id, ip, identity, agent }
       if (uti) { let list = sessions.get(uti); if (!list) sessions.set(uti, list = []); list.push(use) }
+      if (sid) { let list = signIns.get(sid); if (!list) signIns.set(sid, list = []); list.push(use); if (uti) sidOf.set(uti, sid) }
       if (agent) { let list = agents.get(agent); if (!list) agents.set(agent, list = []); list.push(use); agentOf.set(item.id, agent) }
     }
   }
-  const signals = { sessions, agents, agentOf }
+  const signals = { sessions, signIns, sidOf, agents, agentOf }
   signalCache.set(data.facts, signals)
   return signals
 }
@@ -591,16 +587,18 @@ export function agentFindings(data: Pick<GraphData, 'entities' | 'facts'>, impac
 }
 
 /** Sessions the attacker worked in: what happened within one sign-in, from where, until the token's last use. */
-export type AttackSession = { uti: string; identity: string | null; start: string; end: string; ips: string[]; facts: string[]; operations: [string, number][]; uses: number }
+/** sid: the sign-in session (Entra sid) the token was issued in, when a row names it. */
+export type AttackSession = { uti: string; sid?: string; identity: string | null; start: string; end: string; ips: string[]; facts: string[]; operations: [string, number][]; uses: number }
 export function attackSessions(data: Pick<GraphData, 'entities' | 'facts'>, impact: Impact): AttackSession[] {
   const facts = new Map(data.facts.map(f => [f.id, f]))
   const result: AttackSession[] = []
-  for (const [uti, uses] of rowSignals(data).sessions) {
+  const { sessions, sidOf } = rowSignals(data)
+  for (const [uti, uses] of sessions) {
     if (!uses.some(u => impact.facts.has(u.fact))) continue
     uses.sort((a, b) => a.at.localeCompare(b.at))
     const ops = new Map<string, number>()
     for (const u of uses) { const op = facts.get(u.fact)?.predicate ?? '?'; ops.set(op, (ops.get(op) ?? 0) + 1) }
-    result.push({ uti, identity: uses.find(u => u.identity)?.identity ?? null, start: uses[0].at, end: uses[uses.length - 1].at, ips: [...new Set(uses.map(u => u.ip).filter((x): x is string => !!x))],
+    result.push({ uti, ...(sidOf.has(uti) ? { sid: sidOf.get(uti) } : {}), identity: uses.find(u => u.identity)?.identity ?? null, start: uses[0].at, end: uses[uses.length - 1].at, ips: [...new Set(uses.map(u => u.ip).filter((x): x is string => !!x))],
       facts: [...new Set(uses.map(u => u.fact))], operations: [...ops].sort((a, b) => b[1] - a[1]), uses: uses.length })
   }
   return result.sort((a, b) => b.ips.length - a.ips.length || b.uses - a.uses || a.start.localeCompare(b.start))
@@ -627,6 +625,35 @@ export function sessionFindings(data: Pick<GraphData, 'entities' | 'facts'>, imp
   }
   const order = { redirector: 0, theft: 1, replay: 2 }
   return findings.sort((a, b) => order[a.kind] - order[b.kind] || b.uses.length - a.uses.length)
+}
+
+/**
+ * A sign-in session (the Entra sid: one root sign-in and every token refreshed from it) that the attacker used from their
+ * infrastructure and someone else used from another IP. `hijacked`: the other IP used it first, so the session was
+ * taken over (adversary-in-the-middle phishing, a stolen session cookie or refresh token). `shared`: the others came only
+ * after the attacker (the owner still working in it, or another exit of the attacker). A session roams with its user,
+ * so several IPs alone prove nothing and nothing is derived from it.
+ */
+export type SignInSessionFinding = { sid: string; kind: 'hijacked' | 'shared'; identity: string | null; uses: SessionUse[]; tokens: string[]
+  attacker: string[]; others: string[]; first: string; attackerFirst: string; last: string }
+export function signInSessionFindings(data: Pick<GraphData, 'entities' | 'facts'>, impact: Impact): SignInSessionFinding[] {
+  const byId = new Map(data.entities.map(e => [e.id, e]))
+  const attackerIp = (id: string) => { const mark = impact.marks.get(id); return (mark === 'compromised' || mark === 'derived') && INFRASTRUCTURE.test(byId.get(id)?.kind ?? '') }
+  const { signIns, sidOf } = rowSignals(data)
+  const tokensOf = new Map<string, string[]>()
+  for (const [uti, sid] of sidOf) { const list = tokensOf.get(sid); if (list) list.push(uti); else tokensOf.set(sid, [uti]) }
+  const findings: SignInSessionFinding[] = []
+  for (const [sid, uses] of signIns) {
+    const sources = [...new Set(uses.map(u => u.ip).filter((ip): ip is string => !!ip))]
+    const attacker = sources.filter(attackerIp), others = sources.filter(ip => !attackerIp(ip))
+    if (!attacker.length || !others.length) continue
+    uses.sort((a, b) => a.at.localeCompare(b.at))
+    const attackerFirst = uses.find(u => u.ip && attacker.includes(u.ip))!.at
+    const kind = uses.some(u => u.ip && others.includes(u.ip) && u.at < attackerFirst) ? 'hijacked' : 'shared'
+    findings.push({ sid, kind, identity: uses.find(u => u.identity)?.identity ?? null, uses, tokens: tokensOf.get(sid) ?? [], attacker, others,
+      first: uses[0].at, attackerFirst, last: uses[uses.length - 1].at })
+  }
+  return findings.sort((a, b) => Number(a.kind !== 'hijacked') - Number(b.kind !== 'hijacked') || b.uses.length - a.uses.length)
 }
 
 export type Advice = {
@@ -691,6 +718,17 @@ export function adviceFor(data: Pick<GraphData, 'entities' | 'facts'>, impact: I
     else advice.push({ id: `uti-${finding.uti}`, severity: 'medium', title: `Session of ${who} used from ${finding.sources.length} IPs`,
       detail: `Token ${finding.uti.slice(0, 10)}… came from ${finding.sources.map(name).join(', ')} between ${short(finding.first)} and ${short(finding.last)} UTC. Unless these are known egress points of the same network, this is a replayed token.`,
       entities: finding.sources, mark: finding.sources, facts, query: 'session-replay' })
+  }
+  for (const finding of signInSessionFindings(data, impact).slice(0, 10)) {
+    const who = finding.identity ? name(finding.identity) : 'an identity'
+    const facts = [...new Set(finding.uses.map(u => u.fact))]
+    const tokens = finding.tokens.length > 1 ? ` ${finding.tokens.length} tokens were issued in it.` : ''
+    if (finding.kind === 'hijacked') advice.push({ id: `sid-${finding.sid}`, severity: 'high', title: `Sign-in session of ${who} hijacked from ${finding.others.map(name).join(', ')}?`,
+      detail: `Session ${finding.sid.slice(0, 8)}… (the sid of one sign-in) was used from ${finding.others.map(name).join(', ')} from ${short(finding.first)} UTC and from the attacker's ${finding.attacker.map(name).join(', ')} from ${short(finding.attackerFirst)} UTC.${tokens} A session moving to attacker infrastructure is the mark of adversary-in-the-middle phishing or a stolen session cookie or refresh token: revoke the sessions of ${who}, reset the credentials, check the MFA methods registered since, and look for the phishing sign-in at the session's start.`,
+      entities: [...finding.others, ...finding.attacker], facts, query: 'signin-session' })
+    else advice.push({ id: `sid-${finding.sid}`, severity: 'medium', title: `The attacker's sign-in session of ${who} was also used from ${finding.others.map(name).join(', ')}`,
+      detail: `Session ${finding.sid.slice(0, 8)}… started with the attacker (${finding.attacker.map(name).join(', ')}, ${short(finding.attackerFirst)} UTC) and was later used from ${finding.others.map(name).join(', ')}.${tokens} That is either the owner still working in it (a session roams with its user) or another exit of the attacker: compare the user agents and the network providers.`,
+      entities: [...finding.attacker, ...finding.others], facts, query: 'signin-session' })
   }
   for (const finding of agentFindings(data, impact).filter(f => !f.baseline).slice(0, 6)) {
     const weak = finding.common || !SCRIPTED.test(finding.agent)

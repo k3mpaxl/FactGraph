@@ -1238,3 +1238,15 @@ button.impact-stat { text-align: left; font: inherit; color: inherit; cursor: po
   .column-extra { grid-column: 1 / -1 }
   .builtin-summary ul { columns: 1 }
 }
+
+/* Activities linked by an ID in their original rows (token, sign-in session, process launch, email). */
+.linked-list { display: flex; flex-direction: column; gap: 10px }
+.linked-group { display: flex; flex-direction: column; gap: 2px }
+.linked-head { display: flex; align-items: center; gap: 6px; font-size: 12px }
+.linked-head code { font-size: 10.5px; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0 }
+.linked-head .count { margin-left: auto }
+.linked-row { display: grid; grid-template-columns: auto 1fr; column-gap: 8px; text-align: left; padding: 4px 6px; border-radius: 6px; font-size: 12px; background: none; border: 0; color: var(--text); cursor: pointer }
+.linked-row:hover { background: var(--surface-2) }
+.linked-row small { grid-column: 2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.linked-time { color: var(--text-3); font-variant-numeric: tabular-nums; font-size: 11px }
+.linked-what { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }

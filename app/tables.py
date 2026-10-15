@@ -177,6 +177,9 @@ class Part:
     scope: tuple[str, ...] = ()
     # False: only an entity already on the board is used (and gets the row's IDs and name); none is created for it.
     create: bool = True
+    # Processes: the column with the Windows process start key of this launch. With the DeviceId it says which process
+    # entity a row means when the path is missing (DeviceNetworkEvents often has no InitiatingProcessFolderPath).
+    start: tuple[str, ...] = ()
 
 
 SCOPED_KINDS = ("File", "Process")
@@ -264,7 +267,7 @@ def initiating_account(role="actor") -> Part:
 
 
 def initiating_process(role="via") -> Part:
-    return Part(role, "Process", ("InitiatingProcessFileName",), HASHES("InitiatingProcess"), path=("InitiatingProcessFolderPath",))
+    return Part(role, "Process", ("InitiatingProcessFileName",), HASHES("InitiatingProcess"), path=("InitiatingProcessFolderPath",), start=("InitiatingProcessUniqueId",))
 
 
 def sign_in(row: Row, g: Callable, result="ResultType", error="ErrorCode") -> str:
@@ -331,7 +334,7 @@ MAPPINGS: tuple[Mapping, ...] = (
     # ---------------------------------------------------------------- Defender XDR (and the same tables in Sentinel)
     Mapping("DeviceProcessEvents", "Defender XDR", ("DeviceName", "FileName", "ProcessCommandLine", "InitiatingProcessFileName"), (
         device(), initiating_account(), initiating_process(),
-        Part("target", "Process", ("FileName",), HASHES(), path=("FolderPath",)),
+        Part("target", "Process", ("FileName",), HASHES(), path=("FolderPath",), start=("ProcessUniqueId",)),
         Part("identity", "User", ("AccountUpn",), (Ident("AccountObjectId", namespace="entra-object-id"), Ident("AccountSid", namespace="windows-sid"),
              Ident("AccountUpn", "email")), name=account("AccountUpn", domain="AccountDomain", name="AccountName")))),
     Mapping("DeviceNetworkEvents", "Defender XDR", ("DeviceName", "RemoteIP", "RemotePort", "InitiatingProcessFileName"), (
@@ -744,6 +747,11 @@ def participants_of(mapping: Mapping, row: Row) -> list[dict]:
                 identifiers.append({"scheme": "external_id", "namespace": "device-path", "raw": f"{device}|{path}"})
             elif device:
                 identifiers.append({"scheme": "external_id", "namespace": "device-file", "raw": f"{device}|{name}"})
+            # A weak ID (matched only after the strong ones): it joins a launch seen with and without its path, and an
+            # entity imported before keeps its place, so a repeated import adds nothing.
+            start, device_id = next((text(g(c)) for c in part.start if text(g(c))), ""), text(g("DeviceId")).lower()
+            if start and start != "0" and device_id:
+                identifiers.append({"scheme": "process-start-key", "namespace": "", "raw": f"{device_id}|{start}"})
         out.append({"role": part.role, "kind": kind, "name": name, "identifiers": identifiers, "by_name": not scoped, "create": part.create})
     return out
 

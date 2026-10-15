@@ -1,7 +1,9 @@
 """Column relations from xdrinternals.com: lookup, REST and MCP, and that imports link the IDs the catalog joins on."""
 import asyncio
+import importlib.util
 import json
 import unittest
+from pathlib import Path
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
@@ -12,6 +14,7 @@ from app.relations import catalog, find_joins
 from app.tables import MAPPINGS, participants_of
 from tests.test_tables import NETWORK, SIGNIN, run
 
+ROOT = Path(__file__).resolve().parents[1]
 LINKED = "aad-managed-identity-sign-in-logs-aad-graph-activity-logs-sign-in-activity-id"
 
 # Catalog families that are entities in FactGraph, and the identifier namespace an import gives their ID columns.
@@ -38,6 +41,13 @@ class Catalog(unittest.TestCase):
         for relation in data["relations"]:
             self.assertIn(relation["family"], data["families"], relation["id"])
             self.assertTrue(relation["from"]["table"] and relation["to"]["column"], relation["id"])
+
+    def test_browser_columns_match_the_catalog(self):
+        spec = importlib.util.spec_from_file_location("build_column_relations", ROOT / "scripts" / "build_column_relations.py")
+        build = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(build)
+        self.assertEqual((ROOT / "web" / "src" / "joinColumns.ts").read_text(encoding="utf-8"), build.browser_columns(catalog()),
+                         "web/src/joinColumns.ts is out of date: run scripts/build_column_relations.py")
 
     def test_join_is_found_from_both_ends(self):
         left = find_joins(table="AADManagedIdentitySignInLogs", column="UniqueTokenIdentifier", limit=100)
@@ -139,6 +149,35 @@ class Inventory(unittest.TestCase):
         link = next(d["payload"] for d in drafts if d["type"] == "fact.add")
         self.assertEqual((link["predicate"], sorted(p["role"] for p in link["participants"])), ("service principal of", ["identity", "target"]))
         self.assertEqual(summary["new_entities"], 0)
+
+
+class ProcessStartKey(unittest.TestCase):
+    """A launch seen with its path (DeviceProcessEvents) and without it (DeviceNetworkEvents) is one process entity."""
+    LAUNCH = {"Timestamp": "2026-09-28T10:00:00Z", "DeviceId": "DEV-0142", "DeviceName": "ws-0142.corp.example", "ActionType": "ProcessCreated",
+              "FileName": "powershell.exe", "FolderPath": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+              "ProcessCommandLine": "powershell -enc SQBFAFgA", "InitiatingProcessFileName": "winword.exe", "ProcessUniqueId": "200",
+              "InitiatingProcessUniqueId": "100", "ReportId": "1"}
+    CONNECT = {"Timestamp": "2026-09-28T10:00:05Z", "DeviceId": "DEV-0142", "DeviceName": "ws-0142.corp.example", "ActionType": "ConnectionSuccess",
+               "RemoteIP": "203.0.113.7", "RemotePort": "443", "InitiatingProcessFileName": "powershell.exe", "InitiatingProcessUniqueId": "200", "ReportId": "2"}
+
+    def test_one_process_across_tables(self):
+        board, index = str(uuid4()), {"entities": [], "facts": [], "sources": []}
+        run(board, [dict(self.LAUNCH)], index)
+        _, drafts, summary = run(board, [dict(self.CONNECT)], index)
+        self.assertEqual([e["name"] for e in index["entities"] if e["kind"] == "Process"].count("powershell.exe"), 1)
+        self.assertNotIn("powershell.exe", {d["payload"]["name"] for d in drafts if d["type"] == "entity.add"})
+        self.assertIn(("process-start-key", "dev-0142|200"), {(d["payload"]["scheme"], d["payload"]["normalized_value"]) for d in drafts if d["type"] == "identifier.add"}
+                      | {(i["scheme"], i["normalized_value"]) for e in index["entities"] for i in e["identifiers"]})
+
+    def test_a_board_imported_before_gets_nothing_twice(self):
+        # The old way: the connection first, so its process exists by device and name before the launch is known.
+        board, index = str(uuid4()), {"entities": [], "facts": [], "sources": []}
+        _, first, _ = run(board, [dict(self.CONNECT)], index)
+        run(board, [dict(self.LAUNCH)], index)
+        _, again, _ = run(board, [dict(self.CONNECT)], index)
+        # The browser drops actions it knows (the IDs are stable): nothing new may come from the repeat.
+        known = {d["payload"]["id"] for d in first}
+        self.assertFalse([d for d in again if d["type"] in ("entity.add", "fact.add", "assertion.add") and d["payload"]["id"] not in known])
 
 
 class Interfaces(unittest.TestCase):

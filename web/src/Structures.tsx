@@ -7,7 +7,7 @@ import { groupDrift, groupToggleDrafts } from './viewModel'
 import { EFFECT_LABEL, type Impact } from './impact'
 import { fromUtcInput } from './timeline'
 import { EntityPicker } from './EntityPicker'
-import { KEY_LABEL, type Linked } from './correlation'
+import { keyLabel, type Linked } from './correlation'
 
 export const ROLES = ['actor', 'identity', 'source', 'tool', 'via', 'target', 'other']
 export const roleHint: Record<string, string> = {
@@ -212,7 +212,7 @@ export function LinkedActivities({ data, linked, onSelect }: { data: GraphData; 
   const names = useMemo(() => new Map(data.entities.map(e => [e.id, e.name])), [data.entities])
   const when = (at: string | null) => at ? at.slice(0, 16).replace('T', ' ') : 'no time'
   return <div className="linked-list">{linked.map(group => <div key={`${group.kind}|${group.value}|${group.relation}`} className="linked-group">
-    <div className="linked-head"><strong>{LINK_LABEL[group.relation] || KEY_LABEL[group.kind]}</strong><code title={group.value}>{group.kind === 'process' ? `process ${group.value.split('|')[1]}` : `${group.value.slice(0, 12)}…`}</code>
+    <div className="linked-head"><strong>{LINK_LABEL[group.relation] || keyLabel(group.kind)}</strong><code title={group.value}>{group.kind === 'process' ? `process ${group.value.split('|')[1]}` : group.value.length > 14 ? `${group.value.slice(0, 12)}…` : group.value}</code>
       <span className="count">{group.total}</span></div>
     {group.facts.map(({ fact: id, at }) => { const fact = facts.get(id); if (!fact) return null
       const who = (fact.participants ?? [{ entity_id: fact.subject_id, role: '' }, { entity_id: fact.object_id, role: '' }]).slice(0, 3).map(p => names.get(p.entity_id) ?? '?').join(' · ')

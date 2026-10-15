@@ -40,6 +40,7 @@ export function validateDrafts(graph: GraphData, drafts: ActionDraft[]) {
       require(id && String(p.name ?? '').trim(), 'Group needs ID and name'); require(!groups.has(id), 'Group ID already exists')
       for (const key of ['members', 'excluded']) if (key in p) require(idList(p[key]), `${key} must be a list of entity IDs`)
       require(((p.members as string[] | undefined) ?? []).every(m => entities.has(m)), 'Group member does not exist on this board')
+      if ('basis' in p && p.basis != null) require(['links', 'counterparts', 'shared-links', 'network'].includes(String(p.basis)), 'Unknown group basis')
       groups.add(id)
     }
     if (type === 'group.update' || type === 'group.delete') require(groups.has(id), 'Group does not exist')

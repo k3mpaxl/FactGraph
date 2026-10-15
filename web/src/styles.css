@@ -812,6 +812,7 @@ button.link:hover { text-decoration: underline }
 .impact-badge.compromised, .impact-badge.secret, .impact-badge.delete { background: var(--bad); color: #fff }
 .impact-badge.pivot { background: var(--node-bg); color: var(--bad); border: 1px dashed var(--bad); line-height: 14px }
 .impact-badge.read, .impact-badge.auth { background: color-mix(in srgb, var(--warn) 70%, var(--node-bg)) }
+.drift-badge { position: absolute; top: -9px; right: 10px; z-index: 2; height: 16px; padding: 0 6px; border-radius: 999px; font-size: 9.5px; font-weight: 700; line-height: 14px; white-space: nowrap; pointer-events: none; background: var(--node-bg); color: var(--warn); border: 1px solid var(--warn); box-shadow: var(--shadow-sm) }
 .impact-badge.attempt, .impact-badge.other, .impact-badge.regular { background: var(--neutral-soft); color: var(--text-2) }
 .entity-node.mark-compromised, .group-node.mark-compromised { border-color: var(--bad); box-shadow: 0 0 0 3px var(--bad-soft), var(--shadow-sm) }
 .entity-node.mark-pivot { border: 1px dashed var(--bad) }
@@ -837,6 +838,10 @@ button.link:hover { text-decoration: underline }
 .impact-callout strong { font-size: 12.5px }
 .impact-callout small { color: var(--text-3) }
 .impact-callout.compromised { background: var(--bad-soft); color: var(--bad) }
+.impact-callout.drift { background: var(--warn-soft); color: var(--text) }
+.impact-callout.drift > svg { color: var(--warn) }
+.impact-callout.drift .member-list { margin: 4px 0 6px }
+.impact-callout.drift .primary-button { justify-self: start; align-self: flex-start }
 .impact-callout.compromised span, .impact-callout.impacted span, .impact-callout.pivot span { color: var(--text) }
 .impact-callout.pivot { border: 1px dashed var(--bad); color: var(--bad) }
 .impact-callout.impacted { background: var(--warn-soft); color: var(--warn) }

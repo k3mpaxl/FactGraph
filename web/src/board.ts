@@ -1,4 +1,4 @@
-import type { Assertion, Entity, EntityType, Fact, GraphData, Group, GroupRule, Identifier, Participant, Perspective, Source, TruthState } from './types'
+import type { Assertion, Entity, EntityType, Fact, GraphData, Group, GroupBasis, GroupRule, Identifier, Participant, Perspective, Source, TruthState } from './types'
 import { initialPosition } from './layout'
 import { uuid } from './uuid'
 import { utc } from './time'
@@ -15,6 +15,8 @@ export type BoardAction = {
 }
 export type ActionDraft = { id?: string; type: ActionType; payload: Record<string, unknown>; at?: string; author?: string; batch_id?: string; channel?: string }
 export type BoardProjection = { data: GraphData; name: string }
+
+const GROUP_BASES: GroupBasis[] = ['links', 'counterparts', 'shared-links', 'network']
 
 const actionTypes: ActionType[] = [
   'type.add', 'type.update', 'type.delete', 'board.rename', 'entity.add', 'entity.update', 'entity.position', 'entity.delete', 'entity.merge', 'identifier.add', 'identifier.delete',
@@ -380,7 +382,8 @@ export function project(boardId: string, operations: BoardAction[]): BoardProjec
               excluded: ids(item.excluded).map(m => entityRef(m) as string), rule: parseRule(item.rule), collapsed: item.collapsed !== false,
               color: color(item.color),
               position: validPosition(item.x, item.y) ? { x: item.x as number, y: item.y as number } : undefined,
-              created_at: String(item.created_at ?? operation.at), member_ids: [] })
+              created_at: String(item.created_at ?? operation.at), member_ids: [],
+              ...(GROUP_BASES.includes(item.basis as GroupBasis) ? { basis: item.basis as GroupBasis } : {}) })
           break
         case 'group.update': {
           const group = groups.get(id)

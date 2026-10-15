@@ -1,4 +1,4 @@
-import type { Entity, EntityType, Fact, Group, TruthState } from './types'
+import type { Entity, EntityType, Fact, Group, GroupBasis, TruthState } from './types'
 import { layerOf } from './layers'
 
 export const NODE_W = 230
@@ -346,22 +346,14 @@ export function groupShiftDrafts(group: Group, entities: Entity[], dx: number, d
     .map(e => ({ type: 'entity.position' as const, payload: { id: e.id, x: Math.round(e.position!.x + dx), y: Math.round(e.position!.y + dy) } }))
 }
 
-export type AutoGroup = { name: string; members: string[]; reason: string }
+export type AutoGroup = { name: string; members: string[]; reason: string; basis: GroupBasis }
 
 /**
- * Groups for a large graph, by the same characteristics, in three passes over entities of one type:
- * 1. the same operations with the same counterparts in the same roles ("41 Azure Resource · write …/deployments");
- * 2. the same counterparts with different operations;
- * 3. the same operations with the same shared counterparts, each with partners of its own: 90 files the same user
- *    accessed from the same IP, each in its own repository. A counterpart is shared when it takes part in at least
- *    `minSize` activities; rare ones count by their type only, and every link needs one shared counterpart, so
- *    unrelated incidents are never lumped together.
- * Entities already in a group and pinned ones stay as they are, and so does the one that differs; `only` limits it to,
- * for example, what an import just added.
+ * The likeness of every entity under each basis, as a key: entities with equal keys are alike. `operations` and
+ * `counterparts` say what an entity does and with whom. One pass over the activities; `only` keeps the links of just
+ * these entities (a counterpart's degree still counts every activity).
  */
-export function autoGroups(entities: Entity[], facts: Fact[], groups: Group[], options: { minSize?: number; only?: Set<string> } = {}): AutoGroup[] {
-  const minSize = options.minSize ?? 4
-  const grouped = new Set(groups.flatMap(g => g.member_ids))
+function likeness(entities: Entity[], facts: Fact[], minSize: number, only?: Set<string>) {
   const byId = new Map(entities.map(e => [e.id, e]))
   type Link = { id: string; role: string; operation: string; others: { id: string; role: string }[] }
   const links: Link[] = []
@@ -372,7 +364,7 @@ export function autoGroups(entities: Entity[], facts: Fact[], groups: Group[], o
       : [{ id: fact.subject_id, role: 'out' }, { id: fact.object_id, role: 'in' }]
     for (const end of ends) {
       degree.set(end.id, (degree.get(end.id) ?? 0) + 1)
-      links.push({ id: end.id, role: end.role, operation, others: ends.filter(o => o.id !== end.id) })
+      if (!only || only.has(end.id)) links.push({ id: end.id, role: end.role, operation, others: ends.filter(o => o.id !== end.id) })
     }
   }
   const shared = (id: string) => (degree.get(id) ?? 0) >= minSize
@@ -387,45 +379,104 @@ export function autoGroups(entities: Entity[], facts: Fact[], groups: Group[], o
     if (!link.others.some(o => shared(o.id))) noLoose.add(link.id)
     add(loose, link.id, head + link.others.map(o => `${o.role}:${shared(o.id) ? o.id : `~${byId.get(o.id)?.kind ?? '?'}`}`).sort().join(','))
   }
-  const candidates = entities.filter(e => !grouped.has(e.id) && !e.pinned && exact.has(e.id) && (!options.only || options.only.has(e.id)))
+  // IPs: by what they are (network provider, country, tooling, operations), not by address range. Read only when asked.
+  let ipTraitsOf: ReturnType<typeof ipTraits> | null = null
+  const traits = { get: (id: string) => (ipTraitsOf ??= ipTraits(entities, facts)).get(id) }
+  const kindOf = (id: string) => byId.get(id)?.kind ?? '?'
+  const key: Record<GroupBasis, (id: string) => string | null> = {
+    links: id => exact.has(id) ? `${kindOf(id)}\u0000${[...exact.get(id)!].sort().join('\u0001')}` : null,
+    counterparts: id => exact.has(id) ? `${kindOf(id)}\u0000${[...(counterparts.get(id) ?? [])].sort().join(',')}` : null,
+    'shared-links': id => exact.has(id) && !noLoose.has(id) ? `${kindOf(id)}\u0000${[...loose.get(id)!].sort().join('\u0001')}` : null,
+    network: id => { const t = traits.get(id); return exact.has(id) && /^ip$/i.test(kindOf(id)) && t?.asn ? `${t.asn}|${t.country}|${t.agent}|${[...(operations.get(id) ?? [])].sort().join(',')}` : null },
+  }
+  return { byId, key, shared, operations, counterparts, traits }
+}
+
+/**
+ * Groups for a large graph, by the same characteristics, in three passes over entities of one type:
+ * 1. the same operations with the same counterparts in the same roles ("41 Azure Resource · write …/deployments");
+ * 2. the same counterparts with different operations;
+ * 3. the same operations with the same shared counterparts, each with partners of its own: 90 files the same user
+ *    accessed from the same IP, each in its own repository. A counterpart is shared when it takes part in at least
+ *    `minSize` activities; rare ones count by their type only, and every link needs one shared counterpart, so
+ *    unrelated incidents are never lumped together.
+ * Entities already in a group and pinned ones stay as they are, and so does the one that differs; `only` limits it to,
+ * for example, what an import just added. Each group says its basis, so later evidence that sets a member apart shows.
+ */
+export function autoGroups(entities: Entity[], facts: Fact[], groups: Group[], options: { minSize?: number; only?: Set<string> } = {}): AutoGroup[] {
+  const minSize = options.minSize ?? 4
+  const grouped = new Set(groups.flatMap(g => g.member_ids))
+  const { byId, key, shared, operations, counterparts, traits } = likeness(entities, facts, minSize)
+  const candidates = entities.filter(e => !grouped.has(e.id) && !e.pinned && key.links(e.id) !== null && (!options.only || options.only.has(e.id)))
   const result: AutoGroup[] = []
   const taken = new Set<string>()
-  const bucket = (key: (e: Entity) => string | null) => {
+  const bucket = (basis: GroupBasis) => {
     const buckets = new Map<string, Entity[]>()
     for (const e of candidates) {
       if (taken.has(e.id)) continue
-      const k = key(e)
+      const k = key[basis](e.id)
       if (k === null) continue
       const list = buckets.get(k); if (list) list.push(e); else buckets.set(k, [e])
     }
     return [...buckets.values()].filter(list => list.length >= minSize).sort((a, b) => b.length - a.length)
   }
   const names = (ids: Iterable<string>) => { const list = [...ids].map(id => byId.get(id)?.name ?? '?'); return list.slice(0, 2).join(', ') + (list.length > 2 ? ` +${list.length - 2}` : '') }
-  const take = (members: Entity[], name: (ops: Set<string>) => string, reason: string) => {
+  const take = (basis: GroupBasis, members: Entity[], name: (ops: Set<string>) => string, reason: string) => {
     const ops = new Set(members.flatMap(m => [...(operations.get(m.id) ?? [])]))
     members.forEach(m => taken.add(m.id))
-    result.push({ members: members.map(m => m.id), name: `${members[0].kind} · ${name(ops)}`, reason })
+    result.push({ members: members.map(m => m.id), name: `${members[0].kind} · ${name(ops)}`, reason, basis })
   }
   const one = (ops: Set<string>) => ops.size === 1 ? [...ops][0] : `${ops.size} operations`
-  for (const members of bucket(e => `${e.kind}\u0000${[...exact.get(e.id)!].sort().join('\u0001')}`))
-    take(members, one, `Same operation and counterparts: ${names(counterparts.get(members[0].id) ?? [])}`)
-  for (const members of bucket(e => `${e.kind}\u0000${[...(counterparts.get(e.id) ?? [])].sort().join(',')}`))
-    take(members, ops => `${ops.size} operations`, `Same counterparts (${names(counterparts.get(members[0].id) ?? [])}), different operations`)
-  for (const members of bucket(e => noLoose.has(e.id) ? null : `${e.kind}\u0000${[...loose.get(e.id)!].sort().join('\u0001')}`)) {
+  for (const members of bucket('links'))
+    take('links', members, one, `Same operation and counterparts: ${names(counterparts.get(members[0].id) ?? [])}`)
+  for (const members of bucket('counterparts'))
+    take('counterparts', members, ops => `${ops.size} operations`, `Same counterparts (${names(counterparts.get(members[0].id) ?? [])}), different operations`)
+  for (const members of bucket('shared-links')) {
     const peers = [...(counterparts.get(members[0].id) ?? [])]
     const own = [...new Set(peers.filter(id => !shared(id)).map(id => byId.get(id)?.kind ?? '?'))]
-    take(members, one, `Same operation with ${names(peers.filter(shared))}; each with its own ${own.join(', ')}`)
+    take('shared-links', members, one, `Same operation with ${names(peers.filter(shared))}; each with its own ${own.join(', ')}`)
   }
-  // IPs: by what they are (network provider, country, tooling, operations), not by address range.
-  const traits = ipTraits(entities, facts)
   const label = (id: string) => { const t = traits.get(id); return t ? [t.asn && `AS${t.asn}`, t.country, t.agent].filter(Boolean).join(' · ') : '' }
-  for (const members of bucket(e => { const t = traits.get(e.id); return /^ip$/i.test(e.kind) && t?.asn ? `${t.asn}|${t.country}|${t.agent}|${[...(operations.get(e.id) ?? [])].sort().join(',')}` : null }))
-    take(members, ops => `${label(members[0].id)} · ${one(ops)}`, `Same network provider, country, tooling and operations`)
+  for (const members of bucket('network'))
+    take('network', members, ops => `${label(members[0].id)} · ${one(ops)}`, `Same network provider, country, tooling and operations`)
   // Name IP groups after what their members share.
   for (const group of result) {
     if (!/^IP · /.test(group.name) || group.name.includes(' · AS')) continue
     const shared = label(group.members[0])
     if (shared && group.members.every(id => label(id) === shared)) group.name = group.name.replace(/^IP · /, `IP · ${shared} · `)
+  }
+  return result
+}
+
+/** A member that no longer is like the rest of its group: what it does that they do not, and what it no longer does. */
+export type GroupDrift = { id: string; added: string[]; missing: string[] }
+
+/**
+ * Members of generated groups that later evidence set apart: their likeness (the group's basis) differs from what most
+ * members share now. Compared with the majority rather than the state at grouping, so a change all members share (an
+ * import that adds the same activity to each, a merged counterpart) sets nobody apart. Derived on every change and never
+ * written to the board: every browser comes to the same result, and taking members out stays the analyst's decision.
+ */
+export function groupDrift(groups: Group[], entities: Entity[], facts: Fact[], minSize = 4): Map<string, GroupDrift[]> {
+  const result = new Map<string, GroupDrift[]>()
+  const generated = groups.filter(g => g.basis && !g.rule && g.member_ids.length >= 2)
+  if (!generated.length) return result
+  const { key, operations } = likeness(entities, facts, minSize, new Set(generated.flatMap(g => g.member_ids)))
+  for (const group of generated) {
+    const keys = new Map(group.member_ids.map(id => [id, key[group.basis!](id)]))
+    const counts = new Map<string, number>()
+    for (const k of keys.values()) if (k !== null) counts.set(k, (counts.get(k) ?? 0) + 1)
+    const [usual, count] = [...counts].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1))[0] ?? [null, 0]
+    if (usual === null || count < 2) continue
+    const typical = group.member_ids.find(id => keys.get(id) === usual)!
+    const theirs = operations.get(typical) ?? new Set<string>()
+    const drift: GroupDrift[] = []
+    for (const id of group.member_ids) {
+      if (keys.get(id) === usual) continue
+      const own = operations.get(id) ?? new Set<string>()
+      drift.push({ id, added: [...own].filter(op => !theirs.has(op)).sort(), missing: [...theirs].filter(op => !own.has(op)).sort() })
+    }
+    if (drift.length) result.set(group.id, drift)
   }
   return result
 }
@@ -455,7 +506,7 @@ export function autoGroupDrafts(found: AutoGroup[], entities: Entity[], newId: (
   const byId = new Map(entities.map(e => [e.id, e]))
   return found.map(group => {
     const center = centroid(group.members.map(id => byId.get(id)?.position ?? { x: 0, y: 0 }))
-    return { type: 'group.add' as const, payload: { id: newId(), name: group.name, members: group.members, rule: null, excluded: [], collapsed: true,
+    return { type: 'group.add' as const, payload: { id: newId(), name: group.name, members: group.members, rule: null, excluded: [], collapsed: true, basis: group.basis,
       x: Math.round(center.x / 20) * 20, y: Math.round(center.y / 20) * 20 } }
   })
 }

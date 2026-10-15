@@ -942,7 +942,7 @@ test('organic layout runs in a worker: canvas stays responsive, cancel saves not
 })
 
 test('large graphs: a dropped export collapses similar resources into groups, activities are bundled, undo and "Group all similar"',async({page,request})=>{
-  const {graph}=await setup(page,request)
+  const {graph,call}=await setup(page,request)
   const sp='0b7f0c1e-1111-4222-8333-444444444444'
   const row=(op:string,account:string,event:string)=>`"9/27/2026, 10:15:00.250 AM",${sp},203.0.113.50,MICROSOFT.COGNITIVESERVICES/ACCOUNTS/${op},Success,rg-ai,c-${event},${event},/subscriptions/0/resourcegroups/rg-ai/providers/microsoft.cognitiveservices/accounts/${account}`
   const rows=['"TimeGenerated [UTC]",Caller,CallerIpAddress,OperationNameValue,ActivityStatusValue,ResourceGroup,CorrelationId,EventDataId,_ResourceId']
@@ -971,6 +971,23 @@ test('large graphs: a dropped export collapses similar resources into groups, ac
   await expect.poll(async()=>(await graph()).groups?.length??0).toBe(2)
   await expect(page.getByText('2 groups · 11 similar entities collapsed')).toBeVisible()
   await expect(canvas.locator('.react-flow__node-activity')).toHaveCount(4)
+  // Later evidence sets one member apart (the attacker also lists the keys of acc-2): the group says so, and one click
+  // takes it out. Nothing changes on its own.
+  await expect(canvas.locator('.drift-badge')).toHaveCount(0)
+  const grouped=await graph()
+  const acc2=grouped.entities.find((e:any)=>e.name==='acc-2').id
+  const write=grouped.facts.find((f:any)=>f.participants?.some((p:any)=>p.entity_id===acc2))
+  await call('POST','/activities',{operation:'listkeys cognitiveservices/accounts',participants:write.participants.map((p:any)=>({entity_id:p.entity_id,role:p.role}))})
+  await expect(canvas.locator('.drift-badge')).toHaveText('1 differs')
+  expect((await graph()).groups.find((g:any)=>g.name.includes('write')).member_ids).toContain(acc2)
+  await canvas.locator('.group-node',{hasText:'write cognitiveservices'}).click()
+  await expect(page.getByText('1 of 6 no longer like the rest')).toBeVisible()
+  await expect(page.locator('.impact-callout.drift')).toContainText('acc-2')
+  await expect(page.locator('.impact-callout.drift')).toContainText('+ listkeys cognitiveservices/accounts')
+  await page.getByRole('button',{name:'Take it out'}).click()
+  await expect.poll(async()=>(await graph()).groups.find((g:any)=>g.name.includes('write')).member_ids.length).toBe(5)
+  await expect(canvas.locator('.drift-badge')).toHaveCount(0)
+  await expect(page.getByText('Kept separate')).toBeVisible()
 })
 
 test('attack impact: mark a stolen secret since a time, pivot to the new IP, see impacted resources, rotate, hunt (UI, REST, MCP)',async({page,request})=>{

@@ -45,9 +45,11 @@ export type Participant = { entity_id: string; role: string }
 export type EntityType = { id: string; name: string; color: string; icon: string; layer?: string }
 export type GroupRule = { kinds?: string[]; match?: string; container_id?: string | null }
 /** A view structure: it bundles entities on the canvas and never changes claims or evidence. */
+/** Which likeness a generated group rests on ("Group all similar"): the same links, counterparts, shared links or network. */
+export type GroupBasis = 'links' | 'counterparts' | 'shared-links' | 'network'
 export type Group = {
   id: string; name: string; members: string[]; excluded: string[]; rule: GroupRule | null;
-  collapsed: boolean; color?: string; position?: { x: number; y: number }; created_at: string;
+  collapsed: boolean; color?: string; position?: { x: number; y: number }; created_at: string; basis?: GroupBasis;
   member_ids: string[];
 }
 export type Perspective = { id: string; name: string; layers: string[] | null; collapse_activities: boolean; show_lanes: boolean }

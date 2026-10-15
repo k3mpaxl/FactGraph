@@ -1,9 +1,9 @@
 import { Fragment, useMemo, useState, type ReactNode } from 'react'
-import { ArrowLeft, ArrowRight, Boxes, ChevronDown, ChevronRight, CornerDownLeft, Crosshair, Pencil, Plus, Search, ShieldAlert, Ungroup, X, Zap } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Boxes, ChevronDown, ChevronRight, CornerDownLeft, Crosshair, Pencil, Plus, Search, ShieldAlert, Split, Ungroup, X, Zap } from 'lucide-react'
 import type { ActionDraft } from './board'
 import type { Fact, GraphData, Group, Participant } from './types'
 import { uuid } from './uuid'
-import { groupToggleDrafts } from './viewModel'
+import { groupDrift, groupToggleDrafts } from './viewModel'
 import { EFFECT_LABEL, type Impact } from './impact'
 import { fromUtcInput } from './timeline'
 import { EntityPicker } from './EntityPicker'
@@ -51,6 +51,7 @@ export function GroupInspector({ data, group, onCommand, onSelect, onFocus, onCl
     .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true })), [group.member_ids, byId, needle])
   const run = (drafts: ActionDraft[]) => void onCommand(drafts).catch(() => {})
   const container = group.rule?.container_id ? byId.get(group.rule.container_id) : undefined
+  const drift = useMemo(() => groupDrift([group], data.entities, data.facts).get(group.id) ?? [], [group, data.entities, data.facts])
   return <aside className="inspector" aria-label="Inspector">
     <div className="inspector-head"><span className="eyebrow">{container ? 'Contents' : 'Group'}</span><div className="head-actions">
       <button className="icon-button" onClick={onClose} aria-label="Close" title="Close · Esc"><X size={16} /></button></div></div>
@@ -78,6 +79,16 @@ export function GroupInspector({ data, group, onCommand, onSelect, onFocus, onCl
             <dl className="impact-fields">{[...effects].map(([effect, n]) => <Fragment key={effect}><dt>{EFFECT_LABEL[effect as keyof typeof EFFECT_LABEL]}</dt><dd>{n}</dd></Fragment>)}
               {regular > 0 && <><dt>Likely regular</dt><dd>{regular}</dd></>}{marks.good > 0 && <><dt>Good</dt><dd>{marks.good}</dd></>}</dl></div></div>
       })() : null}
+      {drift.length > 0 && <div className="impact-callout drift"><Split size={15} /><div>
+        <strong>{drift.length} of {group.member_ids.length} no longer like the rest</strong>
+        <p className="small">Evidence added since grouping sets {drift.length === 1 ? 'this member' : 'these members'} apart. Inside the group {drift.length === 1 ? 'it is' : 'they are'} easy to miss.</p>
+        <div className="member-list">{drift.slice(0, 8).map(d => <div key={d.id} className="member-row">
+          <button className="member-name" onClick={() => onSelect({ kind: 'entity', id: d.id }, !group.collapsed)} title={byId.get(d.id)?.name}>{byId.get(d.id)?.name ?? 'Unknown'}</button>
+          <span className="member-kind" title={[d.added.length && `also: ${d.added.join(', ')}`, d.missing.length && `not: ${d.missing.join(', ')}`].filter(Boolean).join(' · ') || 'other counterparts'}>
+            {d.added.length ? `+ ${d.added[0]}${d.added.length > 1 ? ` +${d.added.length - 1}` : ''}` : d.missing.length ? `− ${d.missing[0]}` : 'other counterparts'}</span></div>)}</div>
+        {drift.length > 8 && <p className="small muted">+{drift.length - 8} more</p>}
+        <button className="primary-button small" onClick={() => run([{ type: 'group.update', payload: { id: group.id, exclude: drift.map(d => d.id) } }])}><Ungroup size={13} /> Take {drift.length === 1 ? 'it' : `all ${drift.length}`} out</button>
+      </div></div>}
       <p className="inspector-note plain">A group bundles entities on the canvas. Relationships and evidence of its members are unchanged; edges show how many members they stand for.</p>
       {!container && <Collapsible title="Rule" action={<button className="text-button" onClick={() => setRuleEdit(ruleEdit ? null : { kinds: group.rule?.kinds?.join(', ') ?? '', match: group.rule?.match ?? '' })}>{ruleEdit ? 'Cancel' : 'Edit'}</button>}>
         {ruleEdit ? <form className="stack" onSubmit={e => { e.preventDefault(); const kinds = ruleEdit.kinds.split(',').map(k => k.trim()).filter(Boolean); run([{ type: 'group.update', payload: { id: group.id, rule: kinds.length || ruleEdit.match.trim() ? { kinds, match: ruleEdit.match.trim() } : null } }]); setRuleEdit(null) }}>

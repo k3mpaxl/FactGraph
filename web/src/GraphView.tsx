@@ -21,7 +21,7 @@ const MIN_ZOOM = 0.05
 const MAX_ZOOM = 2.5
 import { entityVisual } from './entityVisual'
 import { LAYERS, layerOf } from './layers'
-import { buildViewModel, groupShiftDrafts, groupToggleDrafts, groupSuggestions, autoGroups, autoGroupDrafts, activityNodeId, groupNodeId, edgeGeometry, edgeOffsets, edgeWidth, NODE_H, NODE_W, type NodeBox, type VNode } from './viewModel'
+import { buildViewModel, groupShiftDrafts, groupToggleDrafts, groupSuggestions, autoGroups, autoGroupDrafts, groupDrift, activityNodeId, groupNodeId, edgeGeometry, edgeOffsets, edgeWidth, NODE_H, NODE_W, type NodeBox, type VNode } from './viewModel'
 import { uuid } from './uuid'
 
 export type Selection = { kind: 'entity' | 'fact' | 'group'; id: string } | null
@@ -62,7 +62,8 @@ type HandlerRef = { current: Handlers }
 type Mark = 'compromised' | 'derived' | 'pivot' | 'impacted' | 'good'
 type EntityData = { v: Extract<VNode, { kind: 'entity' }>; icon?: string; color: string; dimmed: boolean; match: boolean; handlers: HandlerRef; mark?: Mark; effect?: Effect; regular?: boolean; flag?: string; suspected?: boolean }
 /** marks: "compromised|impacted" member counts, a string so unchanged nodes keep their identity. */
-type GroupData = { v: Extract<VNode, { kind: 'group' }>; dimmed: boolean; match: boolean; handlers: HandlerRef; marks?: string }
+/** drift: members that later evidence set apart from the rest of a generated group. */
+type GroupData = { v: Extract<VNode, { kind: 'group' }>; dimmed: boolean; match: boolean; handlers: HandlerRef; marks?: string; drift?: number }
 type ActivityData = { v: Extract<VNode, { kind: 'activity' }>; dimmed: boolean; attack?: boolean }
 type FrameData = { v: Extract<VNode, { kind: 'frame' }>; handlers: HandlerRef }
 type AnyData = EntityData | GroupData | ActivityData | FrameData
@@ -106,6 +107,7 @@ const GroupCard = memo(function GroupCard({ data, selected }: NodeProps<Node<Gro
   return <div className={`group-node${selected ? ' selected' : ''}${data.dimmed ? ' dimmed' : ''}${data.match ? ' match' : ''}${compromised ? ' mark-compromised' : impacted ? ' mark-impacted' : ''}`} style={{ '--entity-color': group.color || 'var(--accent)' } as CSSProperties}>
     {hiddenHandles}
     {(compromised > 0 || impacted > 0) && <span className={`impact-badge ${compromised ? 'compromised' : 'impacted'}`}>{[compromised && `${compromised} compromised`, impacted && `${impacted} impacted`].filter(Boolean).join(' · ')}</span>}
+    {!!data.drift && <span className="drift-badge" title="Later evidence sets these members apart from the rest of the group: select the group to see them and take them out">{data.drift} differ{data.drift === 1 ? 's' : ''}</span>}
     <div className="group-stack" />
     <div className="group-body">
       <div className="node-icon"><Boxes size={16} /></div>
@@ -327,6 +329,7 @@ function Canvas(props: Props) {
   const impactEffects = useMemo(() => new Map((impact?.impacted ?? []).map(i => [i.entity.id, i.effect])), [impact])
   const impactRegular = useMemo(() => new Set((impact?.impacted ?? []).filter(i => i.regular).map(i => i.entity.id)), [impact])
   const impactSuspected = useMemo(() => new Set((impact?.seeds ?? []).filter(s => s.suspected).map(s => s.entity.id)), [impact])
+  const drift = useMemo(() => groupDrift(groups, entities, facts), [groups, entities, facts])
   const groupMarks = useMemo(() => {
     const marks = new Map<string, string>()
     if (!impact?.marks.size) return marks
@@ -416,7 +419,7 @@ function Canvas(props: Props) {
             flag: shown.flags.get(v.entity.id)?.size ? [...shown.flags.get(v.entity.id)!].slice(0, 3).map(code => String.fromCodePoint(...[...code].map(c => 127397 + c.charCodeAt(0)))).join('') + ` ${[...shown.flags.get(v.entity.id)!].slice(0, 3).join('/')}` : undefined }
         } else if (v.kind === 'group') {
           const match = !!needle && v.group.member_ids.some(id => { const e = entityById.get(id); return !!e && matches(e) })
-          data = { v, match, dimmed: (!!needle && !match) || dimmedByFocus || (!!lensIds && !lensIds.has(v.id)), handlers, marks: groupMarks.get(v.group.id) }
+          data = { v, match, dimmed: (!!needle && !match) || dimmedByFocus || (!!lensIds && !lensIds.has(v.id)), handlers, marks: groupMarks.get(v.group.id), drift: drift.get(v.group.id)?.length }
         } else if (v.kind === 'activity') {
           // Red only for what is likely the attacker's; activity that also happened exactly so before is in the lens, not red.
           const windowed = !!impact?.facts.size && v.facts.some(f => impact.facts.has(f.id))
@@ -433,7 +436,7 @@ function Canvas(props: Props) {
           selectable: v.kind !== 'frame', zIndex: v.kind === 'frame' ? -1 : undefined, ...(v.kind === 'frame' ? { width: v.width, height: v.height } : {}) } as Node<AnyData>
       })
     })
-  }, [view, selectedNodeId, needle, typeByName, focusIds, impact, lensIds, impactEffects, impactRegular, impactSuspected, groupMarks, hideUnrelated, shown])
+  }, [view, selectedNodeId, needle, typeByName, focusIds, impact, lensIds, impactEffects, impactRegular, impactSuspected, groupMarks, drift, hideUnrelated, shown])
   useEffect(() => { if (pendingFocus.current && groups.some(g => g.id === pendingFocus.current && !g.collapsed)) { const id = pendingFocus.current; pendingFocus.current = null; requestAnimationFrame(() => focusOn(id)) } }, [view])
   // Arrange once the new groups are on the canvas (React Flow has the nodes after this render).
   useEffect(() => {

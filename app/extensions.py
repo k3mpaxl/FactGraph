@@ -12,6 +12,7 @@ from app.contracts import LAYER_HELP, Layer, StrictModel
 from app.descriptions import describe_routes, purpose, tool_description
 from app.tool_profiles import AGENT_TOOLS, annotations_for, configured_profile, set_tool_profile
 from app.ingest import action
+from app.relations import find_joins
 
 
 class ReviewInput(StrictModel):
@@ -182,6 +183,12 @@ def register_extensions(app, mcp, core):
     async def guidelines():
         return {'rules': core['MCP_INSTRUCTIONS'].strip().splitlines()}
 
+    @app.get('/api/relations')
+    def list_column_relations(table: str = '', column: str = '', family: str = '', limit: int = 20):
+        if not 1 <= limit <= 100:
+            raise HTTPException(422, 'limit must be 1 to 100')
+        return find_joins(table=table.strip(), column=column.strip(), family=family.strip(), limit=limit)
+
     def collection_routes(resource, key):
         # The browser filters and paginates, so only the requested slice crosses the WebSocket. Lists shorten long
         # texts (<field>_truncated, <field>_length); a single record is complete.
@@ -297,7 +304,7 @@ def register_mcp_adapter(mcp, route, run_session, board_of_session, *, name: str
     invoke.__doc__ = description or tool_description(route)
     tool = FunctionTool.from_function(invoke, name=invoke.__name__, annotations=annotations)
     # Only the advertised schema: arguments are validated against the function, which still accepts what is left out.
-    hidden = {'session_token'} | (set() if show_board else {'board_id'})
+    hidden = {'session_token'} | (set() if show_board else {'board_id'}) | (set() if 'board_id' in signature.parameters else {'board_token'})
     tool.parameters = {**tool.parameters, 'properties': {key: value for key, value in tool.parameters.get('properties', {}).items() if key not in hidden}}
     mcp.add_tool(tool)
     return invoke.__name__

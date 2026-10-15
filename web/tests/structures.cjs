@@ -2,7 +2,7 @@ const assert = require('node:assert/strict')
 const path = require('node:path').resolve(process.argv[2])
 const { project, sortActions } = require(path + '/board.js')
 const { validateDrafts } = require(path + '/validation.js')
-const { buildViewModel, groupSuggestions, groupToggleDrafts, groupShiftDrafts, autoGroups, autoGroupDrafts } = require(path + '/viewModel.js')
+const { buildViewModel, groupSuggestions, groupToggleDrafts, groupShiftDrafts, autoGroups, autoGroupDrafts, groupDrift } = require(path + '/viewModel.js')
 const { layerOf } = require(path + '/layers.js')
 
 let clock = 0
@@ -214,7 +214,8 @@ console.log('Activities, layers, groups with exclusions, containers, suggestions
 
   let n = 0
   const drafts = autoGroupDrafts(found, data.entities, () => `g${n++}`)
-  assert.deepEqual(drafts[1].payload, { id: 'g1', name: 'Azure Resource · delete', members: ['d0', 'd1', 'd2', 'd3'], rule: null, excluded: [], collapsed: true,
+  assert.deepEqual(found.map(g => g.basis), ['links', 'links', 'counterparts'])
+  assert.deepEqual(drafts[1].payload, { id: 'g1', name: 'Azure Resource · delete', members: ['d0', 'd1', 'd2', 'd3'], rule: null, excluded: [], collapsed: true, basis: 'links',
     x: Math.round(data.entities.filter(e => found[1].members.includes(e.id)).reduce((s, e) => s + e.position.x, 0) / 4 / 20) * 20, y: 40 })
   validateDrafts(data, drafts)
   const grouped = project('b', [...ops, ...drafts.map(d => act(d.type, d.payload))]).data
@@ -228,6 +229,26 @@ console.log('Activities, layers, groups with exclusions, containers, suggestions
   assert.deepEqual(activities.filter(n => n.fact.predicate !== 'write deployments' && n.fact.predicate !== 'delete').map(n => n.count).sort(), [2, 2], 'AKS group: one node per operation')
   assert.ok(after.nodes.length < before.nodes.length / 2, `${before.nodes.length} → ${after.nodes.length} nodes`)
   console.log(`Auto grouping and activity bundling passed (${before.nodes.length} → ${after.nodes.length} nodes)`)
+
+  // Later evidence sets a member apart: the attacker also lists the keys of one of the six resources. A change all
+  // members share (every deleted resource gets tagged) sets nobody apart; manual groups and rule groups are not judged.
+  assert.equal(groupDrift(grouped.groups, grouped.entities, grouped.facts).size, 0, 'nothing differs right after grouping')
+  const later = [...ops, ...drafts.map(d => act(d.type, d.payload)), act('fact.add', { id: 'lk', predicate: 'listkeys', participants: [{ entity_id: 'sp', role: 'actor' }, { entity_id: 'ip', role: 'source' }, { entity_id: 'w2', role: 'target' }] }),
+    ...[0, 1, 2, 3].map(i => act('fact.add', { id: `tag${i}`, predicate: 'tag', participants: [{ entity_id: 'sp', role: 'actor' }, { entity_id: 'ip', role: 'source' }, { entity_id: `d${i}`, role: 'target' }] })),
+    act('fact.add', { id: 'kept2', predicate: 'listkeys', participants: [{ entity_id: 'sp', role: 'actor' }, { entity_id: 'kept', role: 'target' }] })]
+  const changed = project('b', later).data
+  const drift = groupDrift(changed.groups, changed.entities, changed.facts)
+  assert.deepEqual([...drift.keys()], ['g0'])
+  assert.deepEqual(drift.get('g0'), [{ id: 'w2', added: ['listkeys'], missing: [] }])
+  // The basis survives the sync: a peer that receives the group judges it the same way.
+  assert.equal(changed.groups.find(g => g.id === 'g0').basis, 'links')
+  assert.equal(changed.groups.find(g => g.id === 'old').basis, undefined)
+  assert.throws(() => validateDrafts(data, [{ type: 'group.add', payload: { id: 'gx', name: 'x', members: [], basis: 'vibes' } }]), /Unknown group basis/)
+  // Taken out, it shows on its own and the group is alike again.
+  const out = project('b', [...later, act('group.update', { id: 'g0', exclude: drift.get('g0').map(d => d.id) })]).data
+  assert.equal(groupDrift(out.groups, out.entities, out.facts).size, 0)
+  assert.ok(view(out).nodes.some(n => n.kind === 'entity' && n.id === 'w2'))
+  console.log('Group drift: members set apart by later evidence, shared changes ignored, take out passed')
 }
 
 // Third pass: the same operation with the same shared counterparts, each with a partner of its own (one user reads one

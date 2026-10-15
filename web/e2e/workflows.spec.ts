@@ -942,7 +942,7 @@ test('organic layout runs in a worker: canvas stays responsive, cancel saves not
 })
 
 test('large graphs: a dropped export collapses similar resources into groups, activities are bundled, undo and "Group all similar"',async({page,request})=>{
-  const {graph}=await setup(page,request)
+  const {graph,call}=await setup(page,request)
   const sp='0b7f0c1e-1111-4222-8333-444444444444'
   const row=(op:string,account:string,event:string)=>`"9/27/2026, 10:15:00.250 AM",${sp},203.0.113.50,MICROSOFT.COGNITIVESERVICES/ACCOUNTS/${op},Success,rg-ai,c-${event},${event},/subscriptions/0/resourcegroups/rg-ai/providers/microsoft.cognitiveservices/accounts/${account}`
   const rows=['"TimeGenerated [UTC]",Caller,CallerIpAddress,OperationNameValue,ActivityStatusValue,ResourceGroup,CorrelationId,EventDataId,_ResourceId']
@@ -971,6 +971,23 @@ test('large graphs: a dropped export collapses similar resources into groups, ac
   await expect.poll(async()=>(await graph()).groups?.length??0).toBe(2)
   await expect(page.getByText('2 groups · 11 similar entities collapsed')).toBeVisible()
   await expect(canvas.locator('.react-flow__node-activity')).toHaveCount(4)
+  // Later evidence sets one member apart (the attacker also lists the keys of acc-2): the group says so, and one click
+  // takes it out. Nothing changes on its own.
+  await expect(canvas.locator('.drift-badge')).toHaveCount(0)
+  const grouped=await graph()
+  const acc2=grouped.entities.find((e:any)=>e.name==='acc-2').id
+  const write=grouped.facts.find((f:any)=>f.participants?.some((p:any)=>p.entity_id===acc2))
+  await call('POST','/activities',{operation:'listkeys cognitiveservices/accounts',participants:write.participants.map((p:any)=>({entity_id:p.entity_id,role:p.role}))})
+  await expect(canvas.locator('.drift-badge')).toHaveText('1 differs')
+  expect((await graph()).groups.find((g:any)=>g.name.includes('write')).member_ids).toContain(acc2)
+  await canvas.locator('.group-node',{hasText:'write cognitiveservices'}).click()
+  await expect(page.getByText('1 of 6 no longer like the rest')).toBeVisible()
+  await expect(page.locator('.impact-callout.drift')).toContainText('acc-2')
+  await expect(page.locator('.impact-callout.drift')).toContainText('+ listkeys cognitiveservices/accounts')
+  await page.getByRole('button',{name:'Take it out'}).click()
+  await expect.poll(async()=>(await graph()).groups.find((g:any)=>g.name.includes('write')).member_ids.length).toBe(5)
+  await expect(canvas.locator('.drift-badge')).toHaveCount(0)
+  await expect(page.getByText('Kept separate')).toBeVisible()
 })
 
 test('attack impact: mark a stolen secret since a time, pivot to the new IP, see impacted resources, rotate, hunt (UI, REST, MCP)',async({page,request})=>{
@@ -1042,4 +1059,21 @@ test('attack impact: mark a stolen secret since a time, pivot to the new IP, see
   expect(bad.status()).toBe(422)
   await mcp(token,'update_entity',{board_id:id,entity_id:sp.id,body:{compromise:{from:'2026-09-15T00:00:00Z',note:'agent'}}})
   await expect.poll(async()=>(await call('GET','/impact')).seeds.find((s:any)=>s.name==='deploy-bot')?.note).toBe('agent')
+})
+
+test('linked by ID: an activity leads to the process launch it ran in and to what that process did',async({page,request})=>{
+  const {call}=await setup(page,request)
+  const device={DeviceId:'dev-0142',DeviceName:'ws-0142.corp.example'}
+  await call('POST','/imports/table',{title:'DeviceProcessEvents',rows:[{...device,Timestamp:'2026-09-28T10:00:00Z',ActionType:'ProcessCreated',FileName:'powershell.exe',
+    FolderPath:'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',ProcessCommandLine:'powershell -enc SQBFAFgA',InitiatingProcessFileName:'winword.exe',
+    ProcessUniqueId:'200',InitiatingProcessUniqueId:'100',ReportId:'1'}]})
+  await call('POST','/imports/table',{title:'DeviceNetworkEvents',rows:[{...device,Timestamp:'2026-09-28T10:00:05Z',ActionType:'ConnectionSuccess',RemoteIP:'203.0.113.7',
+    RemotePort:'443',InitiatingProcessFileName:'powershell.exe',InitiatingProcessUniqueId:'200',ReportId:'2'}]})
+  await page.locator('.activity-node',{hasText:'connection success'}).click()
+  const linked=page.locator('.linked-list')
+  await expect(linked.getByText('Process launched by')).toBeVisible()
+  await linked.locator('.linked-row',{hasText:'process created'}).click()
+  await expect(page.locator('.inspector h2')).toHaveText('process created')
+  await expect(page.locator('.linked-list').getByText('Then the process it started')).toBeVisible()
+  await expect(page.locator('.linked-list .linked-row',{hasText:'connection success'})).toBeVisible()
 })

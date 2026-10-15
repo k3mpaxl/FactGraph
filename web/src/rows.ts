@@ -16,7 +16,7 @@ export const ROW_FIELDS: [string, string[]][] = [
   ['ASN', ['AutonomousSystemNumber']],
   ['Credential', ['ServicePrincipalCredentialKeyId', 'KeyId', 'ClientCredentialType']],
   ['User agent', ['UserAgent', 'user_agent']],
-  ['Session', ['UniqueTokenIdentifier', 'Claims.uti', 'SignInActivityId']],
+  ['Session', ['UniqueTokenIdentifier', 'UniqueTokenId', 'Claims.uti', 'AppAccessContext.UniqueTokenId', 'SignInActivityId']],
   ['Correlation', ['CorrelationId', 'correlation_id']],
 ]
 const rowCache = new WeakMap<Assertion, Record<string, unknown> | null>()

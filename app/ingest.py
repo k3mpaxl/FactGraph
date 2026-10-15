@@ -380,13 +380,17 @@ def table_rows_to_actions(board_id: str, rows: list[dict], mapping, *, title: st
     created: set[str] = set()
     touched: set[str] = set()
     activities: set[str] = set()
-    evidence = skipped = identifiers_added = 0
+    evidence = skipped = identifiers_added = enriched = not_on_board = 0
     times: list[str] = []
     for row_number, row in enumerate(rows, 1):
         source_id = row_sources[row_number - 1]
         participants: list[dict] = []
         labels: list[str] = []
+        anchored = False
         for part in participants_of(mapping, row):
+            # Inventory: nothing of a row is used unless an entity it describes is on the board (those parts come first).
+            if mapping.inventory and part["create"] and not anchored:
+                break
             kind, name = part["kind"], part["name"]
             keys = [(identifier_key(kind, i["scheme"], i["namespace"], normalize_identifier(i["scheme"], i["namespace"], i["raw"])), i)
                     for i in part["identifiers"]]
@@ -402,6 +406,10 @@ def table_rows_to_actions(board_id: str, rows: list[dict], mapping, *, title: st
                 # Files and processes are never joined by their name alone (two .env files on two devices are two files).
                 named = by_name.get((kind.casefold(), name.casefold())) if part.get("by_name", True) else None
                 entity_id = next((c for c in [*weak, named] if c and not contradicts(c)), None)
+            if not part["create"]:
+                if not entity_id or (entity_id not in existing_ids and entity_id not in created):
+                    continue
+                anchored = True
             if not entity_id:
                 anchor = next((f"{k[1]}:{k[2]}:{k[3]}" for k, _ in keys if k[1] in GLOBAL_SCHEMES), name.casefold())
                 entity_id = _stable(board_id, "entity", kind, anchor)
@@ -435,8 +443,14 @@ def table_rows_to_actions(board_id: str, rows: list[dict], mapping, *, title: st
                 participants.append({"entity_id": entity_id, "role": role})
                 labels.append(f"{role} {name}")
         operation = operation_of(mapping, row)
+        if mapping.inventory and not anchored:
+            not_on_board += 1
+            continue
         if len({p["entity_id"] for p in participants}) < 2 or not operation:
-            skipped += 1
+            if mapping.inventory:
+                enriched += 1
+            else:
+                skipped += 1
             continue
         key = "|".join(sorted(f"{p['role']}:{p['entity_id']}" for p in participants))
         activity_id = _stable(board_id, "activity", operation.casefold(), key)
@@ -464,6 +478,7 @@ def table_rows_to_actions(board_id: str, rows: list[dict], mapping, *, title: st
             action_id=_stable(board_id, "assertion-action", assertion_id), author="Import"))
         evidence += 1
     return drafts, {"rows": len(rows), "skipped": skipped, "entities": len(touched), "new_entities": len(created),
+                    **({"enriched": enriched, "not_on_board": not_on_board} if mapping.inventory else {}),
                     "relations": len(activities), "evidence": evidence, "identifiers": identifiers_added, "source_id": row_sources[0], "source_parts": len(set(row_sources)), "duplicates": duplicates,
                     "table": mapping.table, "product": mapping.product,
                     # For the preview: which column gives the event time (read as UTC) and how many rows have none.

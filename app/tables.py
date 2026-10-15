@@ -175,6 +175,11 @@ class Part:
     # entity is identified by device and path, never by its file name alone.
     path: tuple[str, ...] = ()
     scope: tuple[str, ...] = ()
+    # False: only an entity already on the board is used (and gets the row's IDs and name); none is created for it.
+    create: bool = True
+    # Processes: the column with the Windows process start key of this launch. With the DeviceId it says which process
+    # entity a row means when the path is missing (DeviceNetworkEvents often has no InitiatingProcessFolderPath).
+    start: tuple[str, ...] = ()
 
 
 SCOPED_KINDS = ("File", "Process")
@@ -203,6 +208,10 @@ class Mapping:
     locator: tuple[str, ...] = ("ReportId", "DeviceId")
     # Context for the observation text ("status Failure · role Owner"): label and column/path or function.
     details: tuple[tuple[str, object], ...] = ()
+    # Inventory tables (DeviceInfo, IdentityInfo, OAuthAppInfo) describe what is already on the board: a row is used only
+    # when one of its entities that are not created (create=False, listed first) is there; it adds that entity's IDs and
+    # name, and an activity only when the row names a second entity.
+    inventory: bool = False
 
 
 def url_kind(value: str) -> str:
@@ -242,6 +251,8 @@ def file_name(name_field: str, folder_field: str) -> Callable[[Row, Callable], s
 
 
 DEVICE_IDS = (Ident("DeviceId", namespace="mde-device-id"), Ident("AadDeviceId", namespace="entra-device-id"))
+# Defender XDR renamed AadDeviceId to EntraIdDeviceId (EntraIdSignInEvents has only the new name, the beta table both).
+ENTRA_DEVICE_IDS = (Ident("EntraIdDeviceId", namespace="entra-device-id"), Ident("AadDeviceId", namespace="entra-device-id"))
 HASHES = lambda prefix="": (Ident(f"{prefix}SHA256", namespace="sha256"), Ident(f"{prefix}SHA1", namespace="sha1"), Ident(f"{prefix}MD5", namespace="md5"))  # noqa: E731
 
 
@@ -256,7 +267,7 @@ def initiating_account(role="actor") -> Part:
 
 
 def initiating_process(role="via") -> Part:
-    return Part(role, "Process", ("InitiatingProcessFileName",), HASHES("InitiatingProcess"), path=("InitiatingProcessFolderPath",))
+    return Part(role, "Process", ("InitiatingProcessFileName",), HASHES("InitiatingProcess"), path=("InitiatingProcessFolderPath",), start=("InitiatingProcessUniqueId",))
 
 
 def sign_in(row: Row, g: Callable, result="ResultType", error="ErrorCode") -> str:
@@ -323,7 +334,7 @@ MAPPINGS: tuple[Mapping, ...] = (
     # ---------------------------------------------------------------- Defender XDR (and the same tables in Sentinel)
     Mapping("DeviceProcessEvents", "Defender XDR", ("DeviceName", "FileName", "ProcessCommandLine", "InitiatingProcessFileName"), (
         device(), initiating_account(), initiating_process(),
-        Part("target", "Process", ("FileName",), HASHES(), path=("FolderPath",)),
+        Part("target", "Process", ("FileName",), HASHES(), path=("FolderPath",), start=("ProcessUniqueId",)),
         Part("identity", "User", ("AccountUpn",), (Ident("AccountObjectId", namespace="entra-object-id"), Ident("AccountSid", namespace="windows-sid"),
              Ident("AccountUpn", "email")), name=account("AccountUpn", domain="AccountDomain", name="AccountName")))),
     Mapping("DeviceNetworkEvents", "Defender XDR", ("DeviceName", "RemoteIP", "RemotePort", "InitiatingProcessFileName"), (
@@ -381,7 +392,7 @@ MAPPINGS: tuple[Mapping, ...] = (
         Part("source", "IP", ("IPAddress",), (Ident("IPAddress", "ip"),)),
         location(("Country",)),
         Part("target", "Service", ("Application",), (Ident("ApplicationId", namespace="entra-app-id"),)),
-        device("via", ("DeviceName",), (Ident("AadDeviceId", namespace="entra-device-id"),))),
+        device("via", ("DeviceName",), ENTRA_DEVICE_IDS)),
         operation=lambda r, g: sign_in(r, g, "ErrorCode"), locator=("ReportId", "RequestId", "CorrelationId"),
         details=(("location", place), ("user agent", "UserAgent"))),
     Mapping("AADSignInEventsBeta", "Defender XDR", ("AccountUpn", "Application", "ErrorCode", "LogonType"), (
@@ -389,7 +400,7 @@ MAPPINGS: tuple[Mapping, ...] = (
         Part("source", "IP", ("IPAddress",), (Ident("IPAddress", "ip"),)),
         location(("Country",)),
         Part("target", "Service", ("Application",), (Ident("ApplicationId", namespace="entra-app-id"),)),
-        device("via", ("DeviceName",), (Ident("AadDeviceId", namespace="entra-device-id"),))),
+        device("via", ("DeviceName",), ENTRA_DEVICE_IDS)),
         operation=lambda r, g: sign_in(r, g, "ErrorCode"), locator=("ReportId", "RequestId", "CorrelationId"),
         details=(("location", place), ("user agent", "UserAgent"))),
     Mapping("EntraIdSpnSignInEvents", "Defender XDR", ("ServicePrincipalName", "ServicePrincipalId", "ErrorCode"), (
@@ -444,6 +455,30 @@ MAPPINGS: tuple[Mapping, ...] = (
         Part("target", "Email Address", ("EmailSubject",))),
         operation=lambda r, g: f"alert evidence ({text(g('EvidenceRole')).lower() or 'related'})", locator=("AlertId", "ReportId")),
 
+    # Inventory: what a device, user or app is, for entities already on the board. A DeviceInfo row with a public IP
+    # says where the device was online (the egress a baseline needs); the others only add IDs and names.
+    Mapping("DeviceInfo", "Defender XDR", ("DeviceId", "DeviceName", "OSPlatform", "PublicIP"), (
+        Part("actor", "Device", ("DeviceName",), DEVICE_IDS + (Ident("DeviceName", "fqdn"),), lower=True, create=False),
+        Part("source", "IP", ("PublicIP",), (Ident("PublicIP", "ip"),))),
+        operation="reported from public IP", locator=("ReportId", "DeviceId"), inventory=True,
+        details=(("OS", "OSPlatform"), ("join type", "JoinType"), ("device group", "MachineGroup"), ("exposure", "ExposureLevel"))),
+    Mapping("IdentityInfo", "Defender XDR", ("AccountObjectId", "AccountUpn", "OnPremSid"), (
+        Part("identity", "User", ("AccountUpn", "AccountDisplayName"), (Ident("AccountObjectId", namespace="entra-object-id"), Ident("AccountUpn", "email"),
+             Ident("OnPremSid", namespace="windows-sid")), lower=True, create=False),),
+        operation="identity inventory", locator=("ReportId", "AccountObjectId"), inventory=True),
+    # Sentinel UEBA's IdentityInfo spells the columns differently.
+    Mapping("IdentityInfo (UEBA)", "Sentinel", ("AccountObjectId", "AccountUPN", "AccountSID"), (
+        Part("identity", "User", ("AccountUPN", "AccountDisplayName"), (Ident("AccountObjectId", namespace="entra-object-id"), Ident("AccountUPN", "email"),
+             Ident("AccountSID", namespace="windows-sid")), lower=True, create=False),),
+        operation="identity inventory", time=("TimeGenerated",), locator=("AccountObjectId",), inventory=True),
+    # An app as service principal (sign-ins of the app itself) and as the application users sign in to: one app, so the
+    # row links the two when both are on the board.
+    Mapping("OAuthAppInfo", "Defender XDR", ("OAuthAppId", "ServicePrincipalId", "AppName"), (
+        Part("identity", "Service Principal", ("AppName",), (Ident("ServicePrincipalId", namespace="entra-object-id"), Ident("OAuthAppId", namespace="entra-app-id")), create=False),
+        Part("target", "Service", ("AppName",), (Ident("OAuthAppId", namespace="entra-app-id"),), create=False)),
+        operation="service principal of", locator=("ReportId", "OAuthAppId"), inventory=True,
+        details=(("privilege", "PrivilegeLevel"), ("status", "AppStatus"), ("publisher verified", "VerifiedPublisher"), ("consented users", "ConsentedUsersCount"))),
+
     # -------------------------------------------------------------------------------------------- Sentinel
     Mapping("SigninLogs", "Sentinel", ("UserPrincipalName", "AppDisplayName", "ResultType", "IPAddress", "ConditionalAccessStatus"), (
         Part("actor", "User", ("UserPrincipalName",), (Ident("UserId", namespace="entra-object-id"), Ident("UserPrincipalName", "email")), lower=True),
@@ -476,7 +511,8 @@ MAPPINGS: tuple[Mapping, ...] = (
     Mapping("AuditLogs", "Sentinel", ("OperationName", "InitiatedBy", "TargetResources", "Category"), (
         Part("actor", "User", ("InitiatedBy.user.userPrincipalName",), (Ident("InitiatedBy.user.id", namespace="entra-object-id"),
              Ident("InitiatedBy.user.userPrincipalName", "email")), lower=True),
-        Part("identity", "Service Principal", ("InitiatedBy.app.displayName",), (Ident("InitiatedBy.app.servicePrincipalId", namespace="entra-object-id"),)),
+        Part("identity", "Service Principal", ("InitiatedBy.app.displayName",), (Ident("InitiatedBy.app.servicePrincipalId", namespace="entra-object-id"),
+             Ident("InitiatedBy.app.appId", namespace="entra-app-id"))),
         Part("source", "IP", ("InitiatedBy.user.ipAddress",), (Ident("InitiatedBy.user.ipAddress", "ip"),)),
         Part("target", "User", ("TargetResources.0.userPrincipalName", "TargetResources.0.displayName"), (Ident("TargetResources.0.id", namespace="entra-object-id"),))),
         operation=lambda r, g: text(g("OperationName")), time=("TimeGenerated", "ActivityDateTime"), locator=("CorrelationId", "Id")),
@@ -711,7 +747,12 @@ def participants_of(mapping: Mapping, row: Row) -> list[dict]:
                 identifiers.append({"scheme": "external_id", "namespace": "device-path", "raw": f"{device}|{path}"})
             elif device:
                 identifiers.append({"scheme": "external_id", "namespace": "device-file", "raw": f"{device}|{name}"})
-        out.append({"role": part.role, "kind": kind, "name": name, "identifiers": identifiers, "by_name": not scoped})
+            # A weak ID (matched only after the strong ones): it joins a launch seen with and without its path, and an
+            # entity imported before keeps its place, so a repeated import adds nothing.
+            start, device_id = next((text(g(c)) for c in part.start if text(g(c))), ""), text(g("DeviceId")).lower()
+            if start and start != "0" and device_id:
+                identifiers.append({"scheme": "process-start-key", "namespace": "", "raw": f"{device_id}|{start}"})
+        out.append({"role": part.role, "kind": kind, "name": name, "identifiers": identifiers, "by_name": not scoped, "create": part.create})
     return out
 
 

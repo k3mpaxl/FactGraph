@@ -1,0 +1,3431 @@
+{
+ "families": {
+  "aws-resource": "AWS resource ARN",
+  "azure-resource": "Azure resource ID",
+  "bookmark": "Hunting bookmark ID",
+  "configuration": "Configuration identifier",
+  "crowdstrike-agent": "CrowdStrike agent ID",
+  "cve": "CVE identifier",
+  "defender-alert": "Defender alert ID",
+  "defender-behavior": "Defender behavior ID",
+  "defender-device": "Defender device ID",
+  "email-message": "Microsoft 365 email message ID",
+  "entra-device": "Entra device ID",
+  "entra-session": "Session identifier",
+  "entra-token": "Token identifier",
+  "entra-user": "Entra user object ID",
+  "exposure-node": "Exposure graph node ID",
+  "file-sha1": "File SHA-1",
+  "file-sha256": "File SHA-256",
+  "gcp-resource": "Google Cloud resource ID",
+  "identity-account": "Internal identity account ID",
+  "oauth-client": "OAuth application / client ID",
+  "process-start-key": "Windows Process Start Key",
+  "sentinel-alert": "Sentinel alert ID",
+  "sentinel-behavior": "Sentinel behavior ID",
+  "sentinel-intel": "Sentinel internal threat-intel ID",
+  "service-principal": "Service principal object ID",
+  "stix-object": "Global STIX object ID",
+  "teams-message": "Teams message ID",
+  "unified-identity": "Unified identity ID"
+ },
+ "generated": "2026-10-15",
+ "license": "MIT License, Copyright (c) 2025 Fabian & Nathan (https://github.com/MSCloudInternals/XDRInternals)",
+ "relations": [
+  {
+   "family": "aws-resource",
+   "from": {
+    "column": "AwsResourceName",
+    "table": "CloudProcessEvents",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "This connects records associated with the same cloud resource; it does not establish that one event caused another or that they share a process. Match the full resource identifier, preserving provider and tenant/account context. Do not equate a parent resource with a child resource or a hostname. One resource can have many events, so narrow the time window before joining. Preserve case in AWS and Google Cloud resource identifiers.",
+   "id": "cloud-process-cloud-audit-events-aws-resource-name",
+   "kql": "let LeftEvents = CloudProcessEvents\n| where Timestamp > ago(7d)\n| extend JoinKey = tostring(AwsResourceName)\n| where isnotempty(JoinKey);\nlet RightEvents = CloudAuditEvents\n| where Timestamp > ago(7d)\n| extend JoinKey = tostring(AwsResourceName)\n| where isnotempty(JoinKey);\nLeftEvents\n| join kind=inner (RightEvents) on JoinKey",
+   "sources": [
+    "https://learn.microsoft.com/en-us/defender-xdr/advanced-hunting-cloudprocessevents-table"
+   ],
+   "title": "Connect process and CloudAuditEvents records by AWS resource",
+   "to": {
+    "column": "AwsResourceName",
+    "table": "CloudAuditEvents",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "aws-resource",
+   "from": {
+    "column": "AwsResourceName",
+    "table": "CloudProcessEvents",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "This connects records associated with the same cloud resource; it does not establish that one event caused another or that they share a process. Match the full resource identifier, preserving provider and tenant/account context. Do not equate a parent resource with a child resource or a hostname. One resource can have many events, so narrow the time window before joining. Preserve case in AWS and Google Cloud resource identifiers.",
+   "id": "cloud-process-cloud-dns-events-aws-resource-name",
+   "kql": "let LeftEvents = CloudProcessEvents\n| where Timestamp > ago(7d)\n| extend JoinKey = tostring(AwsResourceName)\n| where isnotempty(JoinKey);\nlet RightEvents = CloudDnsEvents\n| where Timestamp > ago(7d)\n| extend JoinKey = tostring(AwsResourceName)\n| where isnotempty(JoinKey);\nLeftEvents\n| join kind=inner (RightEvents) on JoinKey",
+   "sources": [
+    "https://learn.microsoft.com/en-us/defender-xdr/advanced-hunting-cloudprocessevents-table"
+   ],
+   "title": "Connect process and CloudDnsEvents records by AWS resource",
+   "to": {
+    "column": "AwsResourceName",
+    "table": "CloudDnsEvents",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "aws-resource",
+   "from": {
+    "column": "AwsResourceName",
+    "table": "CloudProcessEvents",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "This connects records associated with the same cloud resource; it does not establish that one event caused another or that they share a process. Match the full resource identifier, preserving provider and tenant/account context. Do not equate a parent resource with a child resource or a hostname. One resource can have many events, so narrow the time window before joining. Preserve case in AWS and Google Cloud resource identifiers.",
+   "id": "cloud-process-cloud-policy-enforcement-events-aws-resource-name",
+   "kql": "let LeftEvents = CloudProcessEvents\n| where Timestamp > ago(7d)\n| extend JoinKey = tostring(AwsResourceName)\n| where isnotempty(JoinKey);\nlet RightEvents = CloudPolicyEnforcementEvents\n| where Timestamp > ago(7d)\n| extend JoinKey = tostring(AwsResourceName)\n| where isnotempty(JoinKey);\nLeftEvents\n| join kind=inner (RightEvents) on JoinKey",
+   "sources": [
+    "https://learn.microsoft.com/en-us/defender-xdr/advanced-hunting-cloudprocessevents-table"
+   ],
+   "title": "Connect process and CloudPolicyEnforcementEvents records by AWS resource",
+   "to": {
+    "column": "AwsResourceName",
+    "table": "CloudPolicyEnforcementEvents",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "azure-resource",
+   "from": {
+    "column": "AzureResourceId",
+    "table": "CloudProcessEvents",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "This connects records associated with the same cloud resource; it does not establish that one event caused another or that they share a process. Match the full resource identifier, preserving provider and tenant/account context. Do not equate a parent resource with a child resource or a hostname. One resource can have many events, so narrow the time window before joining. Normalize Azure ARM identifier case.",
+   "id": "cloud-process-cloud-audit-events-azure-resource-id",
+   "kql": "let LeftEvents = CloudProcessEvents\n| where Timestamp > ago(7d)\n| extend JoinKey = tolower(tostring(AzureResourceId))\n| where isnotempty(JoinKey);\nlet RightEvents = CloudAuditEvents\n| where Timestamp > ago(7d)\n| extend JoinKey = tolower(tostring(AzureResourceId))\n| where isnotempty(JoinKey);\nLeftEvents\n| join kind=inner (RightEvents) on JoinKey",
+   "sources": [
+    "https://learn.microsoft.com/en-us/defender-xdr/advanced-hunting-cloudprocessevents-table"
+   ],
+   "title": "Connect process and CloudAuditEvents records by Microsoft Azure resource",
+   "to": {
+    "column": "AzureResourceId",
+    "table": "CloudAuditEvents",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "azure-resource",
+   "from": {
+    "column": "AzureResourceId",
+    "table": "CloudProcessEvents",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "This connects records associated with the same cloud resource; it does not establish that one event caused another or that they share a process. Match the full resource identifier, preserving provider and tenant/account context. Do not equate a parent resource with a child resource or a hostname. One resource can have many events, so narrow the time window before joining. Normalize Azure ARM identifier case.",
+   "id": "cloud-process-cloud-dns-events-azure-resource-id",
+   "kql": "let LeftEvents = CloudProcessEvents\n| where Timestamp > ago(7d)\n| extend JoinKey = tolower(tostring(AzureResourceId))\n| where isnotempty(JoinKey);\nlet RightEvents = CloudDnsEvents\n| where Timestamp > ago(7d)\n| extend JoinKey = tolower(tostring(AzureResourceId))\n| where isnotempty(JoinKey);\nLeftEvents\n| join kind=inner (RightEvents) on JoinKey",
+   "sources": [
+    "https://learn.microsoft.com/en-us/defender-xdr/advanced-hunting-cloudprocessevents-table"
+   ],
+   "title": "Connect process and CloudDnsEvents records by Microsoft Azure resource",
+   "to": {
+    "column": "AzureResourceId",
+    "table": "CloudDnsEvents",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "azure-resource",
+   "from": {
+    "column": "AzureResourceId",
+    "table": "CloudProcessEvents",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "This connects records associated with the same cloud resource; it does not establish that one event caused another or that they share a process. Match the full resource identifier, preserving provider and tenant/account context. Do not equate a parent resource with a child resource or a hostname. One resource can have many events, so narrow the time window before joining. Normalize Azure ARM identifier case.",
+   "id": "cloud-process-cloud-policy-enforcement-events-azure-resource-id",
+   "kql": "let LeftEvents = CloudProcessEvents\n| where Timestamp > ago(7d)\n| extend JoinKey = tolower(tostring(AzureResourceId))\n| where isnotempty(JoinKey);\nlet RightEvents = CloudPolicyEnforcementEvents\n| where Timestamp > ago(7d)\n| extend JoinKey = tolower(tostring(AzureResourceId))\n| where isnotempty(JoinKey);\nLeftEvents\n| join kind=inner (RightEvents) on JoinKey",
+   "sources": [
+    "https://learn.microsoft.com/en-us/defender-xdr/advanced-hunting-cloudprocessevents-table"
+   ],
+   "title": "Connect process and CloudPolicyEnforcementEvents records by Microsoft Azure resource",
+   "to": {
+    "column": "AzureResourceId",
+    "table": "CloudPolicyEnforcementEvents",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "azure-resource",
+   "from": {
+    "column": "AzureResourceId",
+    "table": "DeviceInfo",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "This connects records associated with the same cloud resource; it does not establish that one event caused another or that they share a process. Match the full resource identifier, preserving provider and tenant/account context. Do not equate a parent resource with a child resource or a hostname. One resource can have many events, so narrow the time window before joining. Azure ARM identifiers are compared in lowercase to accommodate casing differences. Select the relevant DeviceInfo snapshot; an Azure resource match is not a Defender device ID match.",
+   "id": "device-info-cloud-audit-events-azure-resource",
+   "kql": "let LeftEvents = DeviceInfo\n| where Timestamp > ago(7d)\n| extend JoinKey = tolower(tostring(AzureResourceId))\n| where isnotempty(JoinKey);\nlet RightEvents = CloudAuditEvents\n| where Timestamp > ago(7d)\n| extend JoinKey = tolower(tostring(AzureResourceId))\n| where isnotempty(JoinKey);\nLeftEvents\n| join kind=inner (RightEvents) on JoinKey",
+   "sources": [
+    "https://learn.microsoft.com/en-us/defender-xdr/advanced-hunting-cloudauditevents-table"
+   ],
+   "title": "Connect Azure devices to CloudAuditEvents",
+   "to": {
+    "column": "AzureResourceId",
+    "table": "CloudAuditEvents",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "azure-resource",
+   "from": {
+    "column": "AzureResourceId",
+    "table": "DeviceInfo",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "This connects records associated with the same cloud resource; it does not establish that one event caused another or that they share a process. Match the full resource identifier, preserving provider and tenant/account context. Do not equate a parent resource with a child resource or a hostname. One resource can have many events, so narrow the time window before joining. Azure ARM identifiers are compared in lowercase to accommodate casing differences. Select the relevant DeviceInfo snapshot; an Azure resource match is not a Defender device ID match.",
+   "id": "device-info-cloud-dns-events-azure-resource",
+   "kql": "let LeftEvents = DeviceInfo\n| where Timestamp > ago(7d)\n| extend JoinKey = tolower(tostring(AzureResourceId))\n| where isnotempty(JoinKey);\nlet RightEvents = CloudDnsEvents\n| where Timestamp > ago(7d)\n| extend JoinKey = tolower(tostring(AzureResourceId))\n| where isnotempty(JoinKey);\nLeftEvents\n| join kind=inner (RightEvents) on JoinKey",
+   "sources": [
+    "https://learn.microsoft.com/en-us/defender-xdr/advanced-hunting-clouddnsevents-table"
+   ],
+   "title": "Connect Azure devices to CloudDnsEvents",
+   "to": {
+    "column": "AzureResourceId",
+    "table": "CloudDnsEvents",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "azure-resource",
+   "from": {
+    "column": "AzureResourceId",
+    "table": "DeviceInfo",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "This connects records associated with the same cloud resource; it does not establish that one event caused another or that they share a process. Match the full resource identifier, preserving provider and tenant/account context. Do not equate a parent resource with a child resource or a hostname. One resource can have many events, so narrow the time window before joining. Azure ARM identifiers are compared in lowercase to accommodate casing differences. Select the relevant DeviceInfo snapshot; an Azure resource match is not a Defender device ID match.",
+   "id": "device-info-cloud-key-vault-events-azure-resource",
+   "kql": "let LeftEvents = DeviceInfo\n| where Timestamp > ago(7d)\n| extend JoinKey = tolower(tostring(AzureResourceId))\n| where isnotempty(JoinKey);\nlet RightEvents = CloudKeyVaultEvents\n| where Timestamp > ago(7d)\n| extend JoinKey = tolower(tostring(AzureResourceId))\n| where isnotempty(JoinKey);\nLeftEvents\n| join kind=inner (RightEvents) on JoinKey",
+   "sources": [
+    "https://learn.microsoft.com/en-us/defender-xdr/advanced-hunting-cloudkeyvaultevents-table"
+   ],
+   "title": "Connect Azure devices to CloudKeyVaultEvents",
+   "to": {
+    "column": "AzureResourceId",
+    "table": "CloudKeyVaultEvents",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "azure-resource",
+   "from": {
+    "column": "AzureResourceId",
+    "table": "DeviceInfo",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "This connects records associated with the same cloud resource; it does not establish that one event caused another or that they share a process. Match the full resource identifier, preserving provider and tenant/account context. Do not equate a parent resource with a child resource or a hostname. One resource can have many events, so narrow the time window before joining. Azure ARM identifiers are compared in lowercase to accommodate casing differences. Select the relevant DeviceInfo snapshot; an Azure resource match is not a Defender device ID match.",
+   "id": "device-info-cloud-policy-enforcement-events-azure-resource",
+   "kql": "let LeftEvents = DeviceInfo\n| where Timestamp > ago(7d)\n| extend JoinKey = tolower(tostring(AzureResourceId))\n| where isnotempty(JoinKey);\nlet RightEvents = CloudPolicyEnforcementEvents\n| where Timestamp > ago(7d)\n| extend JoinKey = tolower(tostring(AzureResourceId))\n| where isnotempty(JoinKey);\nLeftEvents\n| join kind=inner (RightEvents) on JoinKey",
+   "sources": [
+    "https://learn.microsoft.com/en-us/defender-xdr/advanced-hunting-cloudpolicyenforcementevents-table"
+   ],
+   "title": "Connect Azure devices to CloudPolicyEnforcementEvents",
+   "to": {
+    "column": "AzureResourceId",
+    "table": "CloudPolicyEnforcementEvents",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "azure-resource",
+   "from": {
+    "column": "AzureResourceId",
+    "table": "DeviceInfo",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "This connects records associated with the same cloud resource; it does not establish that one event caused another or that they share a process. Match the full resource identifier, preserving provider and tenant/account context. Do not equate a parent resource with a child resource or a hostname. One resource can have many events, so narrow the time window before joining. Azure ARM identifiers are compared in lowercase to accommodate casing differences. Select the relevant DeviceInfo snapshot; an Azure resource match is not a Defender device ID match.",
+   "id": "device-info-cloud-process-events-azure-resource",
+   "kql": "let LeftEvents = DeviceInfo\n| where Timestamp > ago(7d)\n| extend JoinKey = tolower(tostring(AzureResourceId))\n| where isnotempty(JoinKey);\nlet RightEvents = CloudProcessEvents\n| where Timestamp > ago(7d)\n| extend JoinKey = tolower(tostring(AzureResourceId))\n| where isnotempty(JoinKey);\nLeftEvents\n| join kind=inner (RightEvents) on JoinKey",
+   "sources": [
+    "https://learn.microsoft.com/en-us/defender-xdr/advanced-hunting-cloudprocessevents-table"
+   ],
+   "title": "Connect Azure devices to CloudProcessEvents",
+   "to": {
+    "column": "AzureResourceId",
+    "table": "CloudProcessEvents",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "azure-resource",
+   "from": {
+    "column": "AzureResourceId",
+    "table": "DeviceInfo",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "This connects records associated with the same cloud resource; it does not establish that one event caused another or that they share a process. Match the full resource identifier, preserving provider and tenant/account context. Do not equate a parent resource with a child resource or a hostname. One resource can have many events, so narrow the time window before joining. Azure ARM identifiers are compared in lowercase to accommodate casing differences. Select the relevant DeviceInfo snapshot; an Azure resource match is not a Defender device ID match.",
+   "id": "device-info-cloud-storage-aggregated-events-azure-resource",
+   "kql": "let LeftEvents = DeviceInfo\n| where Timestamp > ago(7d)\n| extend JoinKey = tolower(tostring(AzureResourceId))\n| where isnotempty(JoinKey);\nlet RightEvents = CloudStorageAggregatedEvents\n| where Timestamp > ago(7d)\n| extend JoinKey = tolower(tostring(AzureResourceId))\n| where isnotempty(JoinKey);\nLeftEvents\n| join kind=inner (RightEvents) on JoinKey",
+   "sources": [
+    "https://learn.microsoft.com/en-us/defender-xdr/advanced-hunting-cloudstorageaggregatedevents-table"
+   ],
+   "title": "Connect Azure devices to CloudStorageAggregatedEvents",
+   "to": {
+    "column": "AzureResourceId",
+    "table": "CloudStorageAggregatedEvents",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "bookmark",
+   "from": {
+    "column": "BookmarkIds",
+    "path": "[]",
+    "table": "SecurityIncident",
+    "timeColumn": "TimeGenerated"
+   },
+   "guidance": "Use the latest incident and bookmark snapshots within the workspace before enrichment. Use a longer bookmark window because an incident update can refer to an older bookmark. Preserve SoftDeleted and query time-range context when reviewing historical bookmarks.",
+   "id": "sentinel-incident-to-bookmarks",
+   "kql": "let IncidentBookmarks = SecurityIncident\n| where TimeGenerated > ago(7d)\n| summarize arg_max(TimeGenerated, *) by TenantId, IncidentName\n| mv-expand BookmarkId=BookmarkIds to typeof(string)\n| where isnotempty(BookmarkId);\nHuntingBookmark\n| where TimeGenerated > ago(30d)\n| where isnotempty(BookmarkId)\n| summarize arg_max(TimeGenerated, *) by TenantId, BookmarkId\n| join kind=inner (IncidentBookmarks) on TenantId, BookmarkId",
+   "sources": [
+    "https://learn.microsoft.com/en-us/azure/azure-monitor/reference/tables/securityincident"
+   ],
+   "title": "Connect Sentinel incidents to hunting bookmarks",
+   "to": {
+    "column": "BookmarkId",
+    "table": "HuntingBookmark",
+    "timeColumn": "TimeGenerated"
+   }
+  },
+  {
+   "family": "configuration",
+   "from": {
+    "column": "ConfigurationId",
+    "table": "DeviceTvmSecureConfigurationAssessment",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "One configuration can be assessed on many devices. Preserve DeviceId, compliance status, and assessment time. The knowledge base has no event timestamp filter.",
+   "id": "device-configuration-to-knowledge-base",
+   "title": "Enrich configuration assessments with remediation details",
+   "to": {
+    "column": "ConfigurationId",
+    "table": "DeviceTvmSecureConfigurationAssessmentKB"
+   }
+  },
+  {
+   "family": "crowdstrike-agent",
+   "from": {
+    "column": "DeviceId",
+    "table": "CrowdStrikeHosts",
+    "timeColumn": "TimeGenerated"
+   },
+   "guidance": "Match Cid (CrowdStrike customer) and workspace TenantId as well as the agent ID. These IDs do not belong to the Defender DeviceId namespace. Select the latest ingested host snapshot for current enrichment; it does not represent historical host state. UpdatedTimestamp is the vulnerability update time, while host TimeGenerated is ingestion time. Adjust both lookbacks for collection cadence.",
+   "id": "crowdstrike-host-to-vulnerabilities",
+   "kql": "let Hosts = CrowdStrikeHosts\n| where TimeGenerated > ago(30d)\n| where isnotempty(Cid) and isnotempty(DeviceId)\n| summarize arg_max(TimeGenerated, *) by TenantId, Cid, DeviceId\n| project TenantId, Cid, Aid=DeviceId, Hostname, HostSnapshotTime=TimeGenerated;\nCrowdStrikeVulnerabilities\n| where UpdatedTimestamp > ago(7d)\n| where isnotempty(Cid) and isnotempty(Aid)\n| join kind=inner (Hosts) on TenantId, Cid, Aid",
+   "sources": [
+    "https://developer.crowdstrike.com/api-reference/collections/spotlight-vulnerabilities/"
+   ],
+   "title": "Enrich CrowdStrike vulnerabilities with host details",
+   "to": {
+    "column": "Aid",
+    "table": "CrowdStrikeVulnerabilities",
+    "timeColumn": "UpdatedTimestamp"
+   }
+  },
+  {
+   "family": "cve",
+   "from": {
+    "column": "CveId",
+    "table": "DeviceTvmSoftwareVulnerabilities"
+   },
+   "guidance": "One CVE can affect many devices and software versions. Preserve device and software context. The knowledge base has no event timestamp filter; PublishedDate or LastModifiedTime would exclude older CVEs that still affect current devices.",
+   "id": "device-vulnerability-to-knowledge-base",
+   "title": "Enrich device vulnerabilities with CVE details",
+   "to": {
+    "column": "CveId",
+    "table": "DeviceTvmSoftwareVulnerabilitiesKB"
+   }
+  },
+  {
+   "family": "defender-alert",
+   "from": {
+    "column": "AlertId",
+    "table": "AlertInfo",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "Keep device and alert context. One alert may have multiple device event records.",
+   "id": "alert-info-to-device-alert-events",
+   "title": "Connect alert metadata to device alerts",
+   "to": {
+    "column": "AlertId",
+    "table": "DeviceAlertEvents",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "defender-alert",
+   "from": {
+    "column": "AlertId",
+    "table": "AlertInfo",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "An alert can have multiple evidence records, so expect one-to-many results. Use the evidence role and entity type to understand how each item relates to the alert.",
+   "id": "alert-info-to-evidence",
+   "title": "Connect an alert to its evidence",
+   "to": {
+    "column": "AlertId",
+    "table": "AlertEvidence",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "defender-behavior",
+   "from": {
+    "column": "BehaviorId",
+    "table": "BehaviorInfo",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "One behavior can involve several entities, so a match can return several rows. Use EntityType and EntityRole to narrow the results to the entities you need. Keep the time window wide enough to include records from both tables.",
+   "id": "behavior-info-to-entities",
+   "kql": "BehaviorInfo\n| where Timestamp > ago(7d)\n| where isnotempty(BehaviorId)\n| join kind=inner (BehaviorEntities\n    | where Timestamp > ago(7d)\n    | where isnotempty(BehaviorId)\n) on BehaviorId",
+   "sources": [
+    "https://github.com/Cloud-Architekt/AzureSentinel/blob/main/Hunting%20Queries/EID-TokenHunting/XdrBehaviorsEnrichedSignIns.func"
+   ],
+   "title": "See the entities involved in a behavior",
+   "to": {
+    "column": "BehaviorId",
+    "table": "BehaviorEntities",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "defender-device",
+   "from": {
+    "column": "DeviceId",
+    "table": "DeviceInfo",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "Use the Defender service device ID within the same tenant. Select the appropriate DeviceInfo snapshot and retain entity/evidence role. A shared device enriches the event but does not establish a shared process or session.",
+   "id": "device-info-alert-evidence",
+   "kql": "let LeftEvents = DeviceInfo\n| where Timestamp > ago(7d)\n| extend JoinKey = tostring(DeviceId)\n| where isnotempty(JoinKey);\nlet RightEvents = AlertEvidence\n| where Timestamp > ago(7d)\n| extend JoinKey = tostring(DeviceId)\n| where isnotempty(JoinKey);\nLeftEvents\n| join kind=inner (RightEvents) on JoinKey",
+   "sources": [
+    "https://learn.microsoft.com/en-us/defender-xdr/advanced-hunting-alertevidence-table"
+   ],
+   "title": "Enrich AlertEvidence with device information",
+   "to": {
+    "column": "DeviceId",
+    "table": "AlertEvidence",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "defender-device",
+   "from": {
+    "column": "DeviceId",
+    "table": "DeviceInfo",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "DeviceId identifies a Defender for Endpoint device. It is different from an Entra device ID. Select the relevant DeviceInfo snapshot before enrichment; repeated snapshots and events can produce multiple matches.",
+   "id": "device-info-device-alert-events",
+   "title": "Enrich DeviceAlertEvents with device information",
+   "to": {
+    "column": "DeviceId",
+    "table": "DeviceAlertEvents",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "defender-device",
+   "from": {
+    "column": "DeviceId",
+    "table": "DeviceInfo",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "DeviceId identifies a Defender for Endpoint device. It is different from an Entra device ID. Select the relevant DeviceInfo snapshot before enrichment; repeated snapshots and events can produce multiple matches.",
+   "id": "device-info-device-events",
+   "title": "Enrich DeviceEvents with device information",
+   "to": {
+    "column": "DeviceId",
+    "table": "DeviceEvents",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "defender-device",
+   "from": {
+    "column": "DeviceId",
+    "table": "DeviceInfo",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "DeviceId identifies a Defender for Endpoint device. It is different from an Entra device ID. Select the relevant DeviceInfo snapshot before enrichment; repeated snapshots and events can produce multiple matches.",
+   "id": "device-info-device-file-certificate-info",
+   "title": "Enrich DeviceFileCertificateInfo with device information",
+   "to": {
+    "column": "DeviceId",
+    "table": "DeviceFileCertificateInfo",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "defender-device",
+   "from": {
+    "column": "DeviceId",
+    "table": "DeviceInfo",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "DeviceId identifies a Defender for Endpoint device. It is different from an Entra device ID. Select the relevant DeviceInfo snapshot before enrichment; repeated snapshots and events can produce multiple matches.",
+   "id": "device-info-device-file-events",
+   "title": "Enrich DeviceFileEvents with device information",
+   "to": {
+    "column": "DeviceId",
+    "table": "DeviceFileEvents",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "defender-device",
+   "from": {
+    "column": "DeviceId",
+    "table": "DeviceInfo",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "DeviceId identifies a Defender for Endpoint device. It is different from an Entra device ID. Select the relevant DeviceInfo snapshot before enrichment; repeated snapshots and events can produce multiple matches.",
+   "id": "device-info-device-image-load-events",
+   "title": "Enrich DeviceImageLoadEvents with device information",
+   "to": {
+    "column": "DeviceId",
+    "table": "DeviceImageLoadEvents",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "defender-device",
+   "from": {
+    "column": "DeviceId",
+    "table": "DeviceInfo",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "DeviceId identifies a Defender for Endpoint device. It is different from an Entra device ID. Select the relevant DeviceInfo snapshot before enrichment; repeated snapshots and events can produce multiple matches.",
+   "id": "device-info-device-logon-events",
+   "title": "Enrich DeviceLogonEvents with device information",
+   "to": {
+    "column": "DeviceId",
+    "table": "DeviceLogonEvents",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "defender-device",
+   "from": {
+    "column": "DeviceId",
+    "table": "DeviceInfo",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "DeviceId identifies a Defender for Endpoint device. It is different from an Entra device ID. Select the relevant DeviceInfo snapshot before enrichment; repeated snapshots and events can produce multiple matches.",
+   "id": "device-info-device-network-info",
+   "title": "Enrich DeviceNetworkInfo with device information",
+   "to": {
+    "column": "DeviceId",
+    "table": "DeviceNetworkInfo",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "defender-device",
+   "from": {
+    "column": "DeviceId",
+    "table": "DeviceInfo",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "DeviceId identifies a Defender for Endpoint device. It is different from an Entra device ID. Select the relevant DeviceInfo snapshot before enrichment; repeated snapshots and events can produce multiple matches.",
+   "id": "device-info-device-registry-events",
+   "title": "Enrich DeviceRegistryEvents with device information",
+   "to": {
+    "column": "DeviceId",
+    "table": "DeviceRegistryEvents",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "defender-device",
+   "from": {
+    "column": "DeviceId",
+    "table": "DeviceInfo",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "DeviceId identifies a Defender for Endpoint device. It is different from an Entra device ID. Select the relevant DeviceInfo snapshot before enrichment; repeated snapshots and events can produce multiple matches.",
+   "id": "device-info-device-tvm-info-gathering",
+   "title": "Enrich DeviceTvmInfoGathering with device information",
+   "to": {
+    "column": "DeviceId",
+    "table": "DeviceTvmInfoGathering",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "defender-device",
+   "from": {
+    "column": "DeviceId",
+    "table": "DeviceInfo",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "DeviceId identifies a Defender for Endpoint device. It is different from an Entra device ID. Select the relevant DeviceInfo snapshot before enrichment; repeated snapshots and events can produce multiple matches.",
+   "id": "device-info-device-tvm-secure-configuration-assessment",
+   "title": "Enrich DeviceTvmSecureConfigurationAssessment with device information",
+   "to": {
+    "column": "DeviceId",
+    "table": "DeviceTvmSecureConfigurationAssessment",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "defender-device",
+   "from": {
+    "column": "DeviceId",
+    "table": "DeviceInfo",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "DeviceId identifies a Defender for Endpoint device. It is different from an Entra device ID. Select the relevant DeviceInfo snapshot before enrichment; repeated snapshots and events can produce multiple matches.",
+   "id": "device-info-device-tvm-software-evidence-beta",
+   "title": "Enrich DeviceTvmSoftwareEvidenceBeta with device information",
+   "to": {
+    "column": "DeviceId",
+    "table": "DeviceTvmSoftwareEvidenceBeta"
+   }
+  },
+  {
+   "family": "defender-device",
+   "from": {
+    "column": "DeviceId",
+    "table": "DeviceInfo",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "DeviceId identifies a Defender for Endpoint device. It is different from an Entra device ID. Select the relevant DeviceInfo snapshot before enrichment; repeated snapshots and events can produce multiple matches.",
+   "id": "device-info-device-tvm-software-inventory",
+   "title": "Enrich DeviceTvmSoftwareInventory with device information",
+   "to": {
+    "column": "DeviceId",
+    "table": "DeviceTvmSoftwareInventory"
+   }
+  },
+  {
+   "family": "defender-device",
+   "from": {
+    "column": "DeviceId",
+    "table": "DeviceInfo",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "DeviceId identifies a Defender for Endpoint device. It is different from an Entra device ID. Select the relevant DeviceInfo snapshot before enrichment; repeated snapshots and events can produce multiple matches.",
+   "id": "device-info-device-tvm-software-vulnerabilities",
+   "title": "Enrich DeviceTvmSoftwareVulnerabilities with device information",
+   "to": {
+    "column": "DeviceId",
+    "table": "DeviceTvmSoftwareVulnerabilities"
+   }
+  },
+  {
+   "family": "defender-device",
+   "from": {
+    "column": "DeviceId",
+    "table": "DeviceInfo",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "Use the Defender service device ID within the same tenant. Select the appropriate DeviceInfo snapshot and retain entity/evidence role. A shared device enriches the event but does not establish a shared process or session.",
+   "id": "device-info-dynamic-event-collection",
+   "kql": "let LeftEvents = DeviceInfo\n| where Timestamp > ago(7d)\n| extend JoinKey = tostring(DeviceId)\n| where isnotempty(JoinKey);\nlet RightEvents = DynamicEventCollection\n| where Timestamp > ago(7d)\n| extend JoinKey = tostring(DeviceId)\n| where isnotempty(JoinKey);\nLeftEvents\n| join kind=inner (RightEvents) on JoinKey",
+   "sources": [
+    "https://learn.microsoft.com/en-us/defender-xdr/advanced-hunting-deviceinfo-table"
+   ],
+   "title": "Enrich DynamicEventCollection with device information",
+   "to": {
+    "column": "DeviceId",
+    "table": "DynamicEventCollection",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "defender-device",
+   "from": {
+    "column": "DeviceId",
+    "table": "DeviceInfo",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "A device can have many network events. Set a useful time range on both tables and review remote addresses, ports, initiating process details, and event timestamps.",
+   "id": "device-info-to-network-events",
+   "title": "Find network activity for a device",
+   "to": {
+    "column": "DeviceId",
+    "table": "DeviceNetworkEvents",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "defender-device",
+   "from": {
+    "column": "DeviceId",
+    "table": "DeviceInfo",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "A device can have many process events. Set a useful time range on both tables and retain the device name and event timestamp when reviewing results.",
+   "id": "device-info-to-process-events",
+   "title": "Find process activity for a device",
+   "to": {
+    "column": "DeviceId",
+    "table": "DeviceProcessEvents",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "email-message",
+   "from": {
+    "column": "NetworkMessageId",
+    "table": "EmailEvents",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "A message can have multiple recipients and activity or evidence rows. Add recipient context when correlating a particular delivery. NetworkMessageId is different from an InternetMessageId.",
+   "id": "email-events-alert-evidence-message",
+   "title": "Connect email activity to AlertEvidence",
+   "to": {
+    "column": "NetworkMessageId",
+    "table": "AlertEvidence",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "email-message",
+   "from": {
+    "column": "NetworkMessageId",
+    "table": "EmailEvents",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "A message can have multiple recipients and activity or evidence rows. Add recipient context when correlating a particular delivery. NetworkMessageId is different from an InternetMessageId.",
+   "id": "email-events-campaign-info-message",
+   "title": "Connect email activity to CampaignInfo",
+   "to": {
+    "column": "NetworkMessageId",
+    "table": "CampaignInfo",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "email-message",
+   "from": {
+    "column": "NetworkMessageId",
+    "table": "EmailEvents",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "A message can have multiple recipients and activity or evidence rows. Add recipient context when correlating a particular delivery. NetworkMessageId is different from an InternetMessageId.",
+   "id": "email-events-data-security-events-message",
+   "title": "Connect email activity to DataSecurityEvents",
+   "to": {
+    "column": "NetworkMessageId",
+    "table": "DataSecurityEvents",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "email-message",
+   "from": {
+    "column": "NetworkMessageId",
+    "table": "EmailEvents",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "An email can have multiple attachments, so expect one-to-many results. Use attachment names, hashes, and timestamps to review each file.",
+   "id": "email-to-attachment-info",
+   "title": "Find attachments from an email",
+   "to": {
+    "column": "NetworkMessageId",
+    "table": "EmailAttachmentInfo",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "email-message",
+   "from": {
+    "column": "NetworkMessageId",
+    "table": "EmailEvents",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "A message may have multiple post-delivery action records. Compare action, result, and trigger fields to understand what happened and when.",
+   "id": "email-to-post-delivery-events",
+   "title": "Review post-delivery actions for an email",
+   "to": {
+    "column": "NetworkMessageId",
+    "table": "EmailPostDeliveryEvents",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "email-message",
+   "from": {
+    "column": "NetworkMessageId",
+    "table": "EmailEvents",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "A message can have multiple click records, including clicks by different recipients or at different times. Use the click timestamp, account, and URL to narrow the investigation.",
+   "id": "email-to-url-click-events",
+   "title": "Trace clicks back to an email",
+   "to": {
+    "column": "NetworkMessageId",
+    "table": "UrlClickEvents",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "email-message",
+   "from": {
+    "column": "NetworkMessageId",
+    "table": "EmailEvents",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "An email can contain multiple URLs. Review each URL and its domain alongside the email verdict and recipient context.",
+   "id": "email-to-url-info",
+   "title": "Find URLs contained in an email",
+   "to": {
+    "column": "NetworkMessageId",
+    "table": "EmailUrlInfo",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "entra-device",
+   "from": {
+    "column": "AadDeviceId",
+    "table": "AADSignInEventsBeta",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "AADSignInEventsBeta is deprecated. These fields may represent aliases for the same Entra device identifier in retained beta records. Prefer current Entra sign-in schemas when available, compare non-empty values before relying on the alias, and preserve both source field names because schema aliases can vary by table version.",
+   "id": "aad-signin-beta-device-id-alias",
+   "kql": "AADSignInEventsBeta\n| where Timestamp > ago(1d)\n| where isnotempty(AadDeviceId) and isnotempty(EntraIdDeviceId)\n| extend AadHash = hash_sha256(tostring(AadDeviceId)), EntraHash = hash_sha256(tostring(EntraIdDeviceId))\n| summarize Rows = count(), Different = countif(AadHash != EntraHash)",
+   "title": "Relate the two beta sign-in device ID fields",
+   "to": {
+    "column": "EntraIdDeviceId",
+    "table": "AADSignInEventsBeta",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "entra-device",
+   "from": {
+    "column": "AadDeviceId",
+    "table": "DeviceInfo",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "Use the Entra device GUID, not DeviceInfo.DeviceId. Device details are available only when recorded in the authentication context. Exclude empty identifiers and select the appropriate DeviceInfo snapshot. Use TimeRequested for request timing and allow for delayed ingestion. AADGraphActivityLogs.AADTenantId identifies the Entra tenant; its TenantId can identify the workspace. Use the actual identity tenant when narrowing enrichment.",
+   "id": "device-info-aad-graph-activity-logs-entra-device",
+   "sources": [
+    "https://learn.microsoft.com/en-us/azure/azure-monitor/reference/tables/aadgraphactivitylogs"
+   ],
+   "title": "Connect AADGraphActivityLogs to an Entra device",
+   "to": {
+    "column": "DeviceId",
+    "table": "AADGraphActivityLogs",
+    "timeColumn": "TimeRequested"
+   }
+  },
+  {
+   "family": "entra-device",
+   "from": {
+    "column": "AadDeviceId",
+    "table": "DeviceInfo",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "Use the Entra device GUID, not DeviceInfo.DeviceId. Device details are available only when recorded in the authentication context. Exclude empty identifiers and select the appropriate DeviceInfo snapshot.",
+   "id": "device-info-aad-non-interactive-user-sign-in-logs-entra-device",
+   "title": "Connect AADNonInteractiveUserSignInLogs to an Entra device",
+   "to": {
+    "column": "DeviceDetail",
+    "path": "deviceId",
+    "table": "AADNonInteractiveUserSignInLogs",
+    "timeColumn": "TimeGenerated"
+   }
+  },
+  {
+   "family": "entra-device",
+   "from": {
+    "column": "AadDeviceId",
+    "table": "DeviceInfo",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "AADSignInEventsBeta is deprecated. This supports historical beta-table records; use EntraIdSignInEvents.EntraIdDeviceId for the current equivalent. These are Entra device GUIDs, not Defender DeviceId values. The retained schema exposes two device field names; check which is populated in your records. Select the relevant DeviceInfo snapshot.",
+   "id": "device-info-aad-signin-beta-aad-device-id",
+   "kql": "let LeftEvents = DeviceInfo\n| where Timestamp > ago(7d)\n| extend JoinKey = tostring(AadDeviceId)\n| where isnotempty(JoinKey);\nlet RightEvents = AADSignInEventsBeta\n| where Timestamp > ago(7d)\n| extend JoinKey = tostring(AadDeviceId)\n| where isnotempty(JoinKey);\nLeftEvents\n| join kind=inner (RightEvents) on JoinKey",
+   "sources": [
+    "https://learn.microsoft.com/en-us/defender-xdr/advanced-hunting-entraidsigninevents-table"
+   ],
+   "title": "Enrich retained beta sign-ins with Entra device information",
+   "to": {
+    "column": "AadDeviceId",
+    "table": "AADSignInEventsBeta",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "entra-device",
+   "from": {
+    "column": "AadDeviceId",
+    "table": "DeviceInfo",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "AADSignInEventsBeta is deprecated. This supports historical beta-table records; use EntraIdSignInEvents.EntraIdDeviceId for the current equivalent. These are Entra device GUIDs, not Defender DeviceId values. The retained schema exposes two device field names; check which is populated in your records. Select the relevant DeviceInfo snapshot.",
+   "id": "device-info-aad-signin-beta-entra-id-device-id",
+   "kql": "let LeftEvents = DeviceInfo\n| where Timestamp > ago(7d)\n| extend JoinKey = tostring(AadDeviceId)\n| where isnotempty(JoinKey);\nlet RightEvents = AADSignInEventsBeta\n| where Timestamp > ago(7d)\n| extend JoinKey = tostring(EntraIdDeviceId)\n| where isnotempty(JoinKey);\nLeftEvents\n| join kind=inner (RightEvents) on JoinKey",
+   "sources": [
+    "https://learn.microsoft.com/en-us/defender-xdr/advanced-hunting-entraidsigninevents-table"
+   ],
+   "title": "Enrich retained beta sign-ins with Entra device information",
+   "to": {
+    "column": "EntraIdDeviceId",
+    "table": "AADSignInEventsBeta",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "entra-device",
+   "from": {
+    "column": "AadDeviceId",
+    "table": "DeviceInfo",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "Use the Entra device GUID, not DeviceInfo.DeviceId. Device details are available only when recorded in the authentication context. Exclude empty identifiers and select the appropriate DeviceInfo snapshot.",
+   "id": "device-info-entra-id-sign-in-events-entra-device",
+   "title": "Connect EntraIdSignInEvents to an Entra device",
+   "to": {
+    "column": "EntraIdDeviceId",
+    "table": "EntraIdSignInEvents",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "entra-device",
+   "from": {
+    "column": "AadDeviceId",
+    "table": "DeviceInfo",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "Use the Entra device GUID, not DeviceInfo.DeviceId. Device details are available only when recorded in the authentication context. Exclude empty identifiers and select the appropriate DeviceInfo snapshot.",
+   "id": "device-info-microsoft-graph-activity-logs-entra-device",
+   "title": "Connect MicrosoftGraphActivityLogs to an Entra device",
+   "to": {
+    "column": "DeviceId",
+    "table": "MicrosoftGraphActivityLogs",
+    "timeColumn": "TimeGenerated"
+   }
+  },
+  {
+   "family": "entra-device",
+   "from": {
+    "column": "AadDeviceId",
+    "table": "DeviceInfo",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "Use the Entra device GUID, not DeviceInfo.DeviceId. Device details are available only when recorded in the authentication context. Exclude empty identifiers and select the appropriate DeviceInfo snapshot.",
+   "id": "device-info-signin-logs-entra-device",
+   "title": "Connect SigninLogs to an Entra device",
+   "to": {
+    "column": "DeviceDetail",
+    "path": "deviceId",
+    "table": "SigninLogs",
+    "timeColumn": "TimeGenerated"
+   }
+  },
+  {
+   "family": "entra-session",
+   "from": {
+    "column": "SessionId",
+    "table": "AADManagedIdentitySignInLogs",
+    "timeColumn": "TimeGenerated"
+   },
+   "guidance": "This is the Entra sid claim and links authentication artifacts from the same root sign-in. A session can contain many tokens and activity records; SessionId and UniqueTokenIdentifier are different keys. Exclude empty values and retain actor, tenant, and time context. Some application-only or background events have no session ID. Use TimeRequested for event timing and allow for ingestion delay.",
+   "id": "aad-managed-identity-sign-in-logs-aad-graph-activity-logs-session",
+   "title": "Follow AADManagedIdentitySignInLogs sessions into AADGraphActivityLogs",
+   "to": {
+    "column": "SessionId",
+    "table": "AADGraphActivityLogs",
+    "timeColumn": "TimeRequested"
+   }
+  },
+  {
+   "family": "entra-session",
+   "from": {
+    "column": "SessionId",
+    "table": "AADManagedIdentitySignInLogs",
+    "timeColumn": "TimeGenerated"
+   },
+   "guidance": "This is the Entra sid claim and links authentication artifacts from the same root sign-in. A session can contain many tokens and activity records; SessionId and UniqueTokenIdentifier are different keys. Exclude empty values and retain actor, tenant, and time context. Some application-only or background events have no session ID.",
+   "id": "aad-managed-identity-sign-in-logs-microsoft-graph-activity-logs-session",
+   "title": "Follow AADManagedIdentitySignInLogs sessions into MicrosoftGraphActivityLogs",
+   "to": {
+    "column": "SessionId",
+    "table": "MicrosoftGraphActivityLogs",
+    "timeColumn": "TimeGenerated"
+   }
+  },
+  {
+   "family": "entra-session",
+   "from": {
+    "column": "SessionId",
+    "table": "AADManagedIdentitySignInLogs",
+    "timeColumn": "TimeGenerated"
+   },
+   "guidance": "This is the Entra sid claim and links authentication artifacts from the same root sign-in. A session can contain many tokens and activity records; SessionId and UniqueTokenIdentifier are different keys. Exclude empty values and retain actor, tenant, and time context. Some application-only or background events have no session ID. AppAccessContext is populated only for supported Exchange, SharePoint, and Teams audit events; aggregated or background events can omit it. The property names are case-sensitive.",
+   "id": "aad-managed-identity-sign-in-logs-office-activity-session",
+   "title": "Follow AADManagedIdentitySignInLogs sessions into OfficeActivity",
+   "to": {
+    "column": "AppAccessContext",
+    "path": "AADSessionId",
+    "table": "OfficeActivity",
+    "timeColumn": "TimeGenerated"
+   }
+  },
+  {
+   "family": "entra-session",
+   "from": {
+    "column": "SessionId",
+    "table": "AADNonInteractiveUserSignInLogs",
+    "timeColumn": "TimeGenerated"
+   },
+   "guidance": "This is the Entra sid claim and links authentication artifacts from the same root sign-in. A session can contain many tokens and activity records; SessionId and UniqueTokenIdentifier are different keys. Exclude empty values and retain actor, tenant, and time context. Some application-only or background events have no session ID. Use TimeRequested for event timing and allow for ingestion delay.",
+   "id": "aad-non-interactive-user-sign-in-logs-aad-graph-activity-logs-session",
+   "title": "Follow AADNonInteractiveUserSignInLogs sessions into AADGraphActivityLogs",
+   "to": {
+    "column": "SessionId",
+    "table": "AADGraphActivityLogs",
+    "timeColumn": "TimeRequested"
+   }
+  },
+  {
+   "family": "entra-session",
+   "from": {
+    "column": "SessionId",
+    "table": "AADNonInteractiveUserSignInLogs",
+    "timeColumn": "TimeGenerated"
+   },
+   "guidance": "This is the Entra sid claim and links authentication artifacts from the same root sign-in. A session can contain many tokens and activity records; SessionId and UniqueTokenIdentifier are different keys. Exclude empty values and retain actor, tenant, and time context. Some application-only or background events have no session ID. AppAccessContext is populated only for supported Exchange, SharePoint, and Teams audit events; aggregated or background events can omit it. The property names are case-sensitive.",
+   "id": "aad-non-interactive-user-sign-in-logs-cloudapp-m365-session",
+   "title": "Follow AADNonInteractiveUserSignInLogs sessions into CloudAppEvents",
+   "to": {
+    "column": "RawEventData",
+    "path": "AppAccessContext.AADSessionId",
+    "table": "CloudAppEvents",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "entra-session",
+   "from": {
+    "column": "SessionId",
+    "table": "AADNonInteractiveUserSignInLogs",
+    "timeColumn": "TimeGenerated"
+   },
+   "guidance": "This is the Entra sid claim and links authentication artifacts from the same root sign-in. A session can contain many tokens and activity records; SessionId and UniqueTokenIdentifier are different keys. Exclude empty values and retain actor, tenant, and time context. Some application-only or background events have no session ID.",
+   "id": "aad-non-interactive-user-sign-in-logs-microsoft-graph-activity-logs-session",
+   "title": "Follow AADNonInteractiveUserSignInLogs sessions into MicrosoftGraphActivityLogs",
+   "to": {
+    "column": "SessionId",
+    "table": "MicrosoftGraphActivityLogs",
+    "timeColumn": "TimeGenerated"
+   }
+  },
+  {
+   "family": "entra-session",
+   "from": {
+    "column": "SessionId",
+    "table": "AADNonInteractiveUserSignInLogs",
+    "timeColumn": "TimeGenerated"
+   },
+   "guidance": "This is the Entra sid claim and links authentication artifacts from the same root sign-in. A session can contain many tokens and activity records; SessionId and UniqueTokenIdentifier are different keys. Exclude empty values and retain actor, tenant, and time context. Some application-only or background events have no session ID. AppAccessContext is populated only for supported Exchange, SharePoint, and Teams audit events; aggregated or background events can omit it. The property names are case-sensitive.",
+   "id": "aad-non-interactive-user-sign-in-logs-office-activity-session",
+   "title": "Follow AADNonInteractiveUserSignInLogs sessions into OfficeActivity",
+   "to": {
+    "column": "AppAccessContext",
+    "path": "AADSessionId",
+    "table": "OfficeActivity",
+    "timeColumn": "TimeGenerated"
+   }
+  },
+  {
+   "family": "entra-session",
+   "from": {
+    "column": "SessionId",
+    "table": "AADServicePrincipalSignInLogs",
+    "timeColumn": "TimeGenerated"
+   },
+   "guidance": "This is the Entra sid claim and links authentication artifacts from the same root sign-in. A session can contain many tokens and activity records; SessionId and UniqueTokenIdentifier are different keys. Exclude empty values and retain actor, tenant, and time context. Some application-only or background events have no session ID. Use TimeRequested for event timing and allow for ingestion delay.",
+   "id": "aad-service-principal-sign-in-logs-aad-graph-activity-logs-session",
+   "title": "Follow AADServicePrincipalSignInLogs sessions into AADGraphActivityLogs",
+   "to": {
+    "column": "SessionId",
+    "table": "AADGraphActivityLogs",
+    "timeColumn": "TimeRequested"
+   }
+  },
+  {
+   "family": "entra-session",
+   "from": {
+    "column": "SessionId",
+    "table": "AADServicePrincipalSignInLogs",
+    "timeColumn": "TimeGenerated"
+   },
+   "guidance": "This is the Entra sid claim and links authentication artifacts from the same root sign-in. A session can contain many tokens and activity records; SessionId and UniqueTokenIdentifier are different keys. Exclude empty values and retain actor, tenant, and time context. Some application-only or background events have no session ID.",
+   "id": "aad-service-principal-sign-in-logs-microsoft-graph-activity-logs-session",
+   "title": "Follow AADServicePrincipalSignInLogs sessions into MicrosoftGraphActivityLogs",
+   "to": {
+    "column": "SessionId",
+    "table": "MicrosoftGraphActivityLogs",
+    "timeColumn": "TimeGenerated"
+   }
+  },
+  {
+   "family": "entra-session",
+   "from": {
+    "column": "SessionId",
+    "table": "AADServicePrincipalSignInLogs",
+    "timeColumn": "TimeGenerated"
+   },
+   "guidance": "This is the Entra sid claim and links authentication artifacts from the same root sign-in. A session can contain many tokens and activity records; SessionId and UniqueTokenIdentifier are different keys. Exclude empty values and retain actor, tenant, and time context. Some application-only or background events have no session ID. AppAccessContext is populated only for supported Exchange, SharePoint, and Teams audit events; aggregated or background events can omit it. The property names are case-sensitive.",
+   "id": "aad-service-principal-sign-in-logs-office-activity-session",
+   "title": "Follow AADServicePrincipalSignInLogs sessions into OfficeActivity",
+   "to": {
+    "column": "AppAccessContext",
+    "path": "AADSessionId",
+    "table": "OfficeActivity",
+    "timeColumn": "TimeGenerated"
+   }
+  },
+  {
+   "family": "entra-session",
+   "from": {
+    "column": "SessionId",
+    "table": "EntraIdSignInEvents",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "This is the Entra sid claim and links authentication artifacts from the same root sign-in. A session can contain many tokens and activity records; SessionId and UniqueTokenIdentifier are different keys. Exclude empty values and retain actor, tenant, and time context. Some application-only or background events have no session ID. Use TimeRequested for event timing and allow for ingestion delay.",
+   "id": "entra-id-sign-in-events-aad-graph-activity-logs-session",
+   "sources": [
+    "https://learn.microsoft.com/en-us/azure/azure-monitor/reference/tables/aadgraphactivitylogs"
+   ],
+   "title": "Follow EntraIdSignInEvents sessions into AADGraphActivityLogs",
+   "to": {
+    "column": "SessionId",
+    "table": "AADGraphActivityLogs",
+    "timeColumn": "TimeRequested"
+   }
+  },
+  {
+   "family": "entra-session",
+   "from": {
+    "column": "SessionId",
+    "table": "EntraIdSignInEvents",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "This is the Entra sid claim and links authentication artifacts from the same root sign-in. A session can contain many tokens and activity records; SessionId and UniqueTokenIdentifier are different keys. Exclude empty values and retain actor, tenant, and time context. Some application-only or background events have no session ID. These sources can contain overlapping records; a match does not establish a separate authentication event.",
+   "id": "entra-id-sign-in-events-aad-non-interactive-user-sign-in-logs-session",
+   "title": "Connect EntraIdSignInEvents and AADNonInteractiveUserSignInLogs by session",
+   "to": {
+    "column": "SessionId",
+    "table": "AADNonInteractiveUserSignInLogs",
+    "timeColumn": "TimeGenerated"
+   }
+  },
+  {
+   "family": "entra-session",
+   "from": {
+    "column": "SessionId",
+    "table": "EntraIdSignInEvents",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "This is the Entra sid claim and links authentication artifacts from the same root sign-in. A session can contain many tokens and activity records; SessionId and UniqueTokenIdentifier are different keys. Exclude empty values and retain actor, tenant, and time context. Some application-only or background events have no session ID. AppAccessContext is populated only for supported Exchange, SharePoint, and Teams audit events; aggregated or background events can omit it. The property names are case-sensitive.",
+   "id": "entra-id-sign-in-events-office-activity-session",
+   "title": "Follow EntraIdSignInEvents sessions into OfficeActivity",
+   "to": {
+    "column": "AppAccessContext",
+    "path": "AADSessionId",
+    "table": "OfficeActivity",
+    "timeColumn": "TimeGenerated"
+   }
+  },
+  {
+   "family": "entra-session",
+   "from": {
+    "column": "SessionId",
+    "table": "EntraIdSignInEvents",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "This is the Entra sid claim and links authentication artifacts from the same root sign-in. A session can contain many tokens and activity records; SessionId and UniqueTokenIdentifier are different keys. Exclude empty values and retain actor, tenant, and time context. Some application-only or background events have no session ID. These sources can contain overlapping records; a match does not establish a separate authentication event.",
+   "id": "entra-id-sign-in-events-signin-logs-session",
+   "title": "Connect EntraIdSignInEvents and SigninLogs by session",
+   "to": {
+    "column": "SessionId",
+    "table": "SigninLogs",
+    "timeColumn": "TimeGenerated"
+   }
+  },
+  {
+   "family": "entra-session",
+   "from": {
+    "column": "SessionId",
+    "table": "EntraIdSpnSignInEvents",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "This is the Entra sid claim and links authentication artifacts from the same root sign-in. A session can contain many tokens and activity records; SessionId and UniqueTokenIdentifier are different keys. Exclude empty values and retain actor, tenant, and time context. Some application-only or background events have no session ID. Use TimeRequested for event timing and allow for ingestion delay.",
+   "id": "entra-id-spn-sign-in-events-aad-graph-activity-logs-session",
+   "title": "Follow EntraIdSpnSignInEvents sessions into AADGraphActivityLogs",
+   "to": {
+    "column": "SessionId",
+    "table": "AADGraphActivityLogs",
+    "timeColumn": "TimeRequested"
+   }
+  },
+  {
+   "family": "entra-session",
+   "from": {
+    "column": "SessionId",
+    "table": "EntraIdSpnSignInEvents",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "This is the Entra sid claim and links authentication artifacts from the same root sign-in. A session can contain many tokens and activity records; SessionId and UniqueTokenIdentifier are different keys. Exclude empty values and retain actor, tenant, and time context. Some application-only or background events have no session ID. These sources can contain overlapping records; a match does not establish a separate authentication event.",
+   "id": "entra-id-spn-sign-in-events-aad-managed-identity-sign-in-logs-session",
+   "title": "Connect EntraIdSpnSignInEvents and AADManagedIdentitySignInLogs by session",
+   "to": {
+    "column": "SessionId",
+    "table": "AADManagedIdentitySignInLogs",
+    "timeColumn": "TimeGenerated"
+   }
+  },
+  {
+   "family": "entra-session",
+   "from": {
+    "column": "SessionId",
+    "table": "EntraIdSpnSignInEvents",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "This is the Entra sid claim and links authentication artifacts from the same root sign-in. A session can contain many tokens and activity records; SessionId and UniqueTokenIdentifier are different keys. Exclude empty values and retain actor, tenant, and time context. Some application-only or background events have no session ID. These sources can contain overlapping records; a match does not establish a separate authentication event.",
+   "id": "entra-id-spn-sign-in-events-aad-service-principal-sign-in-logs-session",
+   "title": "Connect EntraIdSpnSignInEvents and AADServicePrincipalSignInLogs by session",
+   "to": {
+    "column": "SessionId",
+    "table": "AADServicePrincipalSignInLogs",
+    "timeColumn": "TimeGenerated"
+   }
+  },
+  {
+   "family": "entra-session",
+   "from": {
+    "column": "SessionId",
+    "table": "EntraIdSpnSignInEvents",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "This is the Entra sid claim and links authentication artifacts from the same root sign-in. A session can contain many tokens and activity records; SessionId and UniqueTokenIdentifier are different keys. Exclude empty values and retain actor, tenant, and time context. Some application-only or background events have no session ID.",
+   "id": "entra-id-spn-sign-in-events-microsoft-graph-activity-logs-session",
+   "title": "Follow EntraIdSpnSignInEvents sessions into MicrosoftGraphActivityLogs",
+   "to": {
+    "column": "SessionId",
+    "table": "MicrosoftGraphActivityLogs",
+    "timeColumn": "TimeGenerated"
+   }
+  },
+  {
+   "family": "entra-session",
+   "from": {
+    "column": "SessionId",
+    "table": "EntraIdSpnSignInEvents",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "This is the Entra sid claim and links authentication artifacts from the same root sign-in. A session can contain many tokens and activity records; SessionId and UniqueTokenIdentifier are different keys. Exclude empty values and retain actor, tenant, and time context. Some application-only or background events have no session ID. AppAccessContext is populated only for supported Exchange, SharePoint, and Teams audit events; aggregated or background events can omit it. The property names are case-sensitive.",
+   "id": "entra-id-spn-sign-in-events-office-activity-session",
+   "title": "Follow EntraIdSpnSignInEvents sessions into OfficeActivity",
+   "to": {
+    "column": "AppAccessContext",
+    "path": "AADSessionId",
+    "table": "OfficeActivity",
+    "timeColumn": "TimeGenerated"
+   }
+  },
+  {
+   "family": "entra-session",
+   "from": {
+    "column": "SessionId",
+    "table": "EntraIdSignInEvents",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "A session can contain several tokens and many activity records. This nested field is only available in some Microsoft Azure events. Exclude empty identifiers and matches AccountObjectId as well. Adjust the lookback to include the originating sign-in and the later activity. The claims value can be a JSON object or a JSON-encoded string; parse both forms.",
+   "id": "entra-signin-cloudapp-azure-session",
+   "kql": "let SignIns = EntraIdSignInEvents\n| where Timestamp > ago(7d)\n| where isnotempty(SessionId) and isnotempty(AccountObjectId);\nCloudAppEvents\n| where Timestamp > ago(7d)\n| where Application == \"Microsoft Azure\"\n| extend SessionId = tostring(parse_json(tostring(RawEventData.claims)).sid)\n| where isnotempty(SessionId) and isnotempty(AccountObjectId)\n| join kind=inner (SignIns) on SessionId, AccountObjectId",
+   "sources": [
+    "https://github.com/Cloud-Architekt/AzureSentinel/blob/main/Hunting%20Queries/EID-TokenHunting/MicrosoftCloudActivity.func"
+   ],
+   "title": "Follow an Entra session into Azure activity",
+   "to": {
+    "column": "RawEventData",
+    "path": "claims.sid",
+    "table": "CloudAppEvents",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "entra-session",
+   "from": {
+    "column": "SessionId",
+    "table": "EntraIdSignInEvents",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "The source example extracts RawEventData.SessionId from MailItemsAccessed events. Availability and meaning depend on the audit workload; this mapping does not cover every CloudAppEvents record. Retain account and time context, exclude empty identifiers, and allow for multiple events per session. This correlation also matches AccountObjectId.",
+   "id": "entra-signin-cloudapp-exchange-session",
+   "kql": "let SignIns = EntraIdSignInEvents\n| where Timestamp > ago(7d)\n| where isnotempty(SessionId) and isnotempty(AccountObjectId);\nCloudAppEvents\n| where Timestamp > ago(7d)\n| where ActionType == \"MailItemsAccessed\"\n| extend SessionId = tostring(RawEventData.SessionId)\n| where isnotempty(SessionId) and isnotempty(AccountObjectId)\n| join kind=inner (SignIns) on SessionId, AccountObjectId",
+   "sources": [
+    "https://github.com/Cloud-Architekt/AzureAD-Attack-Defense/blob/main/queries/MDA-Hunt-Multi-Stage-Incident.kql",
+    "https://learn.microsoft.com/en-us/entra/identity/authentication/how-to-authentication-track-linkable-identifiers#linkable-identifiers-in-microsoft-exchange-online-logs"
+   ],
+   "title": "Follow an Entra session into Exchange mailbox activity",
+   "to": {
+    "column": "RawEventData",
+    "path": "SessionId",
+    "table": "CloudAppEvents",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "entra-session",
+   "from": {
+    "column": "SessionId",
+    "table": "EntraIdSignInEvents",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "A session can contain several tokens and many activity records. This nested field is only available in some Microsoft 365 events. Exclude empty identifiers and matches AccountObjectId as well. Adjust the lookback to include the originating sign-in and the later activity.",
+   "id": "entra-signin-cloudapp-m365-session",
+   "kql": "let SignIns = EntraIdSignInEvents\n| where Timestamp > ago(7d)\n| where isnotempty(SessionId) and isnotempty(AccountObjectId);\nCloudAppEvents\n| where Timestamp > ago(7d)\n| where Application != \"Microsoft Azure\"\n| where tostring(RawEventData.Workload) in (\"Exchange\", \"SharePoint\", \"OneDrive\", \"MicrosoftTeams\")\n| extend SessionId = tostring(RawEventData.AppAccessContext.AADSessionId)\n| where isnotempty(SessionId) and isnotempty(AccountObjectId)\n| join kind=inner (SignIns) on SessionId, AccountObjectId",
+   "sources": [
+    "https://github.com/Cloud-Architekt/AzureSentinel/blob/main/Hunting%20Queries/EID-TokenHunting/MicrosoftCloudActivity.func"
+   ],
+   "title": "Follow an Entra session into Microsoft 365 activity",
+   "to": {
+    "column": "RawEventData",
+    "path": "AppAccessContext.AADSessionId",
+    "table": "CloudAppEvents",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "entra-session",
+   "from": {
+    "column": "SessionId",
+    "table": "EntraIdSignInEvents",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "AADSignInEventsBeta is deprecated. The two tables can expose the same authentication session identifiers for retained records. Prefer EntraIdSignInEvents for current data; treat matches as one-to-many, exclude empty values, and retain AccountObjectId and time context when joining.",
+   "id": "entra-signin-events-beta-session",
+   "kql": "let EntraSessions = EntraIdSignInEvents\n| where Timestamp > ago(1d)\n| where isnotempty(AccountObjectId) and isnotempty(SessionId)\n| summarize by AccountObjectId, SessionId;\nlet BetaSessions = AADSignInEventsBeta\n| where Timestamp > ago(1d)\n| where isnotempty(AccountObjectId) and isnotempty(SessionId)\n| summarize by AccountObjectId, SessionId;\nEntraSessions\n| join kind=inner BetaSessions on AccountObjectId, SessionId",
+   "title": "Link Entra sign-ins to beta sign-in sessions",
+   "to": {
+    "column": "SessionId",
+    "table": "AADSignInEventsBeta",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "entra-session",
+   "from": {
+    "column": "SessionId",
+    "table": "EntraIdSignInEvents",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "This is the Entra sid claim and links authentication artifacts from the same root sign-in. A session can contain many tokens and activity records; SessionId and UniqueTokenIdentifier are different keys. Exclude empty values and retain actor, tenant, and time context. Some application-only or background events have no session ID.",
+   "id": "entra-signin-microsoft-graph-session",
+   "sources": [
+    "https://learn.microsoft.com/en-us/azure/azure-monitor/reference/tables/microsoftgraphactivitylogs",
+    "https://learn.microsoft.com/en-us/entra/identity/authentication/how-to-authentication-track-linkable-identifiers"
+   ],
+   "title": "Follow an Entra session into Microsoft Graph activity",
+   "to": {
+    "column": "SessionId",
+    "table": "MicrosoftGraphActivityLogs",
+    "timeColumn": "TimeGenerated"
+   }
+  },
+  {
+   "family": "entra-session",
+   "from": {
+    "column": "SessionId",
+    "table": "SigninLogs",
+    "timeColumn": "TimeGenerated"
+   },
+   "guidance": "This is the Entra sid claim and links authentication artifacts from the same root sign-in. A session can contain many tokens and activity records; SessionId and UniqueTokenIdentifier are different keys. Exclude empty values and retain actor, tenant, and time context. Some application-only or background events have no session ID.",
+   "id": "sentinel-interactive-to-noninteractive-session",
+   "title": "Connect interactive and non-interactive sign-ins",
+   "to": {
+    "column": "SessionId",
+    "table": "AADNonInteractiveUserSignInLogs",
+    "timeColumn": "TimeGenerated"
+   }
+  },
+  {
+   "family": "entra-session",
+   "from": {
+    "column": "SessionId",
+    "table": "SigninLogs",
+    "timeColumn": "TimeGenerated"
+   },
+   "guidance": "This is the Entra sid claim and links authentication artifacts from the same root sign-in. A session can contain many tokens and activity records; SessionId and UniqueTokenIdentifier are different keys. Exclude empty values and retain actor, tenant, and time context. Some application-only or background events have no session ID. Use TimeRequested for event timing and allow for ingestion delay.",
+   "id": "signin-logs-aad-graph-activity-logs-session",
+   "title": "Follow SigninLogs sessions into AADGraphActivityLogs",
+   "to": {
+    "column": "SessionId",
+    "table": "AADGraphActivityLogs",
+    "timeColumn": "TimeRequested"
+   }
+  },
+  {
+   "family": "entra-session",
+   "from": {
+    "column": "SessionId",
+    "table": "SigninLogs",
+    "timeColumn": "TimeGenerated"
+   },
+   "guidance": "This is the Entra sid claim and links authentication artifacts from the same root sign-in. A session can contain many tokens and activity records; SessionId and UniqueTokenIdentifier are different keys. Exclude empty values and retain actor, tenant, and time context. Some application-only or background events have no session ID. AppAccessContext is populated only for supported Exchange, SharePoint, and Teams audit events; aggregated or background events can omit it. The property names are case-sensitive.",
+   "id": "signin-logs-cloudapp-m365-session",
+   "title": "Follow SigninLogs sessions into CloudAppEvents",
+   "to": {
+    "column": "RawEventData",
+    "path": "AppAccessContext.AADSessionId",
+    "table": "CloudAppEvents",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "entra-session",
+   "from": {
+    "column": "SessionId",
+    "table": "SigninLogs",
+    "timeColumn": "TimeGenerated"
+   },
+   "guidance": "This is the Entra sid claim and links authentication artifacts from the same root sign-in. A session can contain many tokens and activity records; SessionId and UniqueTokenIdentifier are different keys. Exclude empty values and retain actor, tenant, and time context. Some application-only or background events have no session ID.",
+   "id": "signin-logs-microsoft-graph-activity-logs-session",
+   "title": "Follow SigninLogs sessions into MicrosoftGraphActivityLogs",
+   "to": {
+    "column": "SessionId",
+    "table": "MicrosoftGraphActivityLogs",
+    "timeColumn": "TimeGenerated"
+   }
+  },
+  {
+   "family": "entra-session",
+   "from": {
+    "column": "SessionId",
+    "table": "SigninLogs",
+    "timeColumn": "TimeGenerated"
+   },
+   "guidance": "This is the Entra sid claim and links authentication artifacts from the same root sign-in. A session can contain many tokens and activity records; SessionId and UniqueTokenIdentifier are different keys. Exclude empty values and retain actor, tenant, and time context. Some application-only or background events have no session ID. AppAccessContext is populated only for supported Exchange, SharePoint, and Teams audit events; aggregated or background events can omit it. The property names are case-sensitive.",
+   "id": "signin-logs-office-activity-session",
+   "sources": [
+    "https://learn.microsoft.com/en-us/entra/identity/authentication/how-to-authentication-track-linkable-identifiers"
+   ],
+   "title": "Follow SigninLogs sessions into OfficeActivity",
+   "to": {
+    "column": "AppAccessContext",
+    "path": "AADSessionId",
+    "table": "OfficeActivity",
+    "timeColumn": "TimeGenerated"
+   }
+  },
+  {
+   "family": "entra-token",
+   "from": {
+    "column": "UniqueTokenIdentifier",
+    "table": "AADManagedIdentitySignInLogs",
+    "timeColumn": "TimeGenerated"
+   },
+   "guidance": "Compare non-empty token identifiers exactly and preserve case; never lowercase a UTI. One token can have many activity records. Keep actor, tenant, application, and time context, and include the originating sign-in in the lookback. A missing match can reflect retention or collection gaps. AAD Graph SignInActivityId is a best-effort token link. Exact equality can miss padded values. Remove only trailing Base64 padding on both sides and preserve case. This does not convert GUID-shaped IDs to Base64 or equate them with sign-in Id/CorrelationId. Inspect unmatched GUID-shaped values separately. TimeRequested is the request time; allow for delayed ingestion.",
+   "id": "aad-managed-identity-sign-in-logs-aad-graph-activity-logs-sign-in-activity-id",
+   "kql": "let LeftEvents = AADManagedIdentitySignInLogs\n| where TimeGenerated > ago(7d)\n| extend LeftKey = trim_end(@\"=+\", tostring(UniqueTokenIdentifier))\n| where isnotempty(LeftKey);\nlet RightEvents = AADGraphActivityLogs\n| where TimeRequested > ago(7d)\n| extend RightKey = trim_end(@\"=+\", tostring(SignInActivityId))\n| where isnotempty(RightKey);\nLeftEvents\n| join kind=inner (RightEvents) on $left.LeftKey == $right.RightKey\n| project-away LeftKey, RightKey",
+   "sources": [
+    "https://cloudbrothers.info/aadgraphactivitylogs/"
+   ],
+   "title": "Follow AADManagedIdentitySignInLogs tokens into AADGraphActivityLogs",
+   "to": {
+    "column": "SignInActivityId",
+    "table": "AADGraphActivityLogs",
+    "timeColumn": "TimeRequested"
+   }
+  },
+  {
+   "family": "entra-token",
+   "from": {
+    "column": "UniqueTokenIdentifier",
+    "table": "AADManagedIdentitySignInLogs",
+    "timeColumn": "TimeGenerated"
+   },
+   "guidance": "Compare non-empty token identifiers exactly and preserve case; never lowercase a UTI. One token can have many activity records. Keep actor, tenant, application, and time context, and include the originating sign-in in the lookback. A missing match can reflect retention or collection gaps.",
+   "id": "aad-managed-identity-sign-in-logs-graphapi-audit-events-unique-token-identifier",
+   "title": "Follow AADManagedIdentitySignInLogs tokens into GraphAPIAuditEvents",
+   "to": {
+    "column": "UniqueTokenIdentifier",
+    "table": "GraphAPIAuditEvents",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "entra-token",
+   "from": {
+    "column": "UniqueTokenIdentifier",
+    "table": "AADManagedIdentitySignInLogs",
+    "timeColumn": "TimeGenerated"
+   },
+   "guidance": "Compare non-empty token identifiers exactly and preserve case; never lowercase a UTI. One token can have many activity records. Keep actor, tenant, application, and time context, and include the originating sign-in in the lookback. A missing match can reflect retention or collection gaps.",
+   "id": "aad-managed-identity-sign-in-logs-microsoft-graph-activity-logs-sign-in-activity-id",
+   "title": "Follow AADManagedIdentitySignInLogs tokens into MicrosoftGraphActivityLogs",
+   "to": {
+    "column": "SignInActivityId",
+    "table": "MicrosoftGraphActivityLogs",
+    "timeColumn": "TimeGenerated"
+   }
+  },
+  {
+   "family": "entra-token",
+   "from": {
+    "column": "UniqueTokenIdentifier",
+    "table": "AADManagedIdentitySignInLogs",
+    "timeColumn": "TimeGenerated"
+   },
+   "guidance": "Compare non-empty token identifiers exactly and preserve case; never lowercase a UTI. One token can have many activity records. Keep actor, tenant, application, and time context, and include the originating sign-in in the lookback. A missing match can reflect retention or collection gaps.",
+   "id": "aad-managed-identity-sign-in-logs-microsoft-graph-activity-logs-unique-token-id",
+   "title": "Follow AADManagedIdentitySignInLogs tokens into MicrosoftGraphActivityLogs",
+   "to": {
+    "column": "UniqueTokenId",
+    "table": "MicrosoftGraphActivityLogs",
+    "timeColumn": "TimeGenerated"
+   }
+  },
+  {
+   "family": "entra-token",
+   "from": {
+    "column": "UniqueTokenIdentifier",
+    "table": "AADManagedIdentitySignInLogs",
+    "timeColumn": "TimeGenerated"
+   },
+   "guidance": "Compare non-empty token identifiers exactly and preserve case; never lowercase a UTI. One token can have many activity records. Keep actor, tenant, application, and time context, and include the originating sign-in in the lookback. A missing match can reflect retention or collection gaps. AppAccessContext is populated only for supported Exchange, SharePoint, and Teams audit events; aggregated or background events can omit it. The property names are case-sensitive.",
+   "id": "aad-managed-identity-sign-in-logs-office-activity-token",
+   "title": "Follow AADManagedIdentitySignInLogs tokens into OfficeActivity",
+   "to": {
+    "column": "AppAccessContext",
+    "path": "UniqueTokenId",
+    "table": "OfficeActivity",
+    "timeColumn": "TimeGenerated"
+   }
+  },
+  {
+   "family": "entra-token",
+   "from": {
+    "column": "UniqueTokenIdentifier",
+    "table": "AADNonInteractiveUserSignInLogs",
+    "timeColumn": "TimeGenerated"
+   },
+   "guidance": "Compare non-empty token identifiers exactly and preserve case; never lowercase a UTI. One token can have many activity records. Keep actor, tenant, application, and time context, and include the originating sign-in in the lookback. A missing match can reflect retention or collection gaps. AAD Graph SignInActivityId is a best-effort token link. Exact equality can miss padded values. Remove only trailing Base64 padding on both sides and preserve case. This does not convert GUID-shaped IDs to Base64 or equate them with sign-in Id/CorrelationId. Inspect unmatched GUID-shaped values separately. TimeRequested is the request time; allow for delayed ingestion.",
+   "id": "aad-non-interactive-user-sign-in-logs-aad-graph-activity-logs-sign-in-activity-id",
+   "kql": "let LeftEvents = AADNonInteractiveUserSignInLogs\n| where TimeGenerated > ago(7d)\n| extend LeftKey = trim_end(@\"=+\", tostring(UniqueTokenIdentifier))\n| where isnotempty(LeftKey);\nlet RightEvents = AADGraphActivityLogs\n| where TimeRequested > ago(7d)\n| extend RightKey = trim_end(@\"=+\", tostring(SignInActivityId))\n| where isnotempty(RightKey);\nLeftEvents\n| join kind=inner (RightEvents) on $left.LeftKey == $right.RightKey\n| project-away LeftKey, RightKey",
+   "sources": [
+    "https://cloudbrothers.info/aadgraphactivitylogs/"
+   ],
+   "title": "Follow AADNonInteractiveUserSignInLogs tokens into AADGraphActivityLogs",
+   "to": {
+    "column": "SignInActivityId",
+    "table": "AADGraphActivityLogs",
+    "timeColumn": "TimeRequested"
+   }
+  },
+  {
+   "family": "entra-token",
+   "from": {
+    "column": "UniqueTokenIdentifier",
+    "table": "AADNonInteractiveUserSignInLogs",
+    "timeColumn": "TimeGenerated"
+   },
+   "guidance": "Compare non-empty token identifiers exactly and preserve case; never lowercase a UTI. One token can have many activity records. Keep actor, tenant, application, and time context, and include the originating sign-in in the lookback. A missing match can reflect retention or collection gaps. AppAccessContext is populated only for supported Exchange, SharePoint, and Teams audit events; aggregated or background events can omit it. The property names are case-sensitive.",
+   "id": "aad-non-interactive-user-sign-in-logs-cloudapp-m365-token",
+   "title": "Follow AADNonInteractiveUserSignInLogs tokens into CloudAppEvents",
+   "to": {
+    "column": "RawEventData",
+    "path": "AppAccessContext.UniqueTokenId",
+    "table": "CloudAppEvents",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "entra-token",
+   "from": {
+    "column": "UniqueTokenIdentifier",
+    "table": "AADNonInteractiveUserSignInLogs",
+    "timeColumn": "TimeGenerated"
+   },
+   "guidance": "Compare non-empty token identifiers exactly and preserve case; never lowercase a UTI. One token can have many activity records. Keep actor, tenant, application, and time context, and include the originating sign-in in the lookback. A missing match can reflect retention or collection gaps.",
+   "id": "aad-non-interactive-user-sign-in-logs-graphapi-audit-events-unique-token-identifier",
+   "title": "Follow AADNonInteractiveUserSignInLogs tokens into GraphAPIAuditEvents",
+   "to": {
+    "column": "UniqueTokenIdentifier",
+    "table": "GraphAPIAuditEvents",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "entra-token",
+   "from": {
+    "column": "UniqueTokenIdentifier",
+    "table": "AADNonInteractiveUserSignInLogs",
+    "timeColumn": "TimeGenerated"
+   },
+   "guidance": "Compare non-empty token identifiers exactly and preserve case; never lowercase a UTI. One token can have many activity records. Keep actor, tenant, application, and time context, and include the originating sign-in in the lookback. A missing match can reflect retention or collection gaps.",
+   "id": "aad-non-interactive-user-sign-in-logs-microsoft-graph-activity-logs-sign-in-activity-id",
+   "title": "Follow AADNonInteractiveUserSignInLogs tokens into MicrosoftGraphActivityLogs",
+   "to": {
+    "column": "SignInActivityId",
+    "table": "MicrosoftGraphActivityLogs",
+    "timeColumn": "TimeGenerated"
+   }
+  },
+  {
+   "family": "entra-token",
+   "from": {
+    "column": "UniqueTokenIdentifier",
+    "table": "AADNonInteractiveUserSignInLogs",
+    "timeColumn": "TimeGenerated"
+   },
+   "guidance": "Compare non-empty token identifiers exactly and preserve case; never lowercase a UTI. One token can have many activity records. Keep actor, tenant, application, and time context, and include the originating sign-in in the lookback. A missing match can reflect retention or collection gaps.",
+   "id": "aad-non-interactive-user-sign-in-logs-microsoft-graph-activity-logs-unique-token-id",
+   "title": "Follow AADNonInteractiveUserSignInLogs tokens into MicrosoftGraphActivityLogs",
+   "to": {
+    "column": "UniqueTokenId",
+    "table": "MicrosoftGraphActivityLogs",
+    "timeColumn": "TimeGenerated"
+   }
+  },
+  {
+   "family": "entra-token",
+   "from": {
+    "column": "UniqueTokenIdentifier",
+    "table": "AADNonInteractiveUserSignInLogs",
+    "timeColumn": "TimeGenerated"
+   },
+   "guidance": "Compare non-empty token identifiers exactly and preserve case; never lowercase a UTI. One token can have many activity records. Keep actor, tenant, application, and time context, and include the originating sign-in in the lookback. A missing match can reflect retention or collection gaps. AppAccessContext is populated only for supported Exchange, SharePoint, and Teams audit events; aggregated or background events can omit it. The property names are case-sensitive.",
+   "id": "aad-non-interactive-user-sign-in-logs-office-activity-token",
+   "title": "Follow AADNonInteractiveUserSignInLogs tokens into OfficeActivity",
+   "to": {
+    "column": "AppAccessContext",
+    "path": "UniqueTokenId",
+    "table": "OfficeActivity",
+    "timeColumn": "TimeGenerated"
+   }
+  },
+  {
+   "family": "entra-token",
+   "from": {
+    "column": "UniqueTokenIdentifier",
+    "table": "AADServicePrincipalSignInLogs",
+    "timeColumn": "TimeGenerated"
+   },
+   "guidance": "Compare non-empty token identifiers exactly and preserve case; never lowercase a UTI. One token can have many activity records. Keep actor, tenant, application, and time context, and include the originating sign-in in the lookback. A missing match can reflect retention or collection gaps. AAD Graph SignInActivityId is a best-effort token link. Exact equality can miss padded values. Remove only trailing Base64 padding on both sides and preserve case. This does not convert GUID-shaped IDs to Base64 or equate them with sign-in Id/CorrelationId. Inspect unmatched GUID-shaped values separately. TimeRequested is the request time; allow for delayed ingestion.",
+   "id": "aad-service-principal-sign-in-logs-aad-graph-activity-logs-sign-in-activity-id",
+   "kql": "let LeftEvents = AADServicePrincipalSignInLogs\n| where TimeGenerated > ago(7d)\n| extend LeftKey = trim_end(@\"=+\", tostring(UniqueTokenIdentifier))\n| where isnotempty(LeftKey);\nlet RightEvents = AADGraphActivityLogs\n| where TimeRequested > ago(7d)\n| extend RightKey = trim_end(@\"=+\", tostring(SignInActivityId))\n| where isnotempty(RightKey);\nLeftEvents\n| join kind=inner (RightEvents) on $left.LeftKey == $right.RightKey\n| project-away LeftKey, RightKey",
+   "sources": [
+    "https://cloudbrothers.info/aadgraphactivitylogs/"
+   ],
+   "title": "Follow AADServicePrincipalSignInLogs tokens into AADGraphActivityLogs",
+   "to": {
+    "column": "SignInActivityId",
+    "table": "AADGraphActivityLogs",
+    "timeColumn": "TimeRequested"
+   }
+  },
+  {
+   "family": "entra-token",
+   "from": {
+    "column": "UniqueTokenIdentifier",
+    "table": "AADServicePrincipalSignInLogs",
+    "timeColumn": "TimeGenerated"
+   },
+   "guidance": "Compare non-empty token identifiers exactly and preserve case; never lowercase a UTI. One token can have many activity records. Keep actor, tenant, application, and time context, and include the originating sign-in in the lookback. A missing match can reflect retention or collection gaps.",
+   "id": "aad-service-principal-sign-in-logs-graphapi-audit-events-unique-token-identifier",
+   "title": "Follow AADServicePrincipalSignInLogs tokens into GraphAPIAuditEvents",
+   "to": {
+    "column": "UniqueTokenIdentifier",
+    "table": "GraphAPIAuditEvents",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "entra-token",
+   "from": {
+    "column": "UniqueTokenIdentifier",
+    "table": "AADServicePrincipalSignInLogs",
+    "timeColumn": "TimeGenerated"
+   },
+   "guidance": "Compare non-empty token identifiers exactly and preserve case; never lowercase a UTI. One token can have many activity records. Keep actor, tenant, application, and time context, and include the originating sign-in in the lookback. A missing match can reflect retention or collection gaps.",
+   "id": "aad-service-principal-sign-in-logs-microsoft-graph-activity-logs-sign-in-activity-id",
+   "title": "Follow AADServicePrincipalSignInLogs tokens into MicrosoftGraphActivityLogs",
+   "to": {
+    "column": "SignInActivityId",
+    "table": "MicrosoftGraphActivityLogs",
+    "timeColumn": "TimeGenerated"
+   }
+  },
+  {
+   "family": "entra-token",
+   "from": {
+    "column": "UniqueTokenIdentifier",
+    "table": "AADServicePrincipalSignInLogs",
+    "timeColumn": "TimeGenerated"
+   },
+   "guidance": "Compare non-empty token identifiers exactly and preserve case; never lowercase a UTI. One token can have many activity records. Keep actor, tenant, application, and time context, and include the originating sign-in in the lookback. A missing match can reflect retention or collection gaps.",
+   "id": "aad-service-principal-sign-in-logs-microsoft-graph-activity-logs-unique-token-id",
+   "title": "Follow AADServicePrincipalSignInLogs tokens into MicrosoftGraphActivityLogs",
+   "to": {
+    "column": "UniqueTokenId",
+    "table": "MicrosoftGraphActivityLogs",
+    "timeColumn": "TimeGenerated"
+   }
+  },
+  {
+   "family": "entra-token",
+   "from": {
+    "column": "UniqueTokenIdentifier",
+    "table": "AADServicePrincipalSignInLogs",
+    "timeColumn": "TimeGenerated"
+   },
+   "guidance": "Compare non-empty token identifiers exactly and preserve case; never lowercase a UTI. One token can have many activity records. Keep actor, tenant, application, and time context, and include the originating sign-in in the lookback. A missing match can reflect retention or collection gaps. AppAccessContext is populated only for supported Exchange, SharePoint, and Teams audit events; aggregated or background events can omit it. The property names are case-sensitive.",
+   "id": "aad-service-principal-sign-in-logs-office-activity-token",
+   "title": "Follow AADServicePrincipalSignInLogs tokens into OfficeActivity",
+   "to": {
+    "column": "AppAccessContext",
+    "path": "UniqueTokenId",
+    "table": "OfficeActivity",
+    "timeColumn": "TimeGenerated"
+   }
+  },
+  {
+   "family": "entra-token",
+   "from": {
+    "column": "UniqueTokenId",
+    "table": "EntraIdSignInEvents",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "Compare non-empty token identifiers exactly and preserve case; never lowercase a UTI. One token can have many activity records. Keep actor, tenant, application, and time context, and include the originating sign-in in the lookback. A missing match can reflect retention or collection gaps. These sources can contain overlapping records; a match does not establish a separate authentication event.",
+   "id": "entra-id-sign-in-events-aad-non-interactive-user-sign-in-logs-token",
+   "title": "Connect EntraIdSignInEvents and AADNonInteractiveUserSignInLogs by token",
+   "to": {
+    "column": "UniqueTokenIdentifier",
+    "table": "AADNonInteractiveUserSignInLogs",
+    "timeColumn": "TimeGenerated"
+   }
+  },
+  {
+   "family": "entra-token",
+   "from": {
+    "column": "UniqueTokenId",
+    "table": "EntraIdSignInEvents",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "Compare non-empty token identifiers exactly and preserve case; never lowercase a UTI. One token can have many activity records. Keep actor, tenant, application, and time context, and include the originating sign-in in the lookback. A missing match can reflect retention or collection gaps. AppAccessContext is populated only for supported Exchange, SharePoint, and Teams audit events; aggregated or background events can omit it. The property names are case-sensitive.",
+   "id": "entra-id-sign-in-events-office-activity-token",
+   "title": "Follow EntraIdSignInEvents tokens into OfficeActivity",
+   "to": {
+    "column": "AppAccessContext",
+    "path": "UniqueTokenId",
+    "table": "OfficeActivity",
+    "timeColumn": "TimeGenerated"
+   }
+  },
+  {
+   "family": "entra-token",
+   "from": {
+    "column": "UniqueTokenId",
+    "table": "EntraIdSignInEvents",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "Compare non-empty token identifiers exactly and preserve case; never lowercase a UTI. One token can have many activity records. Keep actor, tenant, application, and time context, and include the originating sign-in in the lookback. A missing match can reflect retention or collection gaps. These sources can contain overlapping records; a match does not establish a separate authentication event.",
+   "id": "entra-id-sign-in-events-signin-logs-token",
+   "title": "Connect EntraIdSignInEvents and SigninLogs by token",
+   "to": {
+    "column": "UniqueTokenIdentifier",
+    "table": "SigninLogs",
+    "timeColumn": "TimeGenerated"
+   }
+  },
+  {
+   "family": "entra-token",
+   "from": {
+    "column": "UniqueTokenId",
+    "table": "EntraIdSpnSignInEvents",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "Compare non-empty token identifiers exactly and preserve case; never lowercase a UTI. One token can have many activity records. Keep actor, tenant, application, and time context, and include the originating sign-in in the lookback. A missing match can reflect retention or collection gaps. AAD Graph SignInActivityId is a best-effort token link. Exact equality can miss padded values. Remove only trailing Base64 padding on both sides and preserve case. This does not convert GUID-shaped IDs to Base64 or equate them with sign-in Id/CorrelationId. Inspect unmatched GUID-shaped values separately. TimeRequested is the request time; allow for delayed ingestion.",
+   "id": "entra-id-spn-sign-in-events-aad-graph-activity-logs-sign-in-activity-id",
+   "kql": "let LeftEvents = EntraIdSpnSignInEvents\n| where Timestamp > ago(7d)\n| extend LeftKey = trim_end(@\"=+\", tostring(UniqueTokenId))\n| where isnotempty(LeftKey);\nlet RightEvents = AADGraphActivityLogs\n| where TimeRequested > ago(7d)\n| extend RightKey = trim_end(@\"=+\", tostring(SignInActivityId))\n| where isnotempty(RightKey);\nLeftEvents\n| join kind=inner (RightEvents) on $left.LeftKey == $right.RightKey\n| project-away LeftKey, RightKey",
+   "sources": [
+    "https://cloudbrothers.info/aadgraphactivitylogs/"
+   ],
+   "title": "Follow EntraIdSpnSignInEvents tokens into AADGraphActivityLogs",
+   "to": {
+    "column": "SignInActivityId",
+    "table": "AADGraphActivityLogs",
+    "timeColumn": "TimeRequested"
+   }
+  },
+  {
+   "family": "entra-token",
+   "from": {
+    "column": "UniqueTokenId",
+    "table": "EntraIdSpnSignInEvents",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "Compare non-empty token identifiers exactly and preserve case; never lowercase a UTI. One token can have many activity records. Keep actor, tenant, application, and time context, and include the originating sign-in in the lookback. A missing match can reflect retention or collection gaps. These sources can contain overlapping records; a match does not establish a separate authentication event.",
+   "id": "entra-id-spn-sign-in-events-aad-managed-identity-sign-in-logs-token",
+   "title": "Connect EntraIdSpnSignInEvents and AADManagedIdentitySignInLogs by token",
+   "to": {
+    "column": "UniqueTokenIdentifier",
+    "table": "AADManagedIdentitySignInLogs",
+    "timeColumn": "TimeGenerated"
+   }
+  },
+  {
+   "family": "entra-token",
+   "from": {
+    "column": "UniqueTokenId",
+    "table": "EntraIdSpnSignInEvents",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "Compare non-empty token identifiers exactly and preserve case; never lowercase a UTI. One token can have many activity records. Keep actor, tenant, application, and time context, and include the originating sign-in in the lookback. A missing match can reflect retention or collection gaps. These sources can contain overlapping records; a match does not establish a separate authentication event.",
+   "id": "entra-id-spn-sign-in-events-aad-service-principal-sign-in-logs-token",
+   "title": "Connect EntraIdSpnSignInEvents and AADServicePrincipalSignInLogs by token",
+   "to": {
+    "column": "UniqueTokenIdentifier",
+    "table": "AADServicePrincipalSignInLogs",
+    "timeColumn": "TimeGenerated"
+   }
+  },
+  {
+   "family": "entra-token",
+   "from": {
+    "column": "UniqueTokenId",
+    "table": "EntraIdSpnSignInEvents",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "Compare non-empty token identifiers exactly and preserve case; never lowercase a UTI. One token can have many activity records. Keep actor, tenant, application, and time context, and include the originating sign-in in the lookback. A missing match can reflect retention or collection gaps.",
+   "id": "entra-id-spn-sign-in-events-graphapi-audit-events-unique-token-identifier",
+   "title": "Follow EntraIdSpnSignInEvents tokens into GraphAPIAuditEvents",
+   "to": {
+    "column": "UniqueTokenIdentifier",
+    "table": "GraphAPIAuditEvents",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "entra-token",
+   "from": {
+    "column": "UniqueTokenId",
+    "table": "EntraIdSpnSignInEvents",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "Compare non-empty token identifiers exactly and preserve case; never lowercase a UTI. One token can have many activity records. Keep actor, tenant, application, and time context, and include the originating sign-in in the lookback. A missing match can reflect retention or collection gaps.",
+   "id": "entra-id-spn-sign-in-events-microsoft-graph-activity-logs-sign-in-activity-id",
+   "title": "Follow EntraIdSpnSignInEvents tokens into MicrosoftGraphActivityLogs",
+   "to": {
+    "column": "SignInActivityId",
+    "table": "MicrosoftGraphActivityLogs",
+    "timeColumn": "TimeGenerated"
+   }
+  },
+  {
+   "family": "entra-token",
+   "from": {
+    "column": "UniqueTokenId",
+    "table": "EntraIdSpnSignInEvents",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "Compare non-empty token identifiers exactly and preserve case; never lowercase a UTI. One token can have many activity records. Keep actor, tenant, application, and time context, and include the originating sign-in in the lookback. A missing match can reflect retention or collection gaps.",
+   "id": "entra-id-spn-sign-in-events-microsoft-graph-activity-logs-unique-token-id",
+   "title": "Follow EntraIdSpnSignInEvents tokens into MicrosoftGraphActivityLogs",
+   "to": {
+    "column": "UniqueTokenId",
+    "table": "MicrosoftGraphActivityLogs",
+    "timeColumn": "TimeGenerated"
+   }
+  },
+  {
+   "family": "entra-token",
+   "from": {
+    "column": "UniqueTokenId",
+    "table": "EntraIdSpnSignInEvents",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "Compare non-empty token identifiers exactly and preserve case; never lowercase a UTI. One token can have many activity records. Keep actor, tenant, application, and time context, and include the originating sign-in in the lookback. A missing match can reflect retention or collection gaps. AppAccessContext is populated only for supported Exchange, SharePoint, and Teams audit events; aggregated or background events can omit it. The property names are case-sensitive.",
+   "id": "entra-id-spn-sign-in-events-office-activity-token",
+   "title": "Follow EntraIdSpnSignInEvents tokens into OfficeActivity",
+   "to": {
+    "column": "AppAccessContext",
+    "path": "UniqueTokenId",
+    "table": "OfficeActivity",
+    "timeColumn": "TimeGenerated"
+   }
+  },
+  {
+   "family": "entra-token",
+   "from": {
+    "column": "UniqueTokenId",
+    "table": "EntraIdSignInEvents",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "Compare non-empty token identifiers exactly and preserve case; never lowercase a UTI. One token can have many activity records. Keep actor, tenant, application, and time context, and include the originating sign-in in the lookback. A missing match can reflect retention or collection gaps. AAD Graph SignInActivityId is a best-effort token link. Exact equality can miss padded values. Remove only trailing Base64 padding on both sides and preserve case. This does not convert GUID-shaped IDs to Base64 or equate them with sign-in Id/CorrelationId. Inspect unmatched GUID-shaped values separately. TimeRequested is the request time; allow for delayed ingestion.",
+   "id": "entra-signin-aad-graph-activity-token",
+   "kql": "let LeftEvents = EntraIdSignInEvents\n| where Timestamp > ago(7d)\n| extend LeftKey = trim_end(@\"=+\", tostring(UniqueTokenId))\n| where isnotempty(LeftKey);\nlet RightEvents = AADGraphActivityLogs\n| where TimeRequested > ago(7d)\n| extend RightKey = trim_end(@\"=+\", tostring(SignInActivityId))\n| where isnotempty(RightKey);\nLeftEvents\n| join kind=inner (RightEvents) on $left.LeftKey == $right.RightKey\n| project-away LeftKey, RightKey",
+   "sources": [
+    "https://cloudbrothers.info/aadgraphactivitylogs/",
+    "https://www.invictus-ir.com/news/the-missing-link-aadgraphactivitylogs-finally-arrives"
+   ],
+   "title": "Connect an Entra sign-in to AADGraphActivityLogs",
+   "to": {
+    "column": "SignInActivityId",
+    "table": "AADGraphActivityLogs",
+    "timeColumn": "TimeRequested"
+   }
+  },
+  {
+   "family": "entra-token",
+   "from": {
+    "column": "UniqueTokenId",
+    "table": "EntraIdSignInEvents",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "Compare token IDs exactly and preserve case. One token can appear in several activity records. This nested field is only available in some Microsoft Azure events. Exclude empty identifiers and matches AccountObjectId as well. Adjust the lookback to include the originating sign-in and the later activity. The claims value can be a JSON object or a JSON-encoded string; parse both forms.",
+   "id": "entra-signin-cloudapp-azure-claims-token",
+   "kql": "let SignIns = EntraIdSignInEvents\n| where Timestamp > ago(7d)\n| where isnotempty(UniqueTokenId) and isnotempty(AccountObjectId);\nCloudAppEvents\n| where Timestamp > ago(7d)\n| where Application == \"Microsoft Azure\"\n| extend UniqueTokenId = tostring(parse_json(tostring(RawEventData.claims)).uti)\n| where isnotempty(UniqueTokenId) and isnotempty(AccountObjectId)\n| join kind=inner (SignIns) on UniqueTokenId, AccountObjectId",
+   "sources": [
+    "https://github.com/Cloud-Architekt/AzureSentinel/blob/main/Hunting%20Queries/EID-TokenHunting/MicrosoftCloudActivity.func"
+   ],
+   "title": "Find an Entra token in Azure activity claims",
+   "to": {
+    "column": "RawEventData",
+    "path": "claims.uti",
+    "table": "CloudAppEvents",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "entra-token",
+   "from": {
+    "column": "UniqueTokenId",
+    "table": "EntraIdSignInEvents",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "Compare token IDs exactly and preserve case. One token can appear in several activity records. This nested field is only available in some Microsoft Azure events. Exclude empty identifiers and matches AccountObjectId as well. Adjust the lookback to include the originating sign-in and the later activity. The property name starts with a lowercase u. Other Azure events expose the token in claims.uti, which has its own mapping.",
+   "id": "entra-signin-cloudapp-azure-token",
+   "kql": "let SignIns = EntraIdSignInEvents\n| where Timestamp > ago(7d)\n| where isnotempty(UniqueTokenId) and isnotempty(AccountObjectId);\nCloudAppEvents\n| where Timestamp > ago(7d)\n| where Application == \"Microsoft Azure\"\n| extend UniqueTokenId = tostring(RawEventData.uniqueTokenId)\n| where isnotempty(UniqueTokenId) and isnotempty(AccountObjectId)\n| join kind=inner (SignIns) on UniqueTokenId, AccountObjectId",
+   "sources": [
+    "https://github.com/Cloud-Architekt/AzureSentinel/blob/main/Hunting%20Queries/EID-TokenHunting/SensitivePrivilegedEndpointActivity.func"
+   ],
+   "title": "Find an Entra token in the Azure event token field",
+   "to": {
+    "column": "RawEventData",
+    "path": "uniqueTokenId",
+    "table": "CloudAppEvents",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "entra-token",
+   "from": {
+    "column": "UniqueTokenId",
+    "table": "EntraIdSignInEvents",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "Compare token IDs exactly and preserve case. One token can appear in several activity records. This nested field is only available in some Microsoft 365 events. Exclude empty identifiers and matches AccountObjectId as well. Adjust the lookback to include the originating sign-in and the later activity.",
+   "id": "entra-signin-cloudapp-m365-token",
+   "kql": "let SignIns = EntraIdSignInEvents\n| where Timestamp > ago(7d)\n| where isnotempty(UniqueTokenId) and isnotempty(AccountObjectId);\nCloudAppEvents\n| where Timestamp > ago(7d)\n| where Application != \"Microsoft Azure\"\n| where tostring(RawEventData.Workload) in (\"Exchange\", \"SharePoint\", \"OneDrive\", \"MicrosoftTeams\")\n| extend UniqueTokenId = tostring(RawEventData.AppAccessContext.UniqueTokenId)\n| where isnotempty(UniqueTokenId) and isnotempty(AccountObjectId)\n| join kind=inner (SignIns) on UniqueTokenId, AccountObjectId",
+   "sources": [
+    "https://github.com/Cloud-Architekt/AzureSentinel/blob/main/Hunting%20Queries/EID-TokenHunting/MicrosoftCloudActivity.func"
+   ],
+   "title": "Follow an Entra token into Microsoft 365 activity",
+   "to": {
+    "column": "RawEventData",
+    "path": "AppAccessContext.UniqueTokenId",
+    "table": "CloudAppEvents",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "entra-token",
+   "from": {
+    "column": "UniqueTokenId",
+    "table": "EntraIdSignInEvents",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "Compare non-empty token identifiers exactly and preserve case; never lowercase a UTI. One token can have many activity records. Keep actor, tenant, application, and time context, and include the originating sign-in in the lookback. A missing match can reflect retention or collection gaps.",
+   "id": "entra-signin-graph-token",
+   "sources": [
+    "https://cloudbrothers.info/detect-threats-graphapiauditevents-part-3/",
+    "https://cloudbrothers.info/detect-threats-microsoft-graph-logs-part-1/"
+   ],
+   "title": "Connect an Entra sign-in to GraphAPIAuditEvents",
+   "to": {
+    "column": "UniqueTokenIdentifier",
+    "table": "GraphAPIAuditEvents",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "entra-token",
+   "from": {
+    "column": "UniqueTokenId",
+    "table": "EntraIdSignInEvents",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "Compare non-empty token identifiers exactly and preserve case; never lowercase a UTI. One token can have many activity records. Keep actor, tenant, application, and time context, and include the originating sign-in in the lookback. A missing match can reflect retention or collection gaps.",
+   "id": "entra-signin-microsoft-graph-activity-token",
+   "sources": [
+    "https://cloudbrothers.info/detect-threats-microsoft-graph-logs-part-1/",
+    "https://cloudbrothers.info/detect-threats-microsoft-graph-logs-part-2/",
+    "https://learn.microsoft.com/en-us/entra/identity/authentication/how-to-authentication-track-linkable-identifiers"
+   ],
+   "title": "Connect an Entra sign-in to MicrosoftGraphActivityLogs",
+   "to": {
+    "column": "SignInActivityId",
+    "table": "MicrosoftGraphActivityLogs",
+    "timeColumn": "TimeGenerated"
+   }
+  },
+  {
+   "family": "entra-token",
+   "from": {
+    "column": "UniqueTokenId",
+    "table": "EntraIdSignInEvents",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "Compare non-empty token identifiers exactly and preserve case; never lowercase a UTI. One token can have many activity records. Keep actor, tenant, application, and time context, and include the originating sign-in in the lookback. A missing match can reflect retention or collection gaps.",
+   "id": "entra-signin-microsoft-graph-unique-token",
+   "sources": [
+    "https://learn.microsoft.com/en-us/azure/azure-monitor/reference/tables/microsoftgraphactivitylogs"
+   ],
+   "title": "Match the explicit token ID in Microsoft Graph activity",
+   "to": {
+    "column": "UniqueTokenId",
+    "table": "MicrosoftGraphActivityLogs",
+    "timeColumn": "TimeGenerated"
+   }
+  },
+  {
+   "family": "entra-token",
+   "from": {
+    "column": "RequestUri",
+    "table": "GraphAPIAuditEvents",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "The same Microsoft Graph request may be represented in both sources. RequestUri is not globally unique, so retain request method, actor, application, and a narrow time window; normalize object IDs only for endpoint-pattern analysis, not exact event correlation.",
+   "id": "graph-audit-to-graph-activity-request-uri",
+   "kql": "let GraphAudit = GraphAPIAuditEvents\n| where Timestamp > ago(1d)\n| where isnotempty(RequestUri)\n| project RequestUri, AccountObjectId, RequestMethod, AuditTime = Timestamp;\nlet GraphActivity = MicrosoftGraphActivityLogs\n| where TimeGenerated > ago(1d)\n| where isnotempty(RequestUri)\n| project RequestUri, UserId, RequestMethod, ActivityTime = TimeGenerated;\nGraphAudit\n| join kind=inner GraphActivity on RequestUri, RequestMethod\n| project RequestUri, RequestMethod, AccountObjectId, UserId, AuditTime, ActivityTime",
+   "title": "Correlate Microsoft Graph requests across audit sources",
+   "to": {
+    "column": "RequestUri",
+    "table": "MicrosoftGraphActivityLogs",
+    "timeColumn": "TimeGenerated"
+   }
+  },
+  {
+   "family": "entra-token",
+   "from": {
+    "column": "UniqueTokenIdentifier",
+    "table": "SigninLogs",
+    "timeColumn": "TimeGenerated"
+   },
+   "guidance": "Compare non-empty token identifiers exactly and preserve case; never lowercase a UTI. One token can have many activity records. Keep actor, tenant, application, and time context, and include the originating sign-in in the lookback. A missing match can reflect retention or collection gaps. AAD Graph SignInActivityId is a best-effort token link. Exact equality can miss padded values. Remove only trailing Base64 padding on both sides and preserve case. This does not convert GUID-shaped IDs to Base64 or equate them with sign-in Id/CorrelationId. Inspect unmatched GUID-shaped values separately. TimeRequested is the request time; allow for delayed ingestion.",
+   "id": "signin-logs-aad-graph-activity-logs-sign-in-activity-id",
+   "kql": "let LeftEvents = SigninLogs\n| where TimeGenerated > ago(7d)\n| extend LeftKey = trim_end(@\"=+\", tostring(UniqueTokenIdentifier))\n| where isnotempty(LeftKey);\nlet RightEvents = AADGraphActivityLogs\n| where TimeRequested > ago(7d)\n| extend RightKey = trim_end(@\"=+\", tostring(SignInActivityId))\n| where isnotempty(RightKey);\nLeftEvents\n| join kind=inner (RightEvents) on $left.LeftKey == $right.RightKey\n| project-away LeftKey, RightKey",
+   "sources": [
+    "https://cloudbrothers.info/aadgraphactivitylogs/"
+   ],
+   "title": "Follow SigninLogs tokens into AADGraphActivityLogs",
+   "to": {
+    "column": "SignInActivityId",
+    "table": "AADGraphActivityLogs",
+    "timeColumn": "TimeRequested"
+   }
+  },
+  {
+   "family": "entra-token",
+   "from": {
+    "column": "UniqueTokenIdentifier",
+    "table": "SigninLogs",
+    "timeColumn": "TimeGenerated"
+   },
+   "guidance": "Compare non-empty token identifiers exactly and preserve case; never lowercase a UTI. One token can have many activity records. Keep actor, tenant, application, and time context, and include the originating sign-in in the lookback. A missing match can reflect retention or collection gaps. AppAccessContext is populated only for supported Exchange, SharePoint, and Teams audit events; aggregated or background events can omit it. The property names are case-sensitive.",
+   "id": "signin-logs-cloudapp-m365-token",
+   "title": "Follow SigninLogs tokens into CloudAppEvents",
+   "to": {
+    "column": "RawEventData",
+    "path": "AppAccessContext.UniqueTokenId",
+    "table": "CloudAppEvents",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "entra-token",
+   "from": {
+    "column": "UniqueTokenIdentifier",
+    "table": "SigninLogs",
+    "timeColumn": "TimeGenerated"
+   },
+   "guidance": "Compare non-empty token identifiers exactly and preserve case; never lowercase a UTI. One token can have many activity records. Keep actor, tenant, application, and time context, and include the originating sign-in in the lookback. A missing match can reflect retention or collection gaps.",
+   "id": "signin-logs-graphapi-audit-events-unique-token-identifier",
+   "sources": [
+    "https://learn.microsoft.com/en-us/entra/identity/authentication/how-to-authentication-track-linkable-identifiers"
+   ],
+   "title": "Follow SigninLogs tokens into GraphAPIAuditEvents",
+   "to": {
+    "column": "UniqueTokenIdentifier",
+    "table": "GraphAPIAuditEvents",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "entra-token",
+   "from": {
+    "column": "UniqueTokenIdentifier",
+    "table": "SigninLogs",
+    "timeColumn": "TimeGenerated"
+   },
+   "guidance": "Compare non-empty token identifiers exactly and preserve case; never lowercase a UTI. One token can have many activity records. Keep actor, tenant, application, and time context, and include the originating sign-in in the lookback. A missing match can reflect retention or collection gaps.",
+   "id": "signin-logs-microsoft-graph-activity-logs-sign-in-activity-id",
+   "sources": [
+    "https://learn.microsoft.com/en-us/entra/identity/authentication/how-to-authentication-track-linkable-identifiers"
+   ],
+   "title": "Follow SigninLogs tokens into MicrosoftGraphActivityLogs",
+   "to": {
+    "column": "SignInActivityId",
+    "table": "MicrosoftGraphActivityLogs",
+    "timeColumn": "TimeGenerated"
+   }
+  },
+  {
+   "family": "entra-token",
+   "from": {
+    "column": "UniqueTokenIdentifier",
+    "table": "SigninLogs",
+    "timeColumn": "TimeGenerated"
+   },
+   "guidance": "Compare non-empty token identifiers exactly and preserve case; never lowercase a UTI. One token can have many activity records. Keep actor, tenant, application, and time context, and include the originating sign-in in the lookback. A missing match can reflect retention or collection gaps.",
+   "id": "signin-logs-microsoft-graph-activity-logs-unique-token-id",
+   "sources": [
+    "https://learn.microsoft.com/en-us/azure/azure-monitor/reference/tables/microsoftgraphactivitylogs"
+   ],
+   "title": "Follow SigninLogs tokens into MicrosoftGraphActivityLogs",
+   "to": {
+    "column": "UniqueTokenId",
+    "table": "MicrosoftGraphActivityLogs",
+    "timeColumn": "TimeGenerated"
+   }
+  },
+  {
+   "family": "entra-token",
+   "from": {
+    "column": "UniqueTokenIdentifier",
+    "table": "SigninLogs",
+    "timeColumn": "TimeGenerated"
+   },
+   "guidance": "Compare non-empty token identifiers exactly and preserve case; never lowercase a UTI. One token can have many activity records. Keep actor, tenant, application, and time context, and include the originating sign-in in the lookback. A missing match can reflect retention or collection gaps. AppAccessContext is populated only for supported Exchange, SharePoint, and Teams audit events; aggregated or background events can omit it. The property names are case-sensitive.",
+   "id": "signin-logs-office-activity-token",
+   "sources": [
+    "https://learn.microsoft.com/en-us/entra/identity/authentication/how-to-authentication-track-linkable-identifiers"
+   ],
+   "title": "Follow SigninLogs tokens into OfficeActivity",
+   "to": {
+    "column": "AppAccessContext",
+    "path": "UniqueTokenId",
+    "table": "OfficeActivity",
+    "timeColumn": "TimeGenerated"
+   }
+  },
+  {
+   "family": "entra-user",
+   "from": {
+    "column": "InitiatedBy",
+    "path": "user.id",
+    "table": "AuditLogs",
+    "timeColumn": "ActivityDateTime"
+   },
+   "guidance": "Enrich the initiating actor, not a target resource. User object IDs, application/client IDs, and service principal IDs are separate namespaces. Scope to the actual Entra tenant; AuditLogs.AADTenantId is the identity tenant. Snapshot metadata can repeat, so select the appropriate snapshot. These joins do not prove a shared session or token. Verify nested fields in collected records.",
+   "id": "audit-initiator-account-object-id",
+   "kql": "let LeftEvents = AuditLogs\n| where ActivityDateTime > ago(7d)\n| extend JoinKey = tostring(parse_json(tostring(parse_json(tostring(InitiatedBy)).user)).id)\n| where isnotempty(JoinKey);\nlet RightEvents = IdentityInfo\n| where Timestamp > ago(7d)\n| extend JoinKey = tostring(AccountObjectId)\n| where isnotempty(JoinKey);\nLeftEvents\n| join kind=inner (RightEvents) on JoinKey",
+   "sources": [
+    "https://learn.microsoft.com/en-us/graph/api/resources/useridentity?view=graph-rest-1.0"
+   ],
+   "title": "Enrich an audit initiator through user.id",
+   "to": {
+    "column": "AccountObjectId",
+    "table": "IdentityInfo",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "entra-user",
+   "from": {
+    "column": "TargetResources",
+    "path": "[].id",
+    "table": "AuditLogs",
+    "timeColumn": "ActivityDateTime"
+   },
+   "guidance": "TargetResources can contain users, groups, devices, applications, service principals, and other resource types. Use this mapping only when the target type is known to be a user and preserve tenant and target-type context. Expand the array before joining; an ID match alone does not prove the audit actor or the operation's target semantics.",
+   "id": "audit-target-resource-id-account-object-id",
+   "kql": "let LeftEvents = AuditLogs\n| where ActivityDateTime > ago(7d)\n| mv-expand TargetResource = TargetResources\n| extend JoinKey = tostring(TargetResource.id)\n| where isnotempty(JoinKey);\nlet RightEvents = IdentityInfo\n| where Timestamp > ago(7d)\n| extend JoinKey = tostring(AccountObjectId)\n| where isnotempty(JoinKey);\nLeftEvents\n| join kind=inner (RightEvents) on JoinKey",
+   "sources": [
+    "https://learn.microsoft.com/en-us/azure/azure-monitor/reference/tables/auditlogs"
+   ],
+   "title": "Enrich audit target resources with identity information",
+   "to": {
+    "column": "AccountObjectId",
+    "table": "IdentityInfo",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "entra-user",
+   "from": {
+    "column": "RawEventData",
+    "path": "Target",
+    "table": "CloudAppEvents",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "RawEventData.Target is workload- and payload-specific and may identify a user, device, application, or other resource. Use this mapping only when the event schema confirms that Target contains a user object ID. Compare non-empty identifiers exactly, and retain workload, tenant, target-type, account, and time context.",
+   "id": "cloudapp-raw-event-target-account-object-id",
+   "kql": "let LeftEvents = CloudAppEvents\n| where Timestamp > ago(7d)\n| extend JoinKey = tostring(RawEventData.Target)\n| where isnotempty(JoinKey);\nlet RightEvents = IdentityInfo\n| where Timestamp > ago(7d)\n| extend JoinKey = tostring(AccountObjectId)\n| where isnotempty(JoinKey);\nLeftEvents\n| join kind=inner (RightEvents) on JoinKey",
+   "sources": [
+    "https://learn.microsoft.com/en-us/defender-xdr/advanced-hunting-cloudappevents-table"
+   ],
+   "title": "Enrich CloudAppEvents target data with identity information",
+   "to": {
+    "column": "AccountObjectId",
+    "table": "IdentityInfo",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "entra-user",
+   "from": {
+    "column": "AccountObjectId",
+    "table": "IdentityInfo",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "Match the Microsoft Entra user object ID within the same identity tenant. Keep actor and target identities distinct; a shared account is enrichment, not proof that two events share a token or session. IdentityInfo can contain multiple snapshots; select the appropriate or latest snapshot before enrichment. Use TimeRequested for request timing and allow for delayed ingestion. AADGraphActivityLogs.AADTenantId identifies the Entra tenant; its TenantId can identify the workspace. Use the actual identity tenant when narrowing enrichment. User and application actors use different fields; preserve ActorType when interpreting the result.",
+   "id": "identity-info-aad-graph-activity-logs-user-id",
+   "sources": [
+    "https://learn.microsoft.com/en-us/azure/azure-monitor/reference/tables/aadgraphactivitylogs"
+   ],
+   "title": "Enrich AADGraphActivityLogs with identity information",
+   "to": {
+    "column": "UserId",
+    "table": "AADGraphActivityLogs",
+    "timeColumn": "TimeRequested"
+   }
+  },
+  {
+   "family": "entra-user",
+   "from": {
+    "column": "AccountObjectId",
+    "table": "IdentityInfo",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "Match the Microsoft Entra user object ID within the same identity tenant. Keep actor and target identities distinct; a shared account is enrichment, not proof that two events share a token or session. IdentityInfo can contain multiple snapshots; select the appropriate or latest snapshot before enrichment.",
+   "id": "identity-info-aad-non-interactive-user-sign-in-logs-user-id",
+   "title": "Enrich AADNonInteractiveUserSignInLogs with identity information",
+   "to": {
+    "column": "UserId",
+    "table": "AADNonInteractiveUserSignInLogs",
+    "timeColumn": "TimeGenerated"
+   }
+  },
+  {
+   "family": "entra-user",
+   "from": {
+    "column": "AccountObjectId",
+    "table": "IdentityInfo",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "AADSignInEventsBeta is deprecated. This supports retained historical beta-table records; use EntraIdSignInEvents for the current equivalent. Match the actual identity tenant and select the appropriate IdentityInfo snapshot; a shared account does not establish a shared token.",
+   "id": "identity-info-aad-signin-beta",
+   "kql": "let LeftEvents = IdentityInfo\n| where Timestamp > ago(7d)\n| extend JoinKey = tostring(AccountObjectId)\n| where isnotempty(JoinKey);\nlet RightEvents = AADSignInEventsBeta\n| where Timestamp > ago(7d)\n| extend JoinKey = tostring(AccountObjectId)\n| where isnotempty(JoinKey);\nLeftEvents\n| join kind=inner (RightEvents) on JoinKey",
+   "sources": [
+    "https://learn.microsoft.com/en-us/defender-xdr/advanced-hunting-entraidsigninevents-table"
+   ],
+   "title": "Enrich retained beta sign-ins with identity information",
+   "to": {
+    "column": "AccountObjectId",
+    "table": "AADSignInEventsBeta",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "entra-user",
+   "from": {
+    "column": "AccountObjectId",
+    "table": "IdentityInfo",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "Match the Microsoft Entra user object ID within the same identity tenant. Keep actor and target identities distinct; a shared account is enrichment, not proof that two events share a token or session. IdentityInfo can contain multiple snapshots; select the appropriate or latest snapshot before enrichment.",
+   "id": "identity-info-alert-evidence-account-object-id",
+   "title": "Enrich AlertEvidence with identity information",
+   "to": {
+    "column": "AccountObjectId",
+    "table": "AlertEvidence",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "entra-user",
+   "from": {
+    "column": "AccountObjectId",
+    "table": "IdentityInfo",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "Match the Microsoft Entra user object ID within the same identity tenant. Keep actor and target identities distinct; a shared account is enrichment, not proof that two events share a token or session. IdentityInfo can contain multiple snapshots; select the appropriate or latest snapshot before enrichment.",
+   "id": "identity-info-behavior-entities-account-object-id",
+   "title": "Enrich BehaviorEntities with identity information",
+   "to": {
+    "column": "AccountObjectId",
+    "table": "BehaviorEntities",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "entra-user",
+   "from": {
+    "column": "AccountObjectId",
+    "table": "IdentityInfo",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "Match the Microsoft Entra user object ID within the same identity tenant. Keep actor and target identities distinct; a shared account is enrichment, not proof that two events share a token or session. IdentityInfo can contain multiple snapshots; select the appropriate or latest snapshot before enrichment.",
+   "id": "identity-info-cloud-app-events-account-object-id",
+   "title": "Enrich CloudAppEvents with identity information",
+   "to": {
+    "column": "AccountObjectId",
+    "table": "CloudAppEvents",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "entra-user",
+   "from": {
+    "column": "AccountObjectId",
+    "table": "IdentityInfo",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "Match the Microsoft Entra user object ID within the same identity tenant. Keep actor and target identities distinct; a shared account is enrichment, not proof that two events share a token or session. IdentityInfo can contain multiple snapshots; select the appropriate or latest snapshot before enrichment.",
+   "id": "identity-info-data-security-events-account-object-id",
+   "title": "Enrich DataSecurityEvents with identity information",
+   "to": {
+    "column": "AccountObjectId",
+    "table": "DataSecurityEvents",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "entra-user",
+   "from": {
+    "column": "AccountObjectId",
+    "table": "IdentityInfo",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "Match the Microsoft Entra user object ID within the same identity tenant. Keep actor and target identities distinct; a shared account is enrichment, not proof that two events share a token or session. IdentityInfo can contain multiple snapshots; select the appropriate or latest snapshot before enrichment.",
+   "id": "identity-info-email-events-recipient-object-id",
+   "title": "Enrich EmailEvents with identity information",
+   "to": {
+    "column": "RecipientObjectId",
+    "table": "EmailEvents",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "entra-user",
+   "from": {
+    "column": "AccountObjectId",
+    "table": "IdentityInfo",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "Match the Microsoft Entra user object ID within the same identity tenant. Keep actor and target identities distinct; a shared account is enrichment, not proof that two events share a token or session. IdentityInfo can contain multiple snapshots; select the appropriate or latest snapshot before enrichment.",
+   "id": "identity-info-email-events-sender-object-id",
+   "title": "Enrich EmailEvents with identity information",
+   "to": {
+    "column": "SenderObjectId",
+    "table": "EmailEvents",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "entra-user",
+   "from": {
+    "column": "AccountObjectId",
+    "table": "IdentityInfo",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "Match the Microsoft Entra user object ID within the same identity tenant. Keep actor and target identities distinct; a shared account is enrichment, not proof that two events share a token or session. IdentityInfo can contain multiple snapshots; select the appropriate or latest snapshot before enrichment.",
+   "id": "identity-info-entra-id-sign-in-events-account-object-id",
+   "title": "Enrich EntraIdSignInEvents with identity information",
+   "to": {
+    "column": "AccountObjectId",
+    "table": "EntraIdSignInEvents",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "entra-user",
+   "from": {
+    "column": "AccountObjectId",
+    "table": "IdentityInfo",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "Match the Microsoft Entra user object ID within the same identity tenant. Keep actor and target identities distinct; a shared account is enrichment, not proof that two events share a token or session. IdentityInfo can contain multiple snapshots; select the appropriate or latest snapshot before enrichment.",
+   "id": "identity-info-graphapi-audit-events-account-object-id",
+   "title": "Enrich GraphAPIAuditEvents with identity information",
+   "to": {
+    "column": "AccountObjectId",
+    "table": "GraphAPIAuditEvents",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "entra-user",
+   "from": {
+    "column": "AccountObjectId",
+    "table": "IdentityInfo",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "Match the Microsoft Entra user object ID within the same identity tenant. Keep actor and target identities distinct; a shared account is enrichment, not proof that two events share a token or session. IdentityInfo can contain multiple snapshots; select the appropriate or latest snapshot before enrichment.",
+   "id": "identity-info-identity-directory-events-account-object-id",
+   "title": "Enrich IdentityDirectoryEvents with identity information",
+   "to": {
+    "column": "AccountObjectId",
+    "table": "IdentityDirectoryEvents",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "entra-user",
+   "from": {
+    "column": "AccountObjectId",
+    "table": "IdentityInfo",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "Match the Microsoft Entra user object ID within the same identity tenant. Keep actor and target identities distinct; a shared account is enrichment, not proof that two events share a token or session. IdentityInfo can contain multiple snapshots; select the appropriate or latest snapshot before enrichment.",
+   "id": "identity-info-identity-query-events-account-object-id",
+   "title": "Enrich IdentityQueryEvents with identity information",
+   "to": {
+    "column": "AccountObjectId",
+    "table": "IdentityQueryEvents",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "entra-user",
+   "from": {
+    "column": "AccountObjectId",
+    "table": "IdentityInfo",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "Match the Microsoft Entra user object ID within the same identity tenant. Keep actor and target identities distinct; a shared account is enrichment, not proof that two events share a token or session. IdentityInfo can contain multiple snapshots; select the appropriate or latest snapshot before enrichment.",
+   "id": "identity-info-message-events-sender-object-id",
+   "title": "Enrich MessageEvents with identity information",
+   "to": {
+    "column": "SenderObjectId",
+    "table": "MessageEvents",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "entra-user",
+   "from": {
+    "column": "AccountObjectId",
+    "table": "IdentityInfo",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "Match the Microsoft Entra user object ID within the same identity tenant. Keep actor and target identities distinct; a shared account is enrichment, not proof that two events share a token or session. IdentityInfo can contain multiple snapshots; select the appropriate or latest snapshot before enrichment.",
+   "id": "identity-info-microsoft-graph-activity-logs-user-id",
+   "title": "Enrich MicrosoftGraphActivityLogs with identity information",
+   "to": {
+    "column": "UserId",
+    "table": "MicrosoftGraphActivityLogs",
+    "timeColumn": "TimeGenerated"
+   }
+  },
+  {
+   "family": "entra-user",
+   "from": {
+    "column": "AccountObjectId",
+    "table": "IdentityInfo",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "Enrich the indicated account, keeping actor/target role and actual Entra tenant context. IdentityInfo may contain repeated snapshots; choose the relevant one. A shared user is not a shared session or token. Sentinel workspace TenantId and an identity tenant field can have different meanings.",
+   "id": "identity-info-sentinel-behavior-entities",
+   "kql": "let LeftEvents = IdentityInfo\n| where Timestamp > ago(7d)\n| extend JoinKey = tostring(AccountObjectId)\n| where isnotempty(JoinKey);\nlet RightEvents = SentinelBehaviorEntities\n| where TimeGenerated > ago(7d)\n| extend JoinKey = tostring(AccountObjectId)\n| where isnotempty(JoinKey);\nLeftEvents\n| join kind=inner (RightEvents) on JoinKey",
+   "sources": [
+    "https://learn.microsoft.com/en-us/azure/azure-monitor/reference/tables/sentinelbehaviorentities"
+   ],
+   "title": "Enrich SentinelBehaviorEntities with identity information",
+   "to": {
+    "column": "AccountObjectId",
+    "table": "SentinelBehaviorEntities",
+    "timeColumn": "TimeGenerated"
+   }
+  },
+  {
+   "family": "entra-user",
+   "from": {
+    "column": "AccountObjectId",
+    "table": "IdentityInfo",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "Enrich the indicated account, keeping actor/target role and actual Entra tenant context. IdentityInfo may contain repeated snapshots; choose the relevant one. A shared user is not a shared session or token. Sentinel workspace TenantId and an identity tenant field can have different meanings.",
+   "id": "identity-info-sentinel-behavior-info",
+   "kql": "let LeftEvents = IdentityInfo\n| where Timestamp > ago(7d)\n| extend JoinKey = tostring(AccountObjectId)\n| where isnotempty(JoinKey);\nlet RightEvents = SentinelBehaviorInfo\n| where TimeGenerated > ago(7d)\n| extend JoinKey = tostring(AccountObjectId)\n| where isnotempty(JoinKey);\nLeftEvents\n| join kind=inner (RightEvents) on JoinKey",
+   "sources": [
+    "https://learn.microsoft.com/en-us/azure/azure-monitor/reference/tables/sentinelbehaviorinfo"
+   ],
+   "title": "Enrich SentinelBehaviorInfo with identity information",
+   "to": {
+    "column": "AccountObjectId",
+    "table": "SentinelBehaviorInfo",
+    "timeColumn": "TimeGenerated"
+   }
+  },
+  {
+   "family": "entra-user",
+   "from": {
+    "column": "AccountObjectId",
+    "table": "IdentityInfo",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "Match the Microsoft Entra user object ID within the same identity tenant. Keep actor and target identities distinct; a shared account is enrichment, not proof that two events share a token or session. IdentityInfo can contain multiple snapshots; select the appropriate or latest snapshot before enrichment.",
+   "id": "identity-info-signin-logs-user-id",
+   "title": "Enrich SigninLogs with identity information",
+   "to": {
+    "column": "UserId",
+    "table": "SigninLogs",
+    "timeColumn": "TimeGenerated"
+   }
+  },
+  {
+   "family": "entra-user",
+   "from": {
+    "column": "AccountObjectId",
+    "table": "IdentityInfo",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "An account can have many logon events, and IdentityInfo can contain multiple profile snapshots. For enrichment, select the newest IdentityInfo record per AccountObjectId and keep the logon event time for investigation.",
+   "id": "identity-info-to-logon-events",
+   "title": "Add identity details to logon activity",
+   "to": {
+    "column": "AccountObjectId",
+    "table": "IdentityLogonEvents",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "exposure-node",
+   "from": {
+    "column": "SourceNodeId",
+    "table": "ExposureGraphEdges"
+   },
+   "guidance": "An edge runs from its source node to its target node. This mapping resolves the source end; the other end has its own mapping. A node can participate in many edges. Filter by EdgeLabel or node type to focus on the relationships you need. These tables have no Timestamp column in the saved schema, so use available event context for timing.",
+   "id": "exposure-graph-source-node",
+   "kql": "ExposureGraphEdges\n| where isnotempty(SourceNodeId)\n| join kind=inner (ExposureGraphNodes\n    | where isnotempty(NodeId)\n) on $left.SourceNodeId == $right.NodeId",
+   "sources": [
+    "https://github.com/Cloud-Architekt/AzureSentinel/blob/main/Hunting%20Queries/EID-TokenHunting/ExposedTokens-OverviewOfTokenArtifcats.kql"
+   ],
+   "title": "Inspect the source node of an exposure graph edge",
+   "to": {
+    "column": "NodeId",
+    "table": "ExposureGraphNodes"
+   }
+  },
+  {
+   "family": "exposure-node",
+   "from": {
+    "column": "TargetNodeId",
+    "table": "ExposureGraphEdges"
+   },
+   "guidance": "An edge runs from its source node to its target node. This mapping resolves the target end; the other end has its own mapping. A node can participate in many edges. Filter by EdgeLabel or node type to focus on the relationships you need. These tables have no Timestamp column in the saved schema, so use available event context for timing.",
+   "id": "exposure-graph-target-node",
+   "kql": "ExposureGraphEdges\n| where isnotempty(TargetNodeId)\n| join kind=inner (ExposureGraphNodes\n    | where isnotempty(NodeId)\n) on $left.TargetNodeId == $right.NodeId",
+   "sources": [
+    "https://github.com/Cloud-Architekt/AzureSentinel/blob/main/Hunting%20Queries/EID-TokenHunting/ExposedTokens-OverviewOfTokenArtifcats.kql"
+   ],
+   "title": "Inspect the target node of an exposure graph edge",
+   "to": {
+    "column": "NodeId",
+    "table": "ExposureGraphNodes"
+   }
+  },
+  {
+   "family": "file-sha1",
+   "from": {
+    "column": "SHA1",
+    "table": "DeviceProcessEvents",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "Microsoft documents this executable hash join. Select the latest certificate record per device and preserve processes without a certificate match. IsTrusted is contextual, so keep DeviceId and TenantId when evaluating trust. SHA-1 can be populated when SHA-256 is unavailable; missing certificate data is not proof that a file is unsigned.",
+   "id": "process-file-to-signing-certificate",
+   "kql": "let Certificates = DeviceFileCertificateInfo\n| where Timestamp > ago(30d)\n| where isnotempty(DeviceId) and isnotempty(SHA1)\n| extend FileKey=tolower(SHA1)\n| summarize arg_max(Timestamp, *) by TenantId, DeviceId, FileKey;\nDeviceProcessEvents\n| where Timestamp > ago(7d)\n| where isnotempty(DeviceId) and isnotempty(SHA1)\n| extend FileKey=tolower(SHA1)\n| join kind=leftouter (Certificates) on TenantId, DeviceId, FileKey",
+   "sources": [
+    "https://learn.microsoft.com/en-us/defender-xdr/advanced-hunting-deviceprocessevents-table"
+   ],
+   "title": "Retrieve signing information for a process executable",
+   "to": {
+    "column": "SHA1",
+    "table": "DeviceFileCertificateInfo",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "file-sha256",
+   "from": {
+    "column": "SHA256",
+    "table": "FileMaliciousContentInfo",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "A hash match identifies the same file content, not the same file path, delivery, user, or execution. Exclude empty hashes and use the same algorithm. Normalize hexadecimal hash case; this normalization must not be applied to token identifiers. Keep workload, device or recipient context and detection time when interpreting matches.",
+   "id": "malicious-content-device-file-events-sha256",
+   "kql": "let LeftEvents = FileMaliciousContentInfo\n| where Timestamp > ago(7d)\n| extend JoinKey = tolower(tostring(SHA256))\n| where isnotempty(JoinKey);\nlet RightEvents = DeviceFileEvents\n| where Timestamp > ago(7d)\n| extend JoinKey = tolower(tostring(SHA256))\n| where isnotempty(JoinKey);\nLeftEvents\n| join kind=inner (RightEvents) on JoinKey",
+   "sources": [
+    "https://learn.microsoft.com/en-us/defender-xdr/advanced-hunting-filemaliciouscontentinfo-table"
+   ],
+   "title": "Connect malicious file content to DeviceFileEvents",
+   "to": {
+    "column": "SHA256",
+    "table": "DeviceFileEvents",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "file-sha256",
+   "from": {
+    "column": "SHA256",
+    "table": "FileMaliciousContentInfo",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "A hash match identifies the same file content, not the same file path, delivery, user, or execution. Exclude empty hashes and use the same algorithm. Normalize hexadecimal hash case; this normalization must not be applied to token identifiers. Keep workload, device or recipient context and detection time when interpreting matches.",
+   "id": "malicious-content-email-attachment-info-sha256",
+   "kql": "let LeftEvents = FileMaliciousContentInfo\n| where Timestamp > ago(7d)\n| extend JoinKey = tolower(tostring(SHA256))\n| where isnotempty(JoinKey);\nlet RightEvents = EmailAttachmentInfo\n| where Timestamp > ago(7d)\n| extend JoinKey = tolower(tostring(SHA256))\n| where isnotempty(JoinKey);\nLeftEvents\n| join kind=inner (RightEvents) on JoinKey",
+   "sources": [
+    "https://learn.microsoft.com/en-us/defender-xdr/advanced-hunting-filemaliciouscontentinfo-table"
+   ],
+   "title": "Connect malicious file content to EmailAttachmentInfo",
+   "to": {
+    "column": "SHA256",
+    "table": "EmailAttachmentInfo",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "gcp-resource",
+   "from": {
+    "column": "GcpFullResourceName",
+    "table": "CloudProcessEvents",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "This connects records associated with the same cloud resource; it does not establish that one event caused another or that they share a process. Match the full resource identifier, preserving provider and tenant/account context. Do not equate a parent resource with a child resource or a hostname. One resource can have many events, so narrow the time window before joining. Preserve case in AWS and Google Cloud resource identifiers.",
+   "id": "cloud-process-cloud-audit-events-gcp-full-resource-name",
+   "kql": "let LeftEvents = CloudProcessEvents\n| where Timestamp > ago(7d)\n| extend JoinKey = tostring(GcpFullResourceName)\n| where isnotempty(JoinKey);\nlet RightEvents = CloudAuditEvents\n| where Timestamp > ago(7d)\n| extend JoinKey = tostring(GcpFullResourceName)\n| where isnotempty(JoinKey);\nLeftEvents\n| join kind=inner (RightEvents) on JoinKey",
+   "sources": [
+    "https://learn.microsoft.com/en-us/defender-xdr/advanced-hunting-cloudprocessevents-table"
+   ],
+   "title": "Connect process and CloudAuditEvents records by Google Cloud resource",
+   "to": {
+    "column": "GcpFullResourceName",
+    "table": "CloudAuditEvents",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "gcp-resource",
+   "from": {
+    "column": "GcpFullResourceName",
+    "table": "CloudProcessEvents",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "This connects records associated with the same cloud resource; it does not establish that one event caused another or that they share a process. Match the full resource identifier, preserving provider and tenant/account context. Do not equate a parent resource with a child resource or a hostname. One resource can have many events, so narrow the time window before joining. Preserve case in AWS and Google Cloud resource identifiers.",
+   "id": "cloud-process-cloud-dns-events-gcp-full-resource-name",
+   "kql": "let LeftEvents = CloudProcessEvents\n| where Timestamp > ago(7d)\n| extend JoinKey = tostring(GcpFullResourceName)\n| where isnotempty(JoinKey);\nlet RightEvents = CloudDnsEvents\n| where Timestamp > ago(7d)\n| extend JoinKey = tostring(GcpFullResourceName)\n| where isnotempty(JoinKey);\nLeftEvents\n| join kind=inner (RightEvents) on JoinKey",
+   "sources": [
+    "https://learn.microsoft.com/en-us/defender-xdr/advanced-hunting-cloudprocessevents-table"
+   ],
+   "title": "Connect process and CloudDnsEvents records by Google Cloud resource",
+   "to": {
+    "column": "GcpFullResourceName",
+    "table": "CloudDnsEvents",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "gcp-resource",
+   "from": {
+    "column": "GcpFullResourceName",
+    "table": "CloudProcessEvents",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "This connects records associated with the same cloud resource; it does not establish that one event caused another or that they share a process. Match the full resource identifier, preserving provider and tenant/account context. Do not equate a parent resource with a child resource or a hostname. One resource can have many events, so narrow the time window before joining. Preserve case in AWS and Google Cloud resource identifiers.",
+   "id": "cloud-process-cloud-policy-enforcement-events-gcp-full-resource-name",
+   "kql": "let LeftEvents = CloudProcessEvents\n| where Timestamp > ago(7d)\n| extend JoinKey = tostring(GcpFullResourceName)\n| where isnotempty(JoinKey);\nlet RightEvents = CloudPolicyEnforcementEvents\n| where Timestamp > ago(7d)\n| extend JoinKey = tostring(GcpFullResourceName)\n| where isnotempty(JoinKey);\nLeftEvents\n| join kind=inner (RightEvents) on JoinKey",
+   "sources": [
+    "https://learn.microsoft.com/en-us/defender-xdr/advanced-hunting-cloudprocessevents-table"
+   ],
+   "title": "Connect process and CloudPolicyEnforcementEvents records by Google Cloud resource",
+   "to": {
+    "column": "GcpFullResourceName",
+    "table": "CloudPolicyEnforcementEvents",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "identity-account",
+   "from": {
+    "column": "AccountId",
+    "table": "IdentityAccountInfo",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "Use the internal account key. SourceProviderAccountId and an Entra object ID are different identifier namespaces. Select the appropriate account snapshot and preserve its SourceProvider context.",
+   "id": "identity-account-info-to-events",
+   "title": "Enrich identity events with account information",
+   "to": {
+    "column": "AccountId",
+    "table": "IdentityEvents",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "oauth-client",
+   "from": {
+    "column": "InitiatedBy",
+    "path": "app.appId",
+    "table": "AuditLogs",
+    "timeColumn": "ActivityDateTime"
+   },
+   "guidance": "Enrich the initiating actor, not a target resource. User object IDs, application/client IDs, and service principal IDs are separate namespaces. Scope to the actual Entra tenant; AuditLogs.AADTenantId is the identity tenant. Snapshot metadata can repeat, so select the appropriate snapshot. These joins do not prove a shared session or token. Verify nested fields in collected records.",
+   "id": "audit-initiator-o-auth-app-id",
+   "kql": "let LeftEvents = AuditLogs\n| where ActivityDateTime > ago(7d)\n| extend JoinKey = tostring(parse_json(tostring(parse_json(tostring(InitiatedBy)).app)).appId)\n| where isnotempty(JoinKey);\nlet RightEvents = OAuthAppInfo\n| where Timestamp > ago(7d)\n| extend JoinKey = tostring(OAuthAppId)\n| where isnotempty(JoinKey);\nLeftEvents\n| join kind=inner (RightEvents) on JoinKey",
+   "sources": [
+    "https://learn.microsoft.com/en-us/graph/api/resources/appidentity?view=graph-rest-1.0"
+   ],
+   "title": "Enrich an audit initiator through app.appId",
+   "to": {
+    "column": "OAuthAppId",
+    "table": "OAuthAppInfo",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "oauth-client",
+   "from": {
+    "column": "OAuthAppId",
+    "table": "OAuthAppInfo",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "The OAuth application/client ID and the service principal object ID are different namespaces. Scope service principal joins to the same tenant. App metadata can have multiple snapshots; select the relevant snapshot. A shared application enriches activity and does not establish a shared token or session. Use TimeRequested for request timing and allow for delayed ingestion. AADGraphActivityLogs.AADTenantId identifies the Entra tenant; its TenantId can identify the workspace. Use the actual identity tenant when narrowing enrichment.",
+   "id": "oauth-app-info-aad-graph-activity-logs-app-id",
+   "sources": [
+    "https://learn.microsoft.com/en-us/azure/azure-monitor/reference/tables/aadgraphactivitylogs"
+   ],
+   "title": "Enrich AADGraphActivityLogs with OAuth application information",
+   "to": {
+    "column": "AppId",
+    "table": "AADGraphActivityLogs",
+    "timeColumn": "TimeRequested"
+   }
+  },
+  {
+   "family": "oauth-client",
+   "from": {
+    "column": "OAuthAppId",
+    "table": "OAuthAppInfo",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "The OAuth application/client ID and the service principal object ID are different namespaces. Scope service principal joins to the same tenant. App metadata can have multiple snapshots; select the relevant snapshot. A shared application enriches activity and does not establish a shared token or session.",
+   "id": "oauth-app-info-aad-managed-identity-sign-in-logs-app-id",
+   "title": "Enrich AADManagedIdentitySignInLogs with OAuth application information",
+   "to": {
+    "column": "AppId",
+    "table": "AADManagedIdentitySignInLogs",
+    "timeColumn": "TimeGenerated"
+   }
+  },
+  {
+   "family": "oauth-client",
+   "from": {
+    "column": "OAuthAppId",
+    "table": "OAuthAppInfo",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "The OAuth application/client ID and the service principal object ID are different namespaces. Scope service principal joins to the same tenant. App metadata can have multiple snapshots; select the relevant snapshot. A shared application enriches activity and does not establish a shared token or session.",
+   "id": "oauth-app-info-aad-non-interactive-user-sign-in-logs-app-id",
+   "title": "Enrich AADNonInteractiveUserSignInLogs with OAuth application information",
+   "to": {
+    "column": "AppId",
+    "table": "AADNonInteractiveUserSignInLogs",
+    "timeColumn": "TimeGenerated"
+   }
+  },
+  {
+   "family": "oauth-client",
+   "from": {
+    "column": "OAuthAppId",
+    "table": "OAuthAppInfo",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "The OAuth application/client ID and the service principal object ID are different namespaces. Scope service principal joins to the same tenant. App metadata can have multiple snapshots; select the relevant snapshot. A shared application enriches activity and does not establish a shared token or session.",
+   "id": "oauth-app-info-aad-service-principal-sign-in-logs-app-id",
+   "title": "Enrich AADServicePrincipalSignInLogs with OAuth application information",
+   "to": {
+    "column": "AppId",
+    "table": "AADServicePrincipalSignInLogs",
+    "timeColumn": "TimeGenerated"
+   }
+  },
+  {
+   "family": "oauth-client",
+   "from": {
+    "column": "OAuthAppId",
+    "table": "OAuthAppInfo",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "The OAuth application/client ID and the service principal object ID are different namespaces. Scope service principal joins to the same tenant. App metadata can have multiple snapshots; select the relevant snapshot. A shared application enriches activity and does not establish a shared token or session.",
+   "id": "oauth-app-info-cloud-app-events-o-auth-app-id",
+   "title": "Enrich CloudAppEvents with OAuth application information",
+   "to": {
+    "column": "OAuthAppId",
+    "table": "CloudAppEvents",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "oauth-client",
+   "from": {
+    "column": "OAuthAppId",
+    "table": "OAuthAppInfo",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "The OAuth application/client ID and the service principal object ID are different namespaces. Scope service principal joins to the same tenant. App metadata can have multiple snapshots; select the relevant snapshot. A shared application enriches activity and does not establish a shared token or session.",
+   "id": "oauth-app-info-entra-id-sign-in-events-application-id",
+   "title": "Enrich EntraIdSignInEvents with OAuth application information",
+   "to": {
+    "column": "ApplicationId",
+    "table": "EntraIdSignInEvents",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "oauth-client",
+   "from": {
+    "column": "OAuthAppId",
+    "table": "OAuthAppInfo",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "The OAuth application/client ID and the service principal object ID are different namespaces. Scope service principal joins to the same tenant. App metadata can have multiple snapshots; select the relevant snapshot. A shared application enriches activity and does not establish a shared token or session.",
+   "id": "oauth-app-info-entra-id-spn-sign-in-events-application-id",
+   "title": "Enrich EntraIdSpnSignInEvents with OAuth application information",
+   "to": {
+    "column": "ApplicationId",
+    "table": "EntraIdSpnSignInEvents",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "oauth-client",
+   "from": {
+    "column": "OAuthAppId",
+    "table": "OAuthAppInfo",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "The OAuth application/client ID and the service principal object ID are different namespaces. Scope service principal joins to the same tenant. App metadata can have multiple snapshots; select the relevant snapshot. A shared application enriches activity and does not establish a shared token or session.",
+   "id": "oauth-app-info-graphapi-audit-events-application-id",
+   "title": "Enrich GraphAPIAuditEvents with OAuth application information",
+   "to": {
+    "column": "ApplicationId",
+    "table": "GraphAPIAuditEvents",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "oauth-client",
+   "from": {
+    "column": "OAuthAppId",
+    "table": "OAuthAppInfo",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "The OAuth application/client ID and the service principal object ID are different namespaces. Scope service principal joins to the same tenant. App metadata can have multiple snapshots; select the relevant snapshot. A shared application enriches activity and does not establish a shared token or session.",
+   "id": "oauth-app-info-microsoft-graph-activity-logs-app-id",
+   "title": "Enrich MicrosoftGraphActivityLogs with OAuth application information",
+   "to": {
+    "column": "AppId",
+    "table": "MicrosoftGraphActivityLogs",
+    "timeColumn": "TimeGenerated"
+   }
+  },
+  {
+   "family": "oauth-client",
+   "from": {
+    "column": "OAuthAppId",
+    "table": "OAuthAppInfo",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "The OAuth application/client ID and the service principal object ID are different namespaces. Scope service principal joins to the same tenant. App metadata can have multiple snapshots; select the relevant snapshot. A shared application enriches activity and does not establish a shared token or session.",
+   "id": "oauth-app-info-signin-logs-app-id",
+   "title": "Enrich SigninLogs with OAuth application information",
+   "to": {
+    "column": "AppId",
+    "table": "SigninLogs",
+    "timeColumn": "TimeGenerated"
+   }
+  },
+  {
+   "family": "process-start-key",
+   "from": {
+    "column": "ProcessUniqueId",
+    "table": "DeviceProcessEvents",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "Match DeviceId and TenantId as well as the process key; matching process keys alone is incomplete across devices. These are Windows Process Start Keys, not process IDs. Require activity at or after ProcessCreationTime. Extend the process lookback when a long-running parent predates the activity window. These fields can be empty on unsupported platforms.",
+   "id": "process-start-key-device-events",
+   "kql": "let Processes = DeviceProcessEvents\n| where Timestamp > ago(7d)\n| where isnotempty(DeviceId) and isnotempty(ProcessUniqueId)\n| project TenantId, DeviceId, ProcessKey=ProcessUniqueId, ProcessStart=ProcessCreationTime,\n          ProcessEventTime=Timestamp, ProcessFile=FileName, ProcessCommandLine;\nDeviceEvents\n| where Timestamp > ago(7d)\n| where isnotempty(DeviceId) and isnotempty(InitiatingProcessUniqueId)\n| extend ProcessKey=InitiatingProcessUniqueId, ActivityTime=Timestamp\n| join kind=inner (Processes) on TenantId, DeviceId, ProcessKey\n| where ActivityTime >= ProcessStart",
+   "sources": [
+    "https://learn.microsoft.com/en-us/defender-xdr/advanced-hunting-deviceprocessevents-table"
+   ],
+   "title": "Follow a process into DeviceEvents",
+   "to": {
+    "column": "InitiatingProcessUniqueId",
+    "table": "DeviceEvents",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "process-start-key",
+   "from": {
+    "column": "ProcessUniqueId",
+    "table": "DeviceProcessEvents",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "Match DeviceId and TenantId as well as the process key; matching process keys alone is incomplete across devices. These are Windows Process Start Keys, not process IDs. Require activity at or after ProcessCreationTime. Extend the process lookback when a long-running parent predates the activity window. These fields can be empty on unsupported platforms.",
+   "id": "process-start-key-device-file-events",
+   "kql": "let Processes = DeviceProcessEvents\n| where Timestamp > ago(7d)\n| where isnotempty(DeviceId) and isnotempty(ProcessUniqueId)\n| project TenantId, DeviceId, ProcessKey=ProcessUniqueId, ProcessStart=ProcessCreationTime,\n          ProcessEventTime=Timestamp, ProcessFile=FileName, ProcessCommandLine;\nDeviceFileEvents\n| where Timestamp > ago(7d)\n| where isnotempty(DeviceId) and isnotempty(InitiatingProcessUniqueId)\n| extend ProcessKey=InitiatingProcessUniqueId, ActivityTime=Timestamp\n| join kind=inner (Processes) on TenantId, DeviceId, ProcessKey\n| where ActivityTime >= ProcessStart",
+   "sources": [
+    "https://learn.microsoft.com/en-us/defender-xdr/advanced-hunting-deviceprocessevents-table"
+   ],
+   "title": "Follow a process into DeviceFileEvents",
+   "to": {
+    "column": "InitiatingProcessUniqueId",
+    "table": "DeviceFileEvents",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "process-start-key",
+   "from": {
+    "column": "ProcessUniqueId",
+    "table": "DeviceProcessEvents",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "Match DeviceId and TenantId as well as the process key; matching process keys alone is incomplete across devices. These are Windows Process Start Keys, not process IDs. Require activity at or after ProcessCreationTime. Extend the process lookback when a long-running parent predates the activity window. These fields can be empty on unsupported platforms.",
+   "id": "process-start-key-device-image-load-events",
+   "kql": "let Processes = DeviceProcessEvents\n| where Timestamp > ago(7d)\n| where isnotempty(DeviceId) and isnotempty(ProcessUniqueId)\n| project TenantId, DeviceId, ProcessKey=ProcessUniqueId, ProcessStart=ProcessCreationTime,\n          ProcessEventTime=Timestamp, ProcessFile=FileName, ProcessCommandLine;\nDeviceImageLoadEvents\n| where Timestamp > ago(7d)\n| where isnotempty(DeviceId) and isnotempty(InitiatingProcessUniqueId)\n| extend ProcessKey=InitiatingProcessUniqueId, ActivityTime=Timestamp\n| join kind=inner (Processes) on TenantId, DeviceId, ProcessKey\n| where ActivityTime >= ProcessStart",
+   "sources": [
+    "https://learn.microsoft.com/en-us/defender-xdr/advanced-hunting-deviceprocessevents-table"
+   ],
+   "title": "Follow a process into DeviceImageLoadEvents",
+   "to": {
+    "column": "InitiatingProcessUniqueId",
+    "table": "DeviceImageLoadEvents",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "process-start-key",
+   "from": {
+    "column": "ProcessUniqueId",
+    "table": "DeviceProcessEvents",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "Match DeviceId and TenantId as well as the process key; matching process keys alone is incomplete across devices. These are Windows Process Start Keys, not process IDs. Require activity at or after ProcessCreationTime. Extend the process lookback when a long-running parent predates the activity window. These fields can be empty on unsupported platforms.",
+   "id": "process-start-key-device-logon-events",
+   "kql": "let Processes = DeviceProcessEvents\n| where Timestamp > ago(7d)\n| where isnotempty(DeviceId) and isnotempty(ProcessUniqueId)\n| project TenantId, DeviceId, ProcessKey=ProcessUniqueId, ProcessStart=ProcessCreationTime,\n          ProcessEventTime=Timestamp, ProcessFile=FileName, ProcessCommandLine;\nDeviceLogonEvents\n| where Timestamp > ago(7d)\n| where isnotempty(DeviceId) and isnotempty(InitiatingProcessUniqueId)\n| extend ProcessKey=InitiatingProcessUniqueId, ActivityTime=Timestamp\n| join kind=inner (Processes) on TenantId, DeviceId, ProcessKey\n| where ActivityTime >= ProcessStart",
+   "sources": [
+    "https://learn.microsoft.com/en-us/defender-xdr/advanced-hunting-deviceprocessevents-table"
+   ],
+   "title": "Follow a process into DeviceLogonEvents",
+   "to": {
+    "column": "InitiatingProcessUniqueId",
+    "table": "DeviceLogonEvents",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "process-start-key",
+   "from": {
+    "column": "ProcessUniqueId",
+    "table": "DeviceProcessEvents",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "Match DeviceId and TenantId as well as the process key; matching process keys alone is incomplete across devices. These are Windows Process Start Keys, not process IDs. Require activity at or after ProcessCreationTime. Extend the process lookback when a long-running parent predates the activity window. These fields can be empty on unsupported platforms.",
+   "id": "process-start-key-device-network-events",
+   "kql": "let Processes = DeviceProcessEvents\n| where Timestamp > ago(7d)\n| where isnotempty(DeviceId) and isnotempty(ProcessUniqueId)\n| project TenantId, DeviceId, ProcessKey=ProcessUniqueId, ProcessStart=ProcessCreationTime,\n          ProcessEventTime=Timestamp, ProcessFile=FileName, ProcessCommandLine;\nDeviceNetworkEvents\n| where Timestamp > ago(7d)\n| where isnotempty(DeviceId) and isnotempty(InitiatingProcessUniqueId)\n| extend ProcessKey=InitiatingProcessUniqueId, ActivityTime=Timestamp\n| join kind=inner (Processes) on TenantId, DeviceId, ProcessKey\n| where ActivityTime >= ProcessStart",
+   "sources": [
+    "https://learn.microsoft.com/en-us/defender-xdr/advanced-hunting-deviceprocessevents-table"
+   ],
+   "title": "Follow a process into DeviceNetworkEvents",
+   "to": {
+    "column": "InitiatingProcessUniqueId",
+    "table": "DeviceNetworkEvents",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "process-start-key",
+   "from": {
+    "column": "ProcessUniqueId",
+    "table": "DeviceProcessEvents",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "Match DeviceId and TenantId as well as the process key; matching process keys alone is incomplete across devices. These are Windows Process Start Keys, not process IDs. Require activity at or after ProcessCreationTime. Extend the process lookback when a long-running parent predates the activity window. These fields can be empty on unsupported platforms.",
+   "id": "process-start-key-device-process-events",
+   "kql": "let Processes = DeviceProcessEvents\n| where Timestamp > ago(7d)\n| where isnotempty(DeviceId) and isnotempty(ProcessUniqueId)\n| project TenantId, DeviceId, ProcessKey=ProcessUniqueId, ProcessStart=ProcessCreationTime,\n          ProcessEventTime=Timestamp, ProcessFile=FileName, ProcessCommandLine;\nDeviceProcessEvents\n| where Timestamp > ago(7d)\n| where isnotempty(DeviceId) and isnotempty(InitiatingProcessUniqueId)\n| extend ProcessKey=InitiatingProcessUniqueId, ActivityTime=Timestamp\n| join kind=inner (Processes) on TenantId, DeviceId, ProcessKey\n| where ActivityTime >= ProcessStart",
+   "sources": [
+    "https://learn.microsoft.com/en-us/defender-xdr/advanced-hunting-deviceprocessevents-table"
+   ],
+   "title": "Connect parent and child processes",
+   "to": {
+    "column": "InitiatingProcessUniqueId",
+    "table": "DeviceProcessEvents",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "process-start-key",
+   "from": {
+    "column": "ProcessUniqueId",
+    "table": "DeviceProcessEvents",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "Match DeviceId and TenantId as well as the process key; matching process keys alone is incomplete across devices. These are Windows Process Start Keys, not process IDs. Require activity at or after ProcessCreationTime. Extend the process lookback when a long-running parent predates the activity window. These fields can be empty on unsupported platforms.",
+   "id": "process-start-key-device-registry-events",
+   "kql": "let Processes = DeviceProcessEvents\n| where Timestamp > ago(7d)\n| where isnotempty(DeviceId) and isnotempty(ProcessUniqueId)\n| project TenantId, DeviceId, ProcessKey=ProcessUniqueId, ProcessStart=ProcessCreationTime,\n          ProcessEventTime=Timestamp, ProcessFile=FileName, ProcessCommandLine;\nDeviceRegistryEvents\n| where Timestamp > ago(7d)\n| where isnotempty(DeviceId) and isnotempty(InitiatingProcessUniqueId)\n| extend ProcessKey=InitiatingProcessUniqueId, ActivityTime=Timestamp\n| join kind=inner (Processes) on TenantId, DeviceId, ProcessKey\n| where ActivityTime >= ProcessStart",
+   "sources": [
+    "https://learn.microsoft.com/en-us/defender-xdr/advanced-hunting-deviceprocessevents-table"
+   ],
+   "title": "Follow a process into DeviceRegistryEvents",
+   "to": {
+    "column": "InitiatingProcessUniqueId",
+    "table": "DeviceRegistryEvents",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "sentinel-alert",
+   "from": {
+    "column": "AlertIds",
+    "path": "[]",
+    "table": "SecurityIncident",
+    "timeColumn": "TimeGenerated"
+   },
+   "guidance": "Select the latest SecurityIncident record per IncidentName within the workspace before expanding AlertIds. Both incident history and alert updates can create duplicate results. The Sentinel system alert ID is a separate namespace from Defender AlertInfo.AlertId. Select the latest incident snapshot before expansion and searches a longer alert window because an incident update can reference an older alert. Adjust both lookbacks to your retention and investigation period.",
+   "id": "sentinel-incident-to-alerts",
+   "kql": "let IncidentAlerts = SecurityIncident\n| where TimeGenerated > ago(7d)\n| summarize arg_max(TimeGenerated, *) by TenantId, IncidentName\n| mv-expand SystemAlertId = AlertIds to typeof(string)\n| where isnotempty(SystemAlertId);\nSecurityAlert\n| where TimeGenerated > ago(30d)\n| where isnotempty(SystemAlertId)\n| join kind=inner (IncidentAlerts) on SystemAlertId",
+   "sources": [
+    "https://learn.microsoft.com/en-us/azure/azure-monitor/reference/tables/securityincident"
+   ],
+   "title": "Expand a Sentinel incident into its alerts",
+   "to": {
+    "column": "SystemAlertId",
+    "table": "SecurityAlert",
+    "timeColumn": "TimeGenerated"
+   }
+  },
+  {
+   "family": "sentinel-behavior",
+   "from": {
+    "column": "BehaviorId",
+    "table": "SentinelBehaviorInfo",
+    "timeColumn": "TimeGenerated"
+   },
+   "guidance": "One behavior can contain many entities. Keep workspace TenantId in the join and retain entity type and role. These mappings do not establish a shared BehaviorId namespace with Defender BehaviorInfo or BehaviorEntities.",
+   "id": "sentinel-behavior-info-to-entities",
+   "kql": "let LeftEvents = SentinelBehaviorInfo\n| where TimeGenerated > ago(7d)\n| extend JoinKey = tostring(BehaviorId)\n| where isnotempty(JoinKey);\nlet RightEvents = SentinelBehaviorEntities\n| where TimeGenerated > ago(7d)\n| extend JoinKey = tostring(BehaviorId)\n| where isnotempty(JoinKey);\nLeftEvents\n| join kind=inner (RightEvents) on TenantId, JoinKey",
+   "sources": [
+    "https://learn.microsoft.com/en-us/azure/azure-monitor/reference/tables/sentinelbehaviorentities"
+   ],
+   "title": "Connect Sentinel behaviors to their entities",
+   "to": {
+    "column": "BehaviorId",
+    "table": "SentinelBehaviorEntities",
+    "timeColumn": "TimeGenerated"
+   }
+  },
+  {
+   "family": "sentinel-intel",
+   "from": {
+    "column": "Id",
+    "table": "ThreatIntelExportOperation",
+    "timeColumn": "TimeExported"
+   },
+   "guidance": "Use the internal Id and scope by workspace TenantId. StixId is the global STIX identifier; ExportId identifies an export operation and ExternallyExportedId belongs to the destination. The legacy ThreatIntelligenceIndicator.IndicatorId is a separate field. Enrich exports with the latest object snapshot; preserve IsDeleted, Revoked, validity, and export status when interpreting historical exports.",
+   "id": "threat-intel-export-threat-intel-indicators",
+   "kql": "let Intelligence = ThreatIntelIndicators\n| where TimeGenerated > ago(30d)\n| where isnotempty(Id)\n| summarize arg_max(TimeGenerated, *) by TenantId, Id;\nThreatIntelExportOperation\n| where TimeExported > ago(7d)\n| where isnotempty(Id)\n| join kind=inner (Intelligence) on TenantId, Id",
+   "sources": [
+    "https://learn.microsoft.com/en-us/azure/azure-monitor/reference/tables/threatintelexportoperation"
+   ],
+   "title": "Connect exports to ThreatIntelIndicators",
+   "to": {
+    "column": "Id",
+    "table": "ThreatIntelIndicators",
+    "timeColumn": "TimeGenerated"
+   }
+  },
+  {
+   "family": "sentinel-intel",
+   "from": {
+    "column": "Id",
+    "table": "ThreatIntelExportOperation",
+    "timeColumn": "TimeExported"
+   },
+   "guidance": "Use the internal Id and scope by workspace TenantId. StixId is the global STIX identifier; ExportId identifies an export operation and ExternallyExportedId belongs to the destination. The legacy ThreatIntelligenceIndicator.IndicatorId is a separate field. Enrich exports with the latest object snapshot; preserve IsDeleted, Revoked, validity, and export status when interpreting historical exports.",
+   "id": "threat-intel-export-threat-intel-objects",
+   "kql": "let Intelligence = ThreatIntelObjects\n| where TimeGenerated > ago(30d)\n| where isnotempty(Id)\n| summarize arg_max(TimeGenerated, *) by TenantId, Id;\nThreatIntelExportOperation\n| where TimeExported > ago(7d)\n| where isnotempty(Id)\n| join kind=inner (Intelligence) on TenantId, Id",
+   "sources": [
+    "https://learn.microsoft.com/en-us/azure/azure-monitor/reference/tables/threatintelexportoperation"
+   ],
+   "title": "Connect exports to ThreatIntelObjects",
+   "to": {
+    "column": "Id",
+    "table": "ThreatIntelObjects",
+    "timeColumn": "TimeGenerated"
+   }
+  },
+  {
+   "family": "service-principal",
+   "from": {
+    "column": "InitiatedBy",
+    "path": "app.servicePrincipalId",
+    "table": "AuditLogs",
+    "timeColumn": "ActivityDateTime"
+   },
+   "guidance": "Enrich the initiating actor, not a target resource. User object IDs, application/client IDs, and service principal IDs are separate namespaces. Scope to the actual Entra tenant; AuditLogs.AADTenantId is the identity tenant. Snapshot metadata can repeat, so select the appropriate snapshot. These joins do not prove a shared session or token. Verify nested fields in collected records.",
+   "id": "audit-initiator-service-principal-id",
+   "kql": "let LeftEvents = AuditLogs\n| where ActivityDateTime > ago(7d)\n| extend JoinKey = tostring(parse_json(tostring(parse_json(tostring(InitiatedBy)).app)).servicePrincipalId)\n| where isnotempty(JoinKey);\nlet RightEvents = OAuthAppInfo\n| where Timestamp > ago(7d)\n| extend JoinKey = tostring(ServicePrincipalId)\n| where isnotempty(JoinKey);\nLeftEvents\n| join kind=inner (RightEvents) on JoinKey",
+   "sources": [
+    "https://learn.microsoft.com/en-us/graph/api/resources/appidentity?view=graph-rest-1.0"
+   ],
+   "title": "Enrich an audit initiator through app.servicePrincipalId",
+   "to": {
+    "column": "ServicePrincipalId",
+    "table": "OAuthAppInfo",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "service-principal",
+   "from": {
+    "column": "ServicePrincipalId",
+    "table": "OAuthAppInfo",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "The OAuth application/client ID and the service principal object ID are different namespaces. Scope service principal joins to the same tenant. App metadata can have multiple snapshots; select the relevant snapshot. A shared application enriches activity and does not establish a shared token or session. Use TimeRequested for request timing and allow for delayed ingestion. AADGraphActivityLogs.AADTenantId identifies the Entra tenant; its TenantId can identify the workspace. Use the actual identity tenant when narrowing enrichment. User and application actors use different fields; preserve ActorType when interpreting the result.",
+   "id": "oauth-app-info-aad-graph-activity-logs-service-principal-id",
+   "sources": [
+    "https://learn.microsoft.com/en-us/azure/azure-monitor/reference/tables/aadgraphactivitylogs"
+   ],
+   "title": "Enrich AADGraphActivityLogs with OAuth application information",
+   "to": {
+    "column": "ServicePrincipalId",
+    "table": "AADGraphActivityLogs",
+    "timeColumn": "TimeRequested"
+   }
+  },
+  {
+   "family": "service-principal",
+   "from": {
+    "column": "ServicePrincipalId",
+    "table": "OAuthAppInfo",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "The OAuth application/client ID and the service principal object ID are different namespaces. Scope service principal joins to the same tenant. App metadata can have multiple snapshots; select the relevant snapshot. A shared application enriches activity and does not establish a shared token or session.",
+   "id": "oauth-app-info-aad-managed-identity-sign-in-logs-service-principal-id",
+   "title": "Enrich AADManagedIdentitySignInLogs with OAuth application information",
+   "to": {
+    "column": "ServicePrincipalId",
+    "table": "AADManagedIdentitySignInLogs",
+    "timeColumn": "TimeGenerated"
+   }
+  },
+  {
+   "family": "service-principal",
+   "from": {
+    "column": "ServicePrincipalId",
+    "table": "OAuthAppInfo",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "The OAuth application/client ID and the service principal object ID are different namespaces. Scope service principal joins to the same tenant. App metadata can have multiple snapshots; select the relevant snapshot. A shared application enriches activity and does not establish a shared token or session.",
+   "id": "oauth-app-info-aad-non-interactive-user-sign-in-logs-service-principal-id",
+   "title": "Enrich AADNonInteractiveUserSignInLogs with OAuth application information",
+   "to": {
+    "column": "ServicePrincipalId",
+    "table": "AADNonInteractiveUserSignInLogs",
+    "timeColumn": "TimeGenerated"
+   }
+  },
+  {
+   "family": "service-principal",
+   "from": {
+    "column": "ServicePrincipalId",
+    "table": "OAuthAppInfo",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "The OAuth application/client ID and the service principal object ID are different namespaces. Scope service principal joins to the same tenant. App metadata can have multiple snapshots; select the relevant snapshot. A shared application enriches activity and does not establish a shared token or session.",
+   "id": "oauth-app-info-aad-service-principal-sign-in-logs-service-principal-id",
+   "title": "Enrich AADServicePrincipalSignInLogs with OAuth application information",
+   "to": {
+    "column": "ServicePrincipalId",
+    "table": "AADServicePrincipalSignInLogs",
+    "timeColumn": "TimeGenerated"
+   }
+  },
+  {
+   "family": "service-principal",
+   "from": {
+    "column": "ServicePrincipalId",
+    "table": "OAuthAppInfo",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "The OAuth application/client ID and the service principal object ID are different namespaces. Scope service principal joins to the same tenant. App metadata can have multiple snapshots; select the relevant snapshot. A shared application enriches activity and does not establish a shared token or session.",
+   "id": "oauth-app-info-entra-id-spn-sign-in-events-service-principal-id",
+   "title": "Enrich EntraIdSpnSignInEvents with OAuth application information",
+   "to": {
+    "column": "ServicePrincipalId",
+    "table": "EntraIdSpnSignInEvents",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "service-principal",
+   "from": {
+    "column": "ServicePrincipalId",
+    "table": "OAuthAppInfo",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "The OAuth application/client ID and the service principal object ID are different namespaces. Scope service principal joins to the same tenant. App metadata can have multiple snapshots; select the relevant snapshot. A shared application enriches activity and does not establish a shared token or session.",
+   "id": "oauth-app-info-graphapi-audit-events-service-principal-id",
+   "title": "Enrich GraphAPIAuditEvents with OAuth application information",
+   "to": {
+    "column": "ServicePrincipalId",
+    "table": "GraphAPIAuditEvents",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "service-principal",
+   "from": {
+    "column": "ServicePrincipalId",
+    "table": "OAuthAppInfo",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "The OAuth application/client ID and the service principal object ID are different namespaces. Scope service principal joins to the same tenant. App metadata can have multiple snapshots; select the relevant snapshot. A shared application enriches activity and does not establish a shared token or session.",
+   "id": "oauth-app-info-microsoft-graph-activity-logs-service-principal-id",
+   "title": "Enrich MicrosoftGraphActivityLogs with OAuth application information",
+   "to": {
+    "column": "ServicePrincipalId",
+    "table": "MicrosoftGraphActivityLogs",
+    "timeColumn": "TimeGenerated"
+   }
+  },
+  {
+   "family": "service-principal",
+   "from": {
+    "column": "ServicePrincipalId",
+    "table": "OAuthAppInfo",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "The OAuth application/client ID and the service principal object ID are different namespaces. Scope service principal joins to the same tenant. App metadata can have multiple snapshots; select the relevant snapshot. A shared application enriches activity and does not establish a shared token or session.",
+   "id": "oauth-app-info-signin-logs-service-principal-id",
+   "title": "Enrich SigninLogs with OAuth application information",
+   "to": {
+    "column": "ServicePrincipalId",
+    "table": "SigninLogs",
+    "timeColumn": "TimeGenerated"
+   }
+  },
+  {
+   "family": "stix-object",
+   "from": {
+    "column": "Data",
+    "path": "source_ref",
+    "table": "ThreatIntelObjects",
+    "timeColumn": "TimeGenerated"
+   },
+   "guidance": "Keep only relationship objects, exclude deleted snapshots, and match workspace plus feed provenance. Id contains a feed prefix separated from the STIX ID by ---; Data.id and the relationship references are the global STIX identifiers. One object can participate in many relationships. Preserve source and target roles when interpreting matches.",
+   "id": "stix-relationship-source-threat-intel-indicators",
+   "kql": "let Relationships = ThreatIntelObjects\n| where TimeGenerated > ago(30d)\n| summarize arg_max(TimeGenerated, *) by TenantId, Id\n| where IsDeleted == false and StixType == \"relationship\"\n| extend StixKey=tostring(Data.source_ref), FeedKey=tostring(split(Id, \"---\")[0])\n| where isnotempty(StixKey);\nThreatIntelIndicators\n| where TimeGenerated > ago(30d)\n| summarize arg_max(TimeGenerated, *) by TenantId, Id\n| where IsDeleted == false\n| extend StixKey=tostring(Data.id), FeedKey=tostring(split(Id, \"---\")[0])\n| where isnotempty(StixKey)\n| join kind=inner (Relationships) on TenantId, FeedKey, StixKey",
+   "sources": [
+    "https://learn.microsoft.com/en-us/azure/sentinel/work-with-stix-objects-indicators"
+   ],
+   "title": "Resolve a STIX relationship source in ThreatIntelIndicators",
+   "to": {
+    "column": "Data",
+    "path": "id",
+    "table": "ThreatIntelIndicators",
+    "timeColumn": "TimeGenerated"
+   }
+  },
+  {
+   "family": "stix-object",
+   "from": {
+    "column": "Data",
+    "path": "source_ref",
+    "table": "ThreatIntelObjects",
+    "timeColumn": "TimeGenerated"
+   },
+   "guidance": "Keep only relationship objects, exclude deleted snapshots, and match workspace plus feed provenance. Id contains a feed prefix separated from the STIX ID by ---; Data.id and the relationship references are the global STIX identifiers. One object can participate in many relationships. Preserve source and target roles when interpreting matches.",
+   "id": "stix-relationship-source-threat-intel-objects",
+   "kql": "let Relationships = ThreatIntelObjects\n| where TimeGenerated > ago(30d)\n| summarize arg_max(TimeGenerated, *) by TenantId, Id\n| where IsDeleted == false and StixType == \"relationship\"\n| extend StixKey=tostring(Data.source_ref), FeedKey=tostring(split(Id, \"---\")[0])\n| where isnotempty(StixKey);\nThreatIntelObjects\n| where TimeGenerated > ago(30d)\n| summarize arg_max(TimeGenerated, *) by TenantId, Id\n| where IsDeleted == false\n| extend StixKey=tostring(Data.id), FeedKey=tostring(split(Id, \"---\")[0])\n| where isnotempty(StixKey)\n| join kind=inner (Relationships) on TenantId, FeedKey, StixKey",
+   "sources": [
+    "https://learn.microsoft.com/en-us/azure/sentinel/work-with-stix-objects-indicators"
+   ],
+   "title": "Resolve a STIX relationship source in ThreatIntelObjects",
+   "to": {
+    "column": "Data",
+    "path": "id",
+    "table": "ThreatIntelObjects",
+    "timeColumn": "TimeGenerated"
+   }
+  },
+  {
+   "family": "stix-object",
+   "from": {
+    "column": "Data",
+    "path": "target_ref",
+    "table": "ThreatIntelObjects",
+    "timeColumn": "TimeGenerated"
+   },
+   "guidance": "Keep only relationship objects, exclude deleted snapshots, and match workspace plus feed provenance. Id contains a feed prefix separated from the STIX ID by ---; Data.id and the relationship references are the global STIX identifiers. One object can participate in many relationships. Preserve source and target roles when interpreting matches.",
+   "id": "stix-relationship-target-threat-intel-indicators",
+   "kql": "let Relationships = ThreatIntelObjects\n| where TimeGenerated > ago(30d)\n| summarize arg_max(TimeGenerated, *) by TenantId, Id\n| where IsDeleted == false and StixType == \"relationship\"\n| extend StixKey=tostring(Data.target_ref), FeedKey=tostring(split(Id, \"---\")[0])\n| where isnotempty(StixKey);\nThreatIntelIndicators\n| where TimeGenerated > ago(30d)\n| summarize arg_max(TimeGenerated, *) by TenantId, Id\n| where IsDeleted == false\n| extend StixKey=tostring(Data.id), FeedKey=tostring(split(Id, \"---\")[0])\n| where isnotempty(StixKey)\n| join kind=inner (Relationships) on TenantId, FeedKey, StixKey",
+   "sources": [
+    "https://learn.microsoft.com/en-us/azure/sentinel/work-with-stix-objects-indicators"
+   ],
+   "title": "Resolve a STIX relationship target in ThreatIntelIndicators",
+   "to": {
+    "column": "Data",
+    "path": "id",
+    "table": "ThreatIntelIndicators",
+    "timeColumn": "TimeGenerated"
+   }
+  },
+  {
+   "family": "stix-object",
+   "from": {
+    "column": "Data",
+    "path": "target_ref",
+    "table": "ThreatIntelObjects",
+    "timeColumn": "TimeGenerated"
+   },
+   "guidance": "Keep only relationship objects, exclude deleted snapshots, and match workspace plus feed provenance. Id contains a feed prefix separated from the STIX ID by ---; Data.id and the relationship references are the global STIX identifiers. One object can participate in many relationships. Preserve source and target roles when interpreting matches.",
+   "id": "stix-relationship-target-threat-intel-objects",
+   "kql": "let Relationships = ThreatIntelObjects\n| where TimeGenerated > ago(30d)\n| summarize arg_max(TimeGenerated, *) by TenantId, Id\n| where IsDeleted == false and StixType == \"relationship\"\n| extend StixKey=tostring(Data.target_ref), FeedKey=tostring(split(Id, \"---\")[0])\n| where isnotempty(StixKey);\nThreatIntelObjects\n| where TimeGenerated > ago(30d)\n| summarize arg_max(TimeGenerated, *) by TenantId, Id\n| where IsDeleted == false\n| extend StixKey=tostring(Data.id), FeedKey=tostring(split(Id, \"---\")[0])\n| where isnotempty(StixKey)\n| join kind=inner (Relationships) on TenantId, FeedKey, StixKey",
+   "sources": [
+    "https://learn.microsoft.com/en-us/azure/sentinel/work-with-stix-objects-indicators"
+   ],
+   "title": "Resolve a STIX relationship target in ThreatIntelObjects",
+   "to": {
+    "column": "Data",
+    "path": "id",
+    "table": "ThreatIntelObjects",
+    "timeColumn": "TimeGenerated"
+   }
+  },
+  {
+   "family": "stix-object",
+   "from": {
+    "column": "StixId",
+    "table": "ThreatIntelExportOperation",
+    "timeColumn": "TimeExported"
+   },
+   "guidance": "Use the global STIX ID, not the internal Id. A STIX object can arrive through several feeds, producing multiple internal IDs. Scope to the same workspace and select each internal object’s latest snapshot; preserve SourceSystem and internal Id to explain multiple matches. Deleted or revoked records can still explain a historical export.",
+   "id": "threat-intel-export-threat-intel-indicators-stix",
+   "kql": "let Intelligence = ThreatIntelIndicators\n| where TimeGenerated > ago(30d)\n| summarize arg_max(TimeGenerated, *) by TenantId, Id\n| extend StixKey=tostring(Data.id)\n| where isnotempty(StixKey);\nThreatIntelExportOperation\n| where TimeExported > ago(7d)\n| extend StixKey=tostring(StixId)\n| where isnotempty(StixKey)\n| join kind=inner (Intelligence) on TenantId, StixKey",
+   "sources": [
+    "https://learn.microsoft.com/en-us/azure/sentinel/work-with-stix-objects-indicators"
+   ],
+   "title": "Follow a global STIX ID into ThreatIntelIndicators",
+   "to": {
+    "column": "Data",
+    "path": "id",
+    "table": "ThreatIntelIndicators",
+    "timeColumn": "TimeGenerated"
+   }
+  },
+  {
+   "family": "stix-object",
+   "from": {
+    "column": "StixId",
+    "table": "ThreatIntelExportOperation",
+    "timeColumn": "TimeExported"
+   },
+   "guidance": "Use the global STIX ID, not the internal Id. A STIX object can arrive through several feeds, producing multiple internal IDs. Scope to the same workspace and select each internal object’s latest snapshot; preserve SourceSystem and internal Id to explain multiple matches. Deleted or revoked records can still explain a historical export.",
+   "id": "threat-intel-export-threat-intel-objects-stix",
+   "kql": "let Intelligence = ThreatIntelObjects\n| where TimeGenerated > ago(30d)\n| summarize arg_max(TimeGenerated, *) by TenantId, Id\n| extend StixKey=tostring(Data.id)\n| where isnotempty(StixKey);\nThreatIntelExportOperation\n| where TimeExported > ago(7d)\n| extend StixKey=tostring(StixId)\n| where isnotempty(StixKey)\n| join kind=inner (Intelligence) on TenantId, StixKey",
+   "sources": [
+    "https://learn.microsoft.com/en-us/azure/sentinel/work-with-stix-objects-indicators"
+   ],
+   "title": "Follow a global STIX ID into ThreatIntelObjects",
+   "to": {
+    "column": "Data",
+    "path": "id",
+    "table": "ThreatIntelObjects",
+    "timeColumn": "TimeGenerated"
+   }
+  },
+  {
+   "family": "teams-message",
+   "from": {
+    "column": "TeamsMessageId",
+    "table": "MessageEvents",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "One message can have multiple URLs, versions, or post-delivery records. Preserve sender, thread, and event-time context; use TeamsMessageId rather than assuming MessageId uses the same namespace.",
+   "id": "message-events-message-post-delivery-events",
+   "title": "Connect Teams messages to MessagePostDeliveryEvents",
+   "to": {
+    "column": "TeamsMessageId",
+    "table": "MessagePostDeliveryEvents",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "teams-message",
+   "from": {
+    "column": "TeamsMessageId",
+    "table": "MessageEvents",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "One message can have multiple URLs, versions, or post-delivery records. Preserve sender, thread, and event-time context; use TeamsMessageId rather than assuming MessageId uses the same namespace.",
+   "id": "message-events-message-url-info",
+   "title": "Connect Teams messages to MessageUrlInfo",
+   "to": {
+    "column": "TeamsMessageId",
+    "table": "MessageUrlInfo",
+    "timeColumn": "Timestamp"
+   }
+  },
+  {
+   "family": "unified-identity",
+   "from": {
+    "column": "IdentityId",
+    "table": "IdentityInfo",
+    "timeColumn": "Timestamp"
+   },
+   "guidance": "One identity can own multiple provider accounts. IdentityId is the unified identity key; AccountId is an internal account key and SourceProviderAccountId belongs to the named provider. Select the appropriate account and identity snapshots.",
+   "id": "identity-info-to-account-info",
+   "title": "Connect an identity to its accounts",
+   "to": {
+    "column": "IdentityId",
+    "table": "IdentityAccountInfo",
+    "timeColumn": "Timestamp"
+   }
+  }
+ ],
+ "source": "https://xdrinternals.com/relationships/"
+}

@@ -1,5 +1,5 @@
 import type { Entity, GraphData } from './types'
-import { agentFindings, analyzeImpact, compromiseOf, sessionFindings, type Impact } from './impact'
+import { agentFindings, analyzeImpact, attackSessions, compromiseOf, sessionFindings, signInSessionFindings, type Impact } from './impact'
 import { isUtc, utc } from './time'
 
 /**
@@ -15,6 +15,33 @@ const list = (values: string[]) => `dynamic([${values.map(literal).join(', ')}])
 const ident = (entity: Entity, ...names: string[]) => entity.identifiers.filter(i => names.includes(i.namespace) || names.includes(i.scheme)).map(i => i.normalized_value)
 const isKind = (entity: Entity, pattern: RegExp) => pattern.test(entity.kind)
 const MAX_VALUES = 200
+
+/**
+ * Where a session token and the sign-in session it belongs to appear (the entra-token and entra-session relations of
+ * xdrinternals.com, app/data/column_relations.json): the token column, the session ID column, and who, from where and
+ * what for the summary. Defender XDR tables streamed to Sentinel keep their names.
+ */
+const SESSION_TABLES: { table: string; token: string; session?: string; identity: string; ip: string; what: string; time?: string }[] = [
+  { table: 'SigninLogs', token: 'UniqueTokenIdentifier', session: 'SessionId', identity: 'UserPrincipalName', ip: 'IPAddress', what: 'AppDisplayName' },
+  { table: 'AADNonInteractiveUserSignInLogs', token: 'UniqueTokenIdentifier', session: 'SessionId', identity: 'UserPrincipalName', ip: 'IPAddress', what: 'AppDisplayName' },
+  { table: 'AADServicePrincipalSignInLogs', token: 'UniqueTokenIdentifier', session: 'SessionId', identity: 'ServicePrincipalName', ip: 'IPAddress', what: 'ResourceDisplayName' },
+  { table: 'AADManagedIdentitySignInLogs', token: 'UniqueTokenIdentifier', session: 'SessionId', identity: 'ServicePrincipalName', ip: 'IPAddress', what: 'ResourceDisplayName' },
+  { table: 'EntraIdSignInEvents', token: 'UniqueTokenId', session: 'SessionId', identity: 'AccountUpn', ip: 'IPAddress', what: 'Application' },
+  { table: 'EntraIdSpnSignInEvents', token: 'UniqueTokenId', session: 'SessionId', identity: 'ServicePrincipalName', ip: 'IPAddress', what: 'ResourceDisplayName' },
+  { table: 'AzureActivity', token: 'tostring(parse_json(Claims).uti)', identity: 'Caller', ip: 'CallerIpAddress', what: 'OperationNameValue' },
+  { table: 'MicrosoftGraphActivityLogs', token: 'coalesce(UniqueTokenId, SignInActivityId)', session: 'SessionId', identity: 'coalesce(UserId, ServicePrincipalId, AppId)', ip: 'IPAddress',
+    what: 'strcat(RequestMethod, " ", tostring(parse_url(RequestUri).Path))' },
+  { table: 'AADGraphActivityLogs', token: 'SignInActivityId', session: 'SessionId', identity: 'coalesce(UserId, ServicePrincipalId, AppId)', ip: 'CallerIpAddress',
+    what: 'strcat(RequestMethod, " ", tostring(parse_url(RequestUri).Path))', time: 'TimeRequested' },
+  { table: 'GraphAPIAuditEvents', token: 'UniqueTokenIdentifier', identity: 'coalesce(AccountObjectId, ServicePrincipalId, ApplicationId)', ip: 'IpAddress',
+    what: 'strcat(RequestMethod, " ", tostring(parse_url(RequestUri).Path))' },
+  { table: 'OfficeActivity', token: 'tostring(parse_json(AppAccessContext).UniqueTokenId)', session: 'tostring(parse_json(AppAccessContext).AADSessionId)', identity: 'UserId', ip: 'ClientIP', what: 'Operation' },
+  { table: 'CloudAppEvents', token: 'coalesce(tostring(RawEventData.AppAccessContext.UniqueTokenId), tostring(RawEventData.uniqueTokenId), tostring(RawEventData.claims.uti))',
+    session: 'coalesce(tostring(RawEventData.AppAccessContext.AADSessionId), tostring(RawEventData.claims.sid), tostring(RawEventData.SessionId))', identity: 'AccountObjectId', ip: 'IPAddress', what: 'ActionType' },
+]
+/** One branch per table: the time filter first (on TimeGenerated, which every table has and the store is partitioned by), then the key. */
+const sessionBranch = (t: (typeof SESSION_TABLES)[number], key: string) =>
+  `  (${t.table} | where TimeGenerated between (start .. now()) | ${key} | extend Token = trim_end(@"=+", ${t.token}) | project TimeGenerated${t.time ? ` = ${t.time}` : ''}, Table = "${t.table}", Token, Identity = ${t.identity}, IP = ${t.ip}, What = ${t.what})`
 
 /** Tables the board already has rows from: the import title ("AzureActivity (Sentinel) · file") and the rows' Type column. */
 export function importedTables(data: Pick<GraphData, 'sources'>): Set<string> {
@@ -98,9 +125,17 @@ export function huntingQueries(data: Pick<GraphData, 'entities' | 'sources'>, im
 
   const sessions = sessionFindings(data as Pick<GraphData, 'entities' | 'facts'>, impact).slice(0, MAX_VALUES)
   if (sessions.length) add('session-replay', 'Everything done with the replayed session tokens',
-    'Every sign-in, Azure operation and Graph call made with the session tokens seen from more than one IP (Entra UniqueTokenIdentifier, the uti claim): each further IP is a redirector of the attacker, or the place the token was stolen from.',
-    ['SigninLogs', 'AADNonInteractiveUserSignInLogs', 'AADServicePrincipalSignInLogs', 'AzureActivity', 'MicrosoftGraphActivityLogs'],
-    `let utis = ${list(sessions.map(s => s.uti))};\nunion isfuzzy=true\n  (SigninLogs | where UniqueTokenIdentifier in (utis) | project TimeGenerated, Table = "SigninLogs", Session = UniqueTokenIdentifier, Identity = UserPrincipalName, IP = IPAddress, What = AppDisplayName),\n  (AADNonInteractiveUserSignInLogs | where UniqueTokenIdentifier in (utis) | project TimeGenerated, Table = "AADNonInteractiveUserSignInLogs", Session = UniqueTokenIdentifier, Identity = UserPrincipalName, IP = IPAddress, What = AppDisplayName),\n  (AADServicePrincipalSignInLogs | where UniqueTokenIdentifier in (utis) | project TimeGenerated, Table = "AADServicePrincipalSignInLogs", Session = UniqueTokenIdentifier, Identity = ServicePrincipalName, IP = IPAddress, What = ResourceDisplayName),\n  (AzureActivity | extend Session = tostring(parse_json(Claims).uti) | where Session in (utis) | project TimeGenerated, Table = "AzureActivity", Session, Identity = Caller, IP = CallerIpAddress, What = OperationNameValue),\n  (MicrosoftGraphActivityLogs | where SignInActivityId in (utis) | project TimeGenerated, Table = "MicrosoftGraphActivityLogs", Session = SignInActivityId, Identity = coalesce(UserId, AppId), IP = IPAddress, What = strcat(RequestMethod, " ", tostring(parse_url(RequestUri).Path)))\n| where TimeGenerated between (start .. now())\n| summarize Count = count(), First = min(TimeGenerated), Last = max(TimeGenerated) by Session, Identity, IP, Table, What\n| order by Session, First asc`)
+    'Every sign-in, Azure operation, Graph call and Microsoft 365 action made with the session tokens seen from more than one IP (Entra UniqueTokenIdentifier, UniqueTokenId, the uti claim, Graph SignInActivityId): each further IP is a redirector of the attacker, or the place the token was stolen from. Padding is trimmed, case is kept.',
+    SESSION_TABLES.map(t => t.table),
+    `let utis = ${list(sessions.map(s => s.uti))};\nunion isfuzzy=true\n${SESSION_TABLES.map(t => sessionBranch(t, `where trim_end(@"=+", ${t.token}) in (utis)`)).join(',\n')}\n| summarize Count = count(), First = min(TimeGenerated), Last = max(TimeGenerated) by Session = Token, Identity, IP, Table, What\n| order by Session, First asc`)
+
+  // Sign-in sessions (sid) the attacker worked in: every token issued in them and everything done with those tokens.
+  const signIns = signInSessionFindings(data as Pick<GraphData, 'entities' | 'facts'>, impact)
+  const attackerSids = [...new Set([...signIns.map(f => f.sid), ...attackSessions(data as Pick<GraphData, 'entities' | 'facts'>, impact).flatMap(s => s.sid ? [s.sid] : [])])].slice(0, MAX_VALUES)
+  if (attackerSids.length) add('signin-session', "Everything in the attacker's sign-in sessions",
+    'A sign-in session (the Entra sid) holds every token refreshed from one sign-in, so a stolen session cookie or refresh token shows up as new tokens in the same session, possibly from new IPs. Lists each IP, identity and table per session with how many tokens it used. Session IDs are compared in lower case.',
+    SESSION_TABLES.filter(t => t.session).map(t => t.table),
+    `let sids = ${list(attackerSids)};\nunion isfuzzy=true\n${SESSION_TABLES.filter(t => t.session).map(t => sessionBranch(t, `extend SignInSession = tolower(${t.session}) | where SignInSession in (sids)`).replace(', Token,', ', SignInSession, Token,')).join(',\n')}\n| summarize Count = count(), Tokens = dcount(Token), First = min(TimeGenerated), Last = max(TimeGenerated) by SignInSession, Identity, IP, Table\n| order by SignInSession, First asc`)
 
   const agents = agentFindings(data as Pick<GraphData, 'entities' | 'facts'>, impact).filter(f => !f.baseline).slice(0, 20).map(f => f.agent)
   if (agents.length) add('agent-hunt', "Who else used the attacker's user agents?",

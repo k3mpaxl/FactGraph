@@ -438,10 +438,10 @@ export function ImpactPanel({ data, impact, queries, onCommand, onShow, onShowFa
       </Block>
 
       {sessions.length > 0 && <Block title="Sessions the attacker worked in" count={sessions.length} icon={<KeyRound size={14} />} open={false}>
-        <p className="hint">One session token (Entra UniqueTokenIdentifier, the uti claim) is one sign-in: everything done with it until it expires belongs to whoever holds it. A session used from more than one IP is a redirector or a stolen token.</p>
+        <p className="hint">One session token (Entra UniqueTokenIdentifier, the uti claim) is one sign-in: everything done with it until it expires belongs to whoever holds it. A session used from more than one IP is a redirector or a stolen token. Tokens refreshed from one sign-in share its sign-in session (sid), shown where the rows name it.</p>
         {sessions.slice(0, 50).map(x => <div key={x.uti} className={`impact-row session${x.ips.length > 1 ? ' moved' : ''}`}>
           <div className="impact-row-main"><span className="step-time">{span(x.start, x.end)}</span>{x.identity && chip(x.identity)}
-            <span className="kind-label">session {x.uti.slice(0, 10)}…</span>{x.ips.length > 1 && <span className="pivot-tag new">{x.ips.length} IPs</span>}
+            <span className="kind-label">session {x.uti.slice(0, 10)}…</span>{x.sid && <span className="kind-label" title={`Sign-in session (sid) ${x.sid}`}>sid {x.sid.slice(0, 8)}…</span>}{x.ips.length > 1 && <span className="pivot-tag new">{x.ips.length} IPs</span>}
             <small className="muted">{x.uses} uses from {x.ips.map(nameOf).join(', ') || 'unknown IP'} · {x.operations.slice(0, 4).map(([op, count]) => `${op} ×${count}`).join(' · ')}</small></div>
           <div className="row-actions"><button className="text-button" onClick={() => onCopy(x.uti, 'Session token ID')}><Copy size={12} /> ID</button><button className="text-button" onClick={() => onShowFact(x.facts[0])}>Show</button></div>
         </div>)}

@@ -11,7 +11,8 @@ import { ownImportBatches } from './importBatches'
 import { deleteBoard } from './store'
 import { factsInWindow, timelineSteps, timelineEvents, periodLabel, evidencePeriod, fromUtcInput, toUtcInput } from './timeline'
 import GraphView, { KindIcon, type CanvasRequest, type Lens, type Selection } from './GraphView'
-import { ActivityDialog, GroupInspector, ParticipantList } from './Structures'
+import { ActivityDialog, GroupInspector, LinkedActivities, ParticipantList } from './Structures'
+import { linkedActivities } from './correlation'
 import ImportDialog from './ImportDialog'
 import { CONNECTION_ERROR, describeTableImport, importFields, inspectImport, uploadImport } from './importApi'
 import { loadFormats, markUsed, matchFormat, type Inspection } from './importFormats'
@@ -162,6 +163,7 @@ function Inspector({ data, selection, onAdd, onDelete, onRetract, onOpenEvidence
   const active = fact.assertions.filter(a => !a.retracted_at)
   const confirmed = active.filter(a => a.review_status === 'confirmed').length
   const isActivity = !!fact.participants?.length
+  const linked = linkedActivities(data, fact.id)
   return <aside className="inspector wide" aria-label="Inspector">
     <div className="inspector-head"><span className="eyebrow">{isActivity ? 'Activity' : 'Relationship'}</span><div className="head-actions">
       <button className="icon-button" title="Copy relationship ID" aria-label="Copy relationship ID" onClick={() => onCopy(fact.id, 'Relationship ID')}><Copy size={15} /></button>{closeButton}</div></div>
@@ -189,6 +191,7 @@ function Inspector({ data, selection, onAdd, onDelete, onRetract, onOpenEvidence
         {fact.assertions.length ? <EvidenceList fact={fact} data={data} onCopy={onCopy} onOpen={onOpenEvidence} onRetract={onRetract} hits={impact?.facts.get(fact.id)?.hits} />
           : <p className="muted small">No evidence yet. A relationship stays <em>unknown</em> until confirmed evidence exists.</p>}
       </Section>
+      {linked.length > 0 && <Section title="Linked by ID" count={linked.reduce((n, g) => n + g.total, 0)}><LinkedActivities data={data} linked={linked} onSelect={onSelect} /></Section>}
       <p className="inspector-note"><ShieldCheck size={14} /> Status is derived from confirmed, active evidence. Supporting and refuting evidence can coexist.</p>
     </div>
     <div className="inspector-foot"><button className="danger-link" onClick={() => onDelete('fact', fact.id)}><Trash2 size={14} /> Delete {isActivity ? 'activity' : 'relationship'}</button></div>

@@ -2,7 +2,7 @@ const assert = require('node:assert/strict')
 const path = require('node:path').resolve(process.argv[2])
 const { project } = require(path + '/board.js')
 const { validateDrafts } = require(path + '/validation.js')
-const { analyzeImpact, derivedCompromises, rotationProofs, effectOf, variableListingScript, impactMarkdown, sessionFindings, adviceFor, traceBack, agentFindings, attackSessions, startingPoints, caseSummary, firstUseOf, activityBefore, defaultSince, gapText, subnet } = require(path + '/impact.js')
+const { tokenId, signInSessionFindings, analyzeImpact, derivedCompromises, rotationProofs, effectOf, variableListingScript, impactMarkdown, sessionFindings, adviceFor, traceBack, agentFindings, attackSessions, startingPoints, caseSummary, firstUseOf, activityBefore, defaultSince, gapText, subnet } = require(path + '/impact.js')
 const { huntingQueries, impactReport, evidenceQuery } = require(path + '/hunting.js')
 
 let clock = 0
@@ -165,6 +165,55 @@ assert.equal(report.rotation_guidance[report.rotate[0].guidance].length > 20, tr
 assert.ok(JSON.stringify(report).length < 60_000)
 const markdown = impactMarkdown(analyzeImpact(project('b', ops).data), id => project('b', ops).data.entities.find(e => e.id === id)?.name ?? id, queries.slice(0, 1))
 assert.match(markdown, /## Rotate, revoke, block/); assert.match(markdown, /```kusto/); assert.match(markdown, /\(derived\): used from 198\.51\.100\.66/)
+// Token IDs: every name the logs use, padding dropped, case kept, GUID-shaped values skipped; and every token column of
+// the xdrinternals.com catalog (app/data/column_relations.json) is read.
+{
+  assert.equal(tokenId('{"UniqueTokenIdentifier": "AbCdEf123456_-xy"}'), 'AbCdEf123456_-xy')
+  assert.equal(tokenId('{"SignInActivityId": "AbCdEf123456xy=="}'), 'AbCdEf123456xy')
+  assert.equal(tokenId('{"SignInActivityId": "0b6c5c49-2f7a-4c1e-9d55-3c1f0e0a9b11", "UniqueTokenId": "AbCdEf123456xy"}'), 'AbCdEf123456xy')
+  assert.equal(tokenId('{"uti": "abc+def/ghijklmn"}'), undefined, 'not a Base64url token: no truncated match')
+  const catalog = require(require('node:path').join(__dirname, '../../app/data/column_relations.json'))
+  const ends = catalog.relations.filter(r => r.family === 'entra-token').flatMap(r => [r.from, r.to]).filter(e => e.column !== 'RequestUri')
+  for (const end of ends) {
+    const value = 'TokenXyZ0123456789ab'
+    const nested = (end.path ? end.path.split('.') : []).reduceRight((inner, key) => ({ [key]: inner }), value)
+    const note = JSON.stringify(end.path ? { [end.column]: nested } : { [end.column]: value })
+    assert.equal(tokenId(note), value, `${end.table}.${end.column}${end.path ? '.' + end.path : ''}`)
+  }
+}
+// Sign-in sessions (sid): alice signs in at home, then her session turns up at the attacker's IP with a new token (a
+// stolen session cookie). Hijacked, with both tokens; nothing is derived from a session alone.
+{
+  const more = []
+  let n = 0
+  const add = (type, payload) => more.push({ id: `h${++n}`, clock: n, at: '2026-10-04T00:00:00.000Z', actor: 'me', author: 'Analyst', boardId: 'h', type, payload })
+  const sid = '6f1c2d3e-4a5b-4c6d-8e9f-0a1b2c3d4e5f'
+  for (const [id, kind, name] of [['alice', 'User', 'alice@contoso.example'], ['home', 'IP', '203.0.113.30'], ['evil', 'IP', '198.51.100.7'], ['later', 'IP', '192.0.2.50'], ['mail', 'Service', 'Exchange Online']])
+    add('entity.add', { id, name, kind })
+  const ev = (id, predicate, ip, note, at) => { add('fact.add', { id, predicate, participants: [{ entity_id: 'alice', role: 'identity' }, { entity_id: ip, role: 'source' }, { entity_id: 'mail', role: 'target' }] })
+    add('assertion.add', { id: `${id}-e`, fact_id: id, stance: 'supports', valid_from: at, note: JSON.stringify(note), source_id: null }) }
+  ev('s1', 'signed in', 'home', { UniqueTokenIdentifier: 'tokenHOME0000aaaa', SessionId: sid.toUpperCase() }, '2026-09-25T08:00:00.000Z')
+  ev('s2', 'signed in (non-interactive)', 'evil', { UniqueTokenIdentifier: 'tokenEVIL0000bbbb', SessionId: sid }, '2026-09-25T09:00:00.000Z')
+  ev('s3', 'mailitemsaccessed', 'evil', { AppAccessContext: { AADSessionId: sid, UniqueTokenId: 'tokenEVIL0000bbbb' } }, '2026-09-25T09:10:00.000Z')
+  add('entity.update', { id: 'evil', compromise: {} })
+  const data = project('h', more).data
+  const impact = analyzeImpact(data)
+  const [finding] = signInSessionFindings(data, impact)
+  assert.deepEqual([finding.sid, finding.kind, finding.others, finding.attacker, finding.tokens.sort()], [sid, 'hijacked', ['home'], ['evil'], ['tokenEVIL0000bbbb', 'tokenHOME0000aaaa']])
+  const advice = adviceFor(data, impact).find(a => a.id === `sid-${sid}`)
+  assert.equal(advice.severity, 'high'); assert.match(advice.title, /hijacked from 203\.0\.113\.30/); assert.equal(advice.mark, undefined, 'a session roams with its user: nothing to mark')
+  assert.ok(!derivedCompromises(data).has('home'), 'the victim is not derived from a shared session')
+  assert.equal(attackSessions(data, impact).find(s => s.uti === 'tokenEVIL0000bbbb').sid, sid)
+  const hunt = huntingQueries(data, impact).find(q => q.id === 'signin-session')
+  assert.ok(hunt.query.includes(`let sids = dynamic(["${sid}"])`)); assert.ok(hunt.query.includes('extend SignInSession = tolower(tostring(parse_json(AppAccessContext).AADSessionId))'))
+  assert.ok(!hunt.tables.includes('AzureActivity'), 'only tables with a session column')
+  // Only after the attacker: the owner still working in it, or another exit. Medium, no mark.
+  ev('s4', 'signed in (non-interactive)', 'later', { UniqueTokenIdentifier: 'tokenLATE0000cccc', SessionId: sid }, '2026-09-25T12:00:00.000Z')
+  const shared = project('h', more.filter(a => a.payload.id !== 's1' && a.payload.fact_id !== 's1')).data
+  const sharedFinding = signInSessionFindings(shared, analyzeImpact(shared))[0]
+  assert.equal(sharedFinding.kind, 'shared'); assert.deepEqual(sharedFinding.others, ['later'])
+  assert.equal(adviceFor(shared, analyzeImpact(shared)).find(a => a.id === `sid-${sid}`).severity, 'medium')
+}
 // Sessions (Entra UniqueTokenIdentifier / uti claim), "likely regular" activity, trace back, advice, KQL per evidence item.
 {
   const more = []
@@ -185,6 +234,12 @@ assert.match(markdown, /## Rotate, revoke, block/); assert.match(markdown, /```k
   // Replay without a known attacker.
   ev('t5', 'signed in', [['alice', 'identity'], ['e1', 'source'], ['portal', 'target']], [['2026-09-22T08:00:00.000Z', '{"UniqueTokenIdentifier": "tokenEEEE3333ffff"}']])
   ev('t6', 'signed in', [['alice', 'identity'], ['e2', 'source'], ['portal', 'target']], [['2026-09-22T08:05:00.000Z', '{"UniqueTokenIdentifier": "tokenEEEE3333ffff"}']])
+  // The same token in Defender XDR (UniqueTokenId) and, padded, in Azure AD Graph (SignInActivityId) is one session; a
+  // GUID-shaped SignInActivityId is no token ID and links nothing.
+  ev('t7', 'signed in', [['alice', 'identity'], ['e1', 'source'], ['portal', 'target']], [['2026-09-23T08:00:00.000Z', '{"UniqueTokenId": "tokenGGGG4444hhhh"}']])
+  ev('t8', 'get users', [['alice', 'identity'], ['e2', 'source'], ['portal', 'target']], [['2026-09-23T08:05:00.000Z', '{"SignInActivityId": "tokenGGGG4444hhhh=="}']])
+  ev('t9', 'get users', [['alice', 'identity'], ['e1', 'source'], ['portal', 'target']], [['2026-09-23T09:00:00.000Z', '{"SignInActivityId": "0b6c5c49-2f7a-4c1e-9d55-3c1f0e0a9b11"}']])
+  ev('t10', 'get users', [['alice', 'identity'], ['e2', 'source'], ['portal', 'target']], [['2026-09-23T09:05:00.000Z', '{"SignInActivityId": "0b6c5c49-2f7a-4c1e-9d55-3c1f0e0a9b11"}']])
   // Likely regular: the stolen secret listed the keys from the usual runner before the compromise too.
   ev('r1', 'listkeys storage/storageaccounts', [['ci', 'tool'], ['runner', 'source'], ['st2', 'target']], [['2026-09-10T06:00:00.000Z', null, null, 'listkeys · ASN 64500'], ['2026-09-16T06:00:00.000Z']])
   // New IPs after the compromise: one from the provider the secret always came from, one from elsewhere.
@@ -204,6 +259,8 @@ assert.match(markdown, /## Rotate, revoke, block/); assert.match(markdown, /```k
   assert.deepEqual([kind('tokenAAAA1111bbbb').kind, kind('tokenAAAA1111bbbb').others], ['theft', ['home']])
   assert.equal(kind('tokenEEEE3333ffff').kind, 'replay')
   assert.equal(findings[0].kind, 'redirector', 'redirectors first')
+  assert.deepEqual([kind('tokenGGGG4444hhhh').kind, kind('tokenGGGG4444hhhh').uses.length], ['replay', 2])
+  assert.ok(!findings.some(f => f.uti.includes('-') && f.uti.length === 36), 'GUID-shaped IDs are no sessions')
   const regular = impact.impacted.find(i => i.entity.id === 'st2')
   assert.deepEqual([regular.regular, impact.facts.get('r1').before], [true, 1])
   assert.ok(!impact.rotation.some(r => r.entityId === 'st2'), 'likely regular: nothing to rotate')
@@ -234,6 +291,11 @@ assert.match(markdown, /## Rotate, revoke, block/); assert.match(markdown, /```k
   // The session query names the tokens; KQL for one evidence item finds the original row.
   const queries = huntingQueries(data, impact)
   assert.match(queries.find(q => q.id === 'session-replay').query, /"tokenCCCC2222dddd"/)
+  const replayQuery = queries.find(q => q.id === 'session-replay')
+  assert.ok(['AADManagedIdentitySignInLogs', 'AADGraphActivityLogs', 'EntraIdSignInEvents', 'GraphAPIAuditEvents'].every(t => replayQuery.tables.includes(t)))
+  // Each branch filters on time first (the store is partitioned by TimeGenerated), then on the token with padding trimmed.
+  assert.ok(replayQuery.query.includes('(AADGraphActivityLogs | where TimeGenerated between (start .. now()) | where trim_end(@"=+", SignInActivityId) in (utis) | extend Token = trim_end(@"=+", SignInActivityId) | project TimeGenerated = TimeRequested,'))
+  assert.equal(replayQuery.query.split('where TimeGenerated between (start .. now())').length - 1, 12, 'one time filter per table, none after the union')
   assert.equal(evidenceQuery({ locator: 'AzureActivity CorrelationId=c-9 EventDataId=e-9', valid_from: '2026-09-20T11:00:00.000Z', source_id: null }, []),
     'AzureActivity\n| where TimeGenerated between (datetime(2026-09-20T11:00:00.000Z) - 10m .. datetime(2026-09-20T11:00:00.000Z) + 10m)\n| where CorrelationId == "c-9" and EventDataId == "e-9"')
   assert.match(evidenceQuery({ locator: 'GitLab audit events id=42', valid_from: '2026-09-20T11:00:00.000Z', source_id: 'g' }, [{ id: 'g', title: 'GitLab audit events (GitLab) · x.csv', excerpt: '[{"Type": "GitLabAudit_CL"}]' }]), /^GitLabAudit_CL\n.*\n\| where id == "42"$/)

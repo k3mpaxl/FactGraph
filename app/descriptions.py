@@ -15,6 +15,7 @@ ROUTE_HELP = {
     'restore_evidence': 'Restore retracted evidence. It returns as unconfirmed and needs a new analyst review.',
     'redo_board': 'Redo the last undone action group of this session (same batch as the undo).',
     'guidelines': 'Return the evidence-first modelling rules for agents (same text as the server instructions).',
+    'list_column_relations': 'Which columns join a Defender XDR or Sentinel table to other tables (token, session, user, device, app, resource IDs), from the xdrinternals.com catalog: per join the other table and column, the guidance and KQL. Needs no board and no token.',
     'delete_source': 'Delete a source. Refused while evidence or identifiers still reference it; detach them first.',
     'delete_relation': 'Delete a relationship or an activity together with all its evidence. Entities stay.',
     'create_type': 'Create an entity type with default color, icon and layer; entities of this kind use it automatically.',

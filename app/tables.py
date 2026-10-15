@@ -242,6 +242,8 @@ def file_name(name_field: str, folder_field: str) -> Callable[[Row, Callable], s
 
 
 DEVICE_IDS = (Ident("DeviceId", namespace="mde-device-id"), Ident("AadDeviceId", namespace="entra-device-id"))
+# Defender XDR renamed AadDeviceId to EntraIdDeviceId (EntraIdSignInEvents has only the new name, the beta table both).
+ENTRA_DEVICE_IDS = (Ident("EntraIdDeviceId", namespace="entra-device-id"), Ident("AadDeviceId", namespace="entra-device-id"))
 HASHES = lambda prefix="": (Ident(f"{prefix}SHA256", namespace="sha256"), Ident(f"{prefix}SHA1", namespace="sha1"), Ident(f"{prefix}MD5", namespace="md5"))  # noqa: E731
 
 
@@ -381,7 +383,7 @@ MAPPINGS: tuple[Mapping, ...] = (
         Part("source", "IP", ("IPAddress",), (Ident("IPAddress", "ip"),)),
         location(("Country",)),
         Part("target", "Service", ("Application",), (Ident("ApplicationId", namespace="entra-app-id"),)),
-        device("via", ("DeviceName",), (Ident("AadDeviceId", namespace="entra-device-id"),))),
+        device("via", ("DeviceName",), ENTRA_DEVICE_IDS)),
         operation=lambda r, g: sign_in(r, g, "ErrorCode"), locator=("ReportId", "RequestId", "CorrelationId"),
         details=(("location", place), ("user agent", "UserAgent"))),
     Mapping("AADSignInEventsBeta", "Defender XDR", ("AccountUpn", "Application", "ErrorCode", "LogonType"), (
@@ -389,7 +391,7 @@ MAPPINGS: tuple[Mapping, ...] = (
         Part("source", "IP", ("IPAddress",), (Ident("IPAddress", "ip"),)),
         location(("Country",)),
         Part("target", "Service", ("Application",), (Ident("ApplicationId", namespace="entra-app-id"),)),
-        device("via", ("DeviceName",), (Ident("AadDeviceId", namespace="entra-device-id"),))),
+        device("via", ("DeviceName",), ENTRA_DEVICE_IDS)),
         operation=lambda r, g: sign_in(r, g, "ErrorCode"), locator=("ReportId", "RequestId", "CorrelationId"),
         details=(("location", place), ("user agent", "UserAgent"))),
     Mapping("EntraIdSpnSignInEvents", "Defender XDR", ("ServicePrincipalName", "ServicePrincipalId", "ErrorCode"), (
@@ -476,7 +478,8 @@ MAPPINGS: tuple[Mapping, ...] = (
     Mapping("AuditLogs", "Sentinel", ("OperationName", "InitiatedBy", "TargetResources", "Category"), (
         Part("actor", "User", ("InitiatedBy.user.userPrincipalName",), (Ident("InitiatedBy.user.id", namespace="entra-object-id"),
              Ident("InitiatedBy.user.userPrincipalName", "email")), lower=True),
-        Part("identity", "Service Principal", ("InitiatedBy.app.displayName",), (Ident("InitiatedBy.app.servicePrincipalId", namespace="entra-object-id"),)),
+        Part("identity", "Service Principal", ("InitiatedBy.app.displayName",), (Ident("InitiatedBy.app.servicePrincipalId", namespace="entra-object-id"),
+             Ident("InitiatedBy.app.appId", namespace="entra-app-id"))),
         Part("source", "IP", ("InitiatedBy.user.ipAddress",), (Ident("InitiatedBy.user.ipAddress", "ip"),)),
         Part("target", "User", ("TargetResources.0.userPrincipalName", "TargetResources.0.displayName"), (Ident("TargetResources.0.id", namespace="entra-object-id"),))),
         operation=lambda r, g: text(g("OperationName")), time=("TimeGenerated", "ActivityDateTime"), locator=("CorrelationId", "Id")),

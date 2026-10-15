@@ -35,6 +35,7 @@ AGENT_TOOLS: dict[str, tuple[str, str | None]] = {
     'import_activities': ('import_activities', None),
     'import_table_export': ('import_defender_rows', 'Import Defender XDR / Sentinel result rows: table recognised from columns, entities matched by IDs. Other exports: pass a format from list_import_formats. dry_run first.'),
     'list_import_formats': ('list_import_formats', 'Column mappings the analyst saved for exports FactGraph does not recognise; pass one as format to import_defender_rows.'),
+    'list_column_relations': ('find_joins', 'Where else a column of a Defender XDR / Sentinel row leads (token, session, user, device, app IDs): other table and column, join guidance, KQL. Plan the next query; no args lists key kinds.'),
     'create_group': ('create_group', None),
     'update_group': ('update_group', None),
     'export_image': ('export_image', None),

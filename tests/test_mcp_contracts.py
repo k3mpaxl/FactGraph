@@ -53,7 +53,7 @@ class AgentGuidance(unittest.IsolatedAsyncioTestCase):
     AGENT_TOOLS = {'get_graph', 'get_impact', 'import_defender_rows', 'find_entities', 'create_entity', 'update_entity', 'merge_entities', 'delete_entity', 'add_identifier',
                    'create_relation', 'update_relation', 'delete_relation', 'create_activity', 'update_activity', 'create_source', 'update_source',
                    'add_evidence', 'update_evidence', 'review_evidence', 'retract_evidence', 'import_rows', 'import_activities',
-                   'create_group', 'update_group', 'export_image', 'undo', 'list_import_formats'}
+                   'create_group', 'update_group', 'export_image', 'undo', 'list_import_formats', 'find_joins'}
 
     async def test_default_agent_profile_is_small_and_explained(self):
         async with Client(mcp) as client:
@@ -63,8 +63,9 @@ class AgentGuidance(unittest.IsolatedAsyncioTestCase):
         size = sum(len(json.dumps(t.model_dump(exclude_none=True))) for t in tools)
         # 9,300: import_defender_rows (about 250 tokens) was added in v0.5.0; 9,500: get_impact and the compromise
         # marking on update_entity (about 250 tokens) for attack impact; 9,700: list_import_formats and the format of
-        # import_defender_rows (about 500 tokens) for saved import formats. Keep further growth deliberate.
-        self.assertLess(size // 4, 9700, f'agent tool definitions use about {size // 4} tokens')
+        # import_defender_rows (about 500 tokens) for saved import formats; 9,900: find_joins (about 180 tokens) for the
+        # next query from an evidence row. Keep further growth deliberate.
+        self.assertLess(size // 4, 9900, f'agent tool definitions use about {size // 4} tokens')
         for tool in tools:
             self.assertGreater(len(tool.description or ''), 30, tool.name)
             self.assertNotIn('REST equivalent', tool.description, tool.name)

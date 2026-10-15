@@ -507,7 +507,17 @@ export type SessionUse = { at: string; fact: string; item: string; ip: string | 
  */
 export type SessionFinding = { uti: string; kind: 'redirector' | 'theft' | 'replay'; identity: string | null; uses: SessionUse[]; sources: string[]; attacker: string[]; others: string[]; first: string; last: string }
 
-const UTI = /"(?:UniqueTokenIdentifier|uti|SignInActivityId)":\s*"([A-Za-z0-9_-]{12,})"/
+/**
+ * The token ID under every name the logs use (Sentinel UniqueTokenIdentifier, Defender XDR UniqueTokenId, the uti claim,
+ * Graph SignInActivityId), with trailing Base64 padding dropped: Azure AD Graph pads some values. Case is kept, a UTI is
+ * case-sensitive. GUID-shaped SignInActivityIds are no token IDs and are not matched with sign-ins.
+ */
+const UTI = /"(?:UniqueTokenIdentifier|UniqueTokenId|uniqueTokenId|uti|SignInActivityId)":\s*"([A-Za-z0-9_-]{12,})=*"/g
+const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+export function tokenId(note: string): string | undefined {
+  for (const match of note.matchAll(UTI)) if (!GUID.test(match[1])) return match[1]
+  return undefined
+}
 const AGENT = /"(?:UserAgent|userAgent|user_agent)":\s*"([^"]{3,300})"/
 type Signals = { sessions: Map<string, SessionUse[]>; agents: Map<string, SessionUse[]>; agentOf: Map<string, string> }
 const signalCache = new WeakMap<object, Signals>()
@@ -527,10 +537,10 @@ export function rowSignals(data: Pick<GraphData, 'entities' | 'facts'>): Signals
     const identity = parts.find(p => (p.role === 'identity' || p.role === 'actor') && USABLE.test(kinds.get(p.entity_id) ?? ''))?.entity_id ?? null
     for (const item of fact.assertions) {
       if (item.retracted_at || !item.valid_from || !item.note) continue
-      const hasSession = item.note.includes('niqueTokenIdentifier') || item.note.includes('"uti"') || item.note.includes('SignInActivityId')
+      const hasSession = item.note.includes('niqueTokenId') || item.note.includes('"uti"') || item.note.includes('SignInActivityId')
       const hasAgent = item.note.includes('serAgent') || item.note.includes('user_agent')
       if (!hasSession && !hasAgent) continue
-      const uti = hasSession ? UTI.exec(item.note)?.[1] : undefined
+      const uti = hasSession ? tokenId(item.note) : undefined
       const agent = hasAgent ? AGENT.exec(item.note)?.[1] ?? null : null
       const use = { at: item.valid_from, fact: fact.id, item: item.id, ip, identity, agent }
       if (uti) { let list = sessions.get(uti); if (!list) sessions.set(uti, list = []); list.push(use) }

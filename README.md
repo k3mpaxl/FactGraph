@@ -269,7 +269,7 @@ The **Impact** view (tab, command palette, or *Mark compromised…* in the inspe
 - **Mark what is compromised.** A credential *since* a time (the secret leaked on 15 September: only its use from then on counts), an IP of the attacker's infrastructure (*always*, or within a window), an identity or a device. Markings are part of the board, synced, undoable, and say who set them when.
 - **Derived compromise.** Whatever attacker infrastructure (a marked IP or host) used *successfully* inside its window is in the attacker's hands: credentials, service principals, accounts are marked *compromised (derived)*, no later than their first such use (it may have been stolen earlier, so the hunting window starts two weeks before). Failed attempts prove nothing, and it never runs the other way: an IP that used a stolen secret may be its legitimate owner. *Confirm* turns it into a marking, *Not compromised* records that it was checked and keeps it from being derived again.
 - **Advice** at the top of the view says what the evidence suggests doing next, each with the evidence it rests on and the action: mark an IP that is new since the compromise (higher priority in the same network, /24 for IPv4 or /64 for IPv6, or network provider as a known attacker IP; only a note when it belongs to the provider, AS number, the identity already used before the compromise: a rotating cloud or CI egress), confirm derived compromises, find where a credential was taken from, rotate again where the attacker came back, prove the rotation, look further back than the first known activity.
-- **Session tokens (UTI).** Entra records the unique token identifier of every session (`UniqueTokenIdentifier` in sign-ins, the `uti` claim in AzureActivity, `SignInActivityId` in Graph activity); FactGraph reads it from the original rows. A session used from the attacker and from another IP points at a **redirector** (the other IP came with or after the attacker: mark it) or at **token theft** (the other IP used it first: the token leaked there; investigate that system and revoke the sessions). A session from several IPs without a known attacker is a replay candidate. *Everything done with the replayed session tokens* hunts them across sign-ins, Azure and Graph.
+- **Session tokens (UTI).** Entra records the unique token identifier of every session (`UniqueTokenIdentifier` in Sentinel sign-ins, `UniqueTokenId` in Defender XDR sign-ins, Microsoft 365 and Defender for Cloud Apps, the `uti` claim in AzureActivity, `SignInActivityId` in Graph activity); FactGraph reads it from the original rows. Trailing Base64 padding (Azure AD Graph) is dropped, case is kept, and GUID-shaped `SignInActivityId` values are not treated as tokens. A session used from the attacker and from another IP points at a **redirector** (the other IP came with or after the attacker: mark it) or at **token theft** (the other IP used it first: the token leaked there; investigate that system and revoke the sessions). A session from several IPs without a known attacker is a replay candidate. *Everything done with the replayed session tokens* hunts them across user, service principal and managed identity sign-ins, Azure, Microsoft Graph, Azure AD Graph and Microsoft 365, with the same padding rule.
 - **Sessions as one unit.** Everything done with one session token belongs to whoever holds it: an IP that uses the attacker's session after them is derived compromised (*same session token*), the IP that used it before is where it was stolen. *Sessions the attacker worked in* lists them with login, IPs and operations.
 - **User agents.** An agent that came with the attacker and that the compromised identities never used before is a lead; other IPs with the same agent are candidates (*Who else used the attacker's user agents?*). Agents from the baseline before the compromise, browsers and very common ones are weak and said so.
 - **Good.** Mark an entity good (known legitimate, e.g. your CI runner or egress IP): it is never derived, it is no pivot, and what runs from it is not attacker activity, even with a stolen credential. *Group harmless* collapses good and likely-regular entities into one group. Without events before the compromise FactGraph says so and suggests importing an earlier export to build a baseline.
@@ -303,7 +303,7 @@ The repository also contains [.vscode/mcp.json](.vscode/mcp.json); in VS Code ru
 
 ### MCP tools
 
-By default the server exposes a **compact agent profile with 27 tools** (about 9,700 tokens of tool descriptions). Fewer tools mean less context usage and better tool choice.
+By default the server exposes a **compact agent profile with 28 tools** (about 9,850 tokens of tool descriptions). Fewer tools mean less context usage and better tool choice.
 
 The board token in the `X-FactGraph-Token` header names the board (every browser tab makes its own token for each board), so agent tools take no board ID and agents never need to ask for one. A `board_id` passed anyway is accepted and must match the token. Clients that cannot send headers pass `board_token` in each call; the full profile also shows `board_id` as an optional parameter.
 
@@ -317,6 +317,7 @@ The board token in the `X-FactGraph-Token` header names the board (every browser
 | Imports | `import_defender_rows` (built-in tables or a `format`), `list_import_formats`, `import_rows`, `import_activities` | `/imports/table`, `/imports/formats`, `/imports/inspect`, `/imports/preview`, `/imports/file`, `/imports/activity`, `/imports/kql`, `/imports/activities` |
 | Attack impact | `get_impact`; mark with `update_entity` (`compromise: {from, to, note}`, `rotated_at`) | `GET /impact`, `PATCH /entities/{id}` |
 | Overview and export | `create_group`, `update_group`, `export_image` | `/groups…`, `/export` |
+| Next query: where a column leads | `find_joins` | `GET /api/relations?table=&column=` (no board, no token) |
 | Undo | `undo` | `/undo` |
 
 The REST API stays complete (types, perspectives, single-item reads, history, redo, raw actions …). With `FACTGRAPH_MCP_TOOLS=full` the MCP server instead exposes one `rest_<operation>` tool per REST operation, with identical parameters and validation:
@@ -409,6 +410,14 @@ Export the results of an advanced hunting query (Defender XDR) or a Log Analytic
 - **Agents and scripts:** `POST /imports/table` with the rows (MCP `import_defender_rows`), or `POST /imports/file` with `auto=true`; both support `dry_run`.
 
 The table schemas (names, columns, types; no description text) are generated from the Microsoft Learn docs via [defender-docs-mirror](https://github.com/merill/defender-docs-mirror): `python scripts/build_table_schemas.py <path to a clone>` writes `app/data/table_schemas.json`.
+
+### Which columns join: the xdrinternals.com relationship catalog
+
+Which column of one table refers to the same token, session, user, device, app or resource as a column of another table comes from the [relationship catalog of xdrinternals.com](https://xdrinternals.com/relationships/) (MIT License, Copyright (c) 2025 Fabian & Nathan, see [app/data/column_relations.LICENSE](app/data/column_relations.LICENSE)). `python scripts/build_column_relations.py` writes `app/data/column_relations.json`: per join both ends (table, column, JSON path, time column), the kind of key, the guidance (for example: token IDs are case-sensitive, remove only trailing padding) and the KQL.
+
+- **Agents** ask `find_joins` (REST `GET /api/relations?table=AADGraphActivityLogs&column=SignInActivityId`) where a column of an evidence row leads, and get the other tables with the KQL; without arguments it lists the kinds of keys.
+- **Imports** link the entity IDs the catalog joins on (user and service principal object IDs, app IDs, Defender and Entra device IDs) as identifiers, so the same user or device from different tables is one entity. A test checks every such join against the table mappings.
+- **Sessions** in the impact view and the session hunting query cover every token column of the catalog.
 
 ## Export as PNG or SVG
 

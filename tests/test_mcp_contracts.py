@@ -17,7 +17,11 @@ class ParityContracts(unittest.IsolatedAsyncioTestCase):
             tools = {t.name: t for t in await client.list_tools()}
         self.assertTrue(all(name.startswith('rest_') for name in tools), 'full profile shows only rest_ tools')
         # File uploads (import, inspect) have no MCP equivalent: agents send rows to /imports/table and /imports/preview.
-        routes = [r for r in app.routes if isinstance(r, APIRoute) and r.path.startswith('/api/') and not r.path.endswith(('/imports/file', '/imports/inspect'))]
+        routes = [
+            r
+            for r in app.routes
+            if isinstance(r, APIRoute) and r.path.startswith('/api/') and not r.path.endswith(('/imports/file', '/imports/inspect'))
+        ]
         self.assertGreater(len(routes), 40)
         for route in routes:
             tool = tools['rest_' + route.endpoint.__name__]
@@ -28,7 +32,7 @@ class ParityContracts(unittest.IsolatedAsyncioTestCase):
                 self.assertIn(field.name, fields, route.path)
                 schema = fields[field.name]
                 if '$ref' in schema:
-                    schema = tool.input_schema['$defs'][schema['$ref'].rsplit('/',1)[1]]
+                    schema = tool.input_schema['$defs'][schema['$ref'].rsplit('/', 1)[1]]
                 self.assertEqual(set(schema['properties']), set(field.field_info.annotation.model_fields), route.path)
                 self.assertFalse(schema['additionalProperties'])
         self.assertFalse(any('list_board' in name for name in tools))
@@ -36,9 +40,10 @@ class ParityContracts(unittest.IsolatedAsyncioTestCase):
     async def test_canonical_patch_preserves_explicit_null_and_rejects_extra(self):
         from app.contracts import EvidenceUpdate, SourceInput, EntityUpdate
         from pydantic import ValidationError
-        self.assertEqual(EvidenceUpdate(valid_from=None).model_dump(exclude_unset=True), {'valid_from':None})
+
+        self.assertEqual(EvidenceUpdate(valid_from=None).model_dump(exclude_unset=True), {'valid_from': None})
         self.assertEqual(EvidenceUpdate().model_dump(exclude_unset=True), {})
-        self.assertEqual(EntityUpdate(color=None).model_dump(exclude_unset=True), {'color':None})
+        self.assertEqual(EntityUpdate(color=None).model_dump(exclude_unset=True), {'color': None})
         with self.assertRaises(ValidationError):
             EvidenceUpdate(review_status='confirmed')
         with self.assertRaises(ValidationError):
@@ -50,10 +55,36 @@ class ParityContracts(unittest.IsolatedAsyncioTestCase):
 
 
 class AgentGuidance(unittest.IsolatedAsyncioTestCase):
-    AGENT_TOOLS = {'get_graph', 'get_impact', 'import_defender_rows', 'find_entities', 'create_entity', 'update_entity', 'merge_entities', 'delete_entity', 'add_identifier',
-                   'create_relation', 'update_relation', 'delete_relation', 'create_activity', 'update_activity', 'create_source', 'update_source',
-                   'add_evidence', 'update_evidence', 'review_evidence', 'retract_evidence', 'import_rows', 'import_activities',
-                   'create_group', 'update_group', 'export_image', 'undo', 'list_import_formats', 'find_joins'}
+    AGENT_TOOLS = {
+        'get_graph',
+        'get_impact',
+        'import_defender_rows',
+        'find_entities',
+        'create_entity',
+        'update_entity',
+        'merge_entities',
+        'delete_entity',
+        'add_identifier',
+        'create_relation',
+        'update_relation',
+        'delete_relation',
+        'create_activity',
+        'update_activity',
+        'create_source',
+        'update_source',
+        'add_evidence',
+        'update_evidence',
+        'review_evidence',
+        'retract_evidence',
+        'import_rows',
+        'import_activities',
+        'create_group',
+        'update_group',
+        'export_image',
+        'undo',
+        'list_import_formats',
+        'find_joins',
+    }
 
     async def test_default_agent_profile_is_small_and_explained(self):
         async with Client(mcp) as client:
@@ -92,5 +123,17 @@ class AgentGuidance(unittest.IsolatedAsyncioTestCase):
 
     def test_instructions_cover_workflow(self):
         from app.main import MCP_INSTRUCTIONS
-        for phrase in ('find_entities', 'create_activity', 'unconfirmed', 'review_evidence', 'review_note', 'create_group', 'dry_run', 'board_token', '409', 'FACTGRAPH_MCP_TOOLS'):
+
+        for phrase in (
+            'find_entities',
+            'create_activity',
+            'unconfirmed',
+            'review_evidence',
+            'review_note',
+            'create_group',
+            'dry_run',
+            'board_token',
+            '409',
+            'FACTGRAPH_MCP_TOOLS',
+        ):
             self.assertIn(phrase, MCP_INSTRUCTIONS)

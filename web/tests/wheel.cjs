@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict')
 const path = require('node:path').resolve(process.argv[2])
 const { classifyWheel, createWheelClassifier, zoomFactor, zoomAround } = require(path + '/wheel.js')
-const ev = (e) => ({ deltaX: 0, deltaY: 0, deltaMode: 0, ctrlKey: false, ...e })
+const ev = e => ({ deltaX: 0, deltaY: 0, deltaMode: 0, ctrlKey: false, ...e })
 
 // Mouse wheels: Chrome/Safari notches (wheelDeltaY ±120), Firefox line mode, plain 100px notches.
 assert.equal(classifyWheel(ev({ deltaY: 100, wheelDeltaY: -120 })), 'zoom')

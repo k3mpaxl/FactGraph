@@ -1,4 +1,5 @@
 """Board-scoped operations and REST/MCP adapters using exactly the same contracts."""
+
 from __future__ import annotations
 
 import inspect
@@ -89,9 +90,18 @@ def register_extensions(app, mcp, core):
             source = await record(board_id, 'sources', evidence['source_id']) if evidence.get('source_id') else None
             if not source or source.get('revision') != body.expected_source_revision:
                 raise HTTPException(409, 'Source missing or revision changed')
-            if evidence.get('retracted_at') or source.get('source_kind') != 'primary' or not source.get('uri', '').strip() or not source.get('excerpt', '').strip():
+            if (
+                evidence.get('retracted_at')
+                or source.get('source_kind') != 'primary'
+                or not source.get('uri', '').strip()
+                or not source.get('excerpt', '').strip()
+            ):
                 raise HTTPException(422, 'Active evidence requires a primary source with reference and original results')
-            if not evidence.get('locator', '').strip() or not (evidence.get('observation') or evidence.get('note', '')).strip() or not body.review_note.strip():
+            if (
+                not evidence.get('locator', '').strip()
+                or not (evidence.get('observation') or evidence.get('note', '')).strip()
+                or not body.review_note.strip()
+            ):
                 raise HTTPException(422, 'Observation, locator and review note are required')
         accepted = await apply(board_id, [action('assertion.review', {'id': evidence_id, **body.model_dump()})])
         return {'board_id': board_id, 'id': evidence_id, 'accepted_actions': accepted}
@@ -99,12 +109,20 @@ def register_extensions(app, mcp, core):
     @app.post('/api/boards/{board_id}/relations/{relation_id}/evidence/{evidence_id}/retract')
     async def retract_evidence(board_id: str, relation_id: str, evidence_id: str):
         await evidence_record(board_id, relation_id, evidence_id)
-        return {'board_id': board_id, 'id': evidence_id, 'accepted_actions': await apply(board_id, [action('assertion.retract', {'id': evidence_id})])}
+        return {
+            'board_id': board_id,
+            'id': evidence_id,
+            'accepted_actions': await apply(board_id, [action('assertion.retract', {'id': evidence_id})]),
+        }
 
     @app.post('/api/boards/{board_id}/relations/{relation_id}/evidence/{evidence_id}/restore')
     async def restore_evidence(board_id: str, relation_id: str, evidence_id: str):
         await evidence_record(board_id, relation_id, evidence_id)
-        return {'board_id': board_id, 'id': evidence_id, 'accepted_actions': await apply(board_id, [action('assertion.restore', {'id': evidence_id})])}
+        return {
+            'board_id': board_id,
+            'id': evidence_id,
+            'accepted_actions': await apply(board_id, [action('assertion.restore', {'id': evidence_id})]),
+        }
 
     @app.patch('/api/boards/{board_id}')
     async def rename_board(board_id: str, body: BoardPatch):
@@ -112,12 +130,22 @@ def register_extensions(app, mcp, core):
 
     @app.patch('/api/boards/{board_id}/entities/{entity_id}/position')
     async def position_entity(board_id: str, entity_id: str, body: PositionInput):
-        return {'board_id': board_id, 'id': entity_id, 'accepted_actions': await apply(board_id, [action('entity.position', {'id': entity_id, **body.model_dump()})])}
+        return {
+            'board_id': board_id,
+            'id': entity_id,
+            'accepted_actions': await apply(board_id, [action('entity.position', {'id': entity_id, **body.model_dump()})]),
+        }
 
     @app.post('/api/boards/{board_id}/entities/{entity_id}/identifiers', status_code=201)
     async def create_identifier(board_id: str, entity_id: str, body: IdentifierInput):
         identifier_id = body.id or str(uuid4())
-        return {'board_id': board_id, 'id': identifier_id, 'accepted_actions': await apply(board_id, [action('identifier.add', {**body.model_dump(), 'id': identifier_id, 'entity_id': entity_id})])}
+        return {
+            'board_id': board_id,
+            'id': identifier_id,
+            'accepted_actions': await apply(
+                board_id, [action('identifier.add', {**body.model_dump(), 'id': identifier_id, 'entity_id': entity_id})]
+            ),
+        }
 
     async def check_identifier(board_id, entity_id, identifier_id):
         entity = await record(board_id, 'entities', entity_id) or {}
@@ -130,12 +158,20 @@ def register_extensions(app, mcp, core):
         patch = body.model_dump(exclude_unset=True)
         if not patch:
             raise HTTPException(422, 'Empty patch')
-        return {'board_id': board_id, 'id': identifier_id, 'accepted_actions': await apply(board_id, [action('identifier.update', {'id': identifier_id, **patch})])}
+        return {
+            'board_id': board_id,
+            'id': identifier_id,
+            'accepted_actions': await apply(board_id, [action('identifier.update', {'id': identifier_id, **patch})]),
+        }
 
     @app.delete('/api/boards/{board_id}/entities/{entity_id}/identifiers/{identifier_id}')
     async def delete_identifier(board_id: str, entity_id: str, identifier_id: str):
         await check_identifier(board_id, entity_id, identifier_id)
-        return {'board_id': board_id, 'id': identifier_id, 'accepted_actions': await apply(board_id, [action('identifier.delete', {'id': identifier_id})])}
+        return {
+            'board_id': board_id,
+            'id': identifier_id,
+            'accepted_actions': await apply(board_id, [action('identifier.delete', {'id': identifier_id})]),
+        }
 
     @app.get('/api/boards/{board_id}/entities/{entity_id}/identifiers')
     async def list_identifiers(board_id: str, entity_id: str):
@@ -169,7 +205,7 @@ def register_extensions(app, mcp, core):
         result = await command(board_id, 'history', offset=offset, limit=limit)
         items = result['actions']
         total = result.get('total', len(items))
-        return {'board_id': board_id, 'items': items if 'total' in result else items[offset:offset+limit], 'total': total}
+        return {'board_id': board_id, 'items': items if 'total' in result else items[offset : offset + limit], 'total': total}
 
     @app.post('/api/boards/{board_id}/undo')
     async def undo_board(board_id: str):
@@ -196,7 +232,12 @@ def register_extensions(app, mcp, core):
             if offset < 0 or not 1 <= limit <= 1000:
                 raise HTTPException(422, 'Invalid pagination')
             result = await command(board_id, 'query', collection=key, q=q, offset=offset, limit=limit)
-            return {'board_id': board_id, 'items': result.get('items', []), 'total': result.get('total', 0), 'revision': result.get('revision')}
+            return {
+                'board_id': board_id,
+                'items': result.get('items', []),
+                'total': result.get('total', 0),
+                'revision': result.get('revision'),
+            }
 
         async def get_record(board_id: str, record_id: str):
             record = (await command(board_id, 'query', collection=key, id=record_id)).get('record')
@@ -215,14 +256,22 @@ def register_extensions(app, mcp, core):
     @app.post('/api/boards/{board_id}/types', status_code=201)
     async def create_type(board_id: str, body: TypeInput):
         type_id = body.id or str(uuid4())
-        return {'board_id': board_id, 'id': type_id, 'accepted_actions': await apply(board_id, [action('type.add', {**body.model_dump(), 'id': type_id})])}
+        return {
+            'board_id': board_id,
+            'id': type_id,
+            'accepted_actions': await apply(board_id, [action('type.add', {**body.model_dump(), 'id': type_id})]),
+        }
 
     @app.patch('/api/boards/{board_id}/types/{type_id}')
     async def update_type(board_id: str, type_id: str, body: TypePatch):
         patch = body.model_dump(exclude_unset=True)
         if not patch:
             raise HTTPException(422, 'Empty patch')
-        return {'board_id': board_id, 'id': type_id, 'accepted_actions': await apply(board_id, [action('type.update', {'id': type_id, **patch})])}
+        return {
+            'board_id': board_id,
+            'id': type_id,
+            'accepted_actions': await apply(board_id, [action('type.update', {'id': type_id, **patch})]),
+        }
 
     @app.delete('/api/boards/{board_id}/types/{type_id}')
     async def delete_type(board_id: str, type_id: str):
@@ -233,6 +282,7 @@ def register_extensions(app, mcp, core):
     collection_routes('perspectives', 'views')
 
     from app.structures import register_structures
+
     register_structures(app, core)
     describe_routes(app)
 
@@ -245,11 +295,23 @@ def register_extensions(app, mcp, core):
             continue
         method = next(iter(route.methods))
         name = route.endpoint.__name__
-        full_names.add(register_mcp_adapter(mcp, route, core['run_mcp_session'], core['board_of_session'], annotations=annotations_for(method, name)))
+        full_names.add(
+            register_mcp_adapter(mcp, route, core['run_mcp_session'], core['board_of_session'], annotations=annotations_for(method, name))
+        )
         if name in AGENT_TOOLS:
             tool_name, purpose_text = AGENT_TOOLS[name]
-            agent_names.add(register_mcp_adapter(mcp, route, core['run_mcp_session'], core['board_of_session'], name=tool_name,
-                description=purpose_text or purpose(route), annotations=annotations_for(method, name), show_board=False))
+            agent_names.add(
+                register_mcp_adapter(
+                    mcp,
+                    route,
+                    core['run_mcp_session'],
+                    core['board_of_session'],
+                    name=tool_name,
+                    description=purpose_text or purpose(route),
+                    annotations=annotations_for(method, name),
+                    show_board=False,
+                )
+            )
     missing = set(AGENT_TOOLS) - {r.endpoint.__name__ for r in app.routes if isinstance(r, APIRoute)}
     if missing:
         raise RuntimeError(f'Agent tool profile references unknown REST operations: {missing}')
@@ -263,15 +325,26 @@ BOARD_ID = Annotated[str | None, Field(description='Leave empty: the board of yo
 BOARD_TOKEN = Annotated[str | None, Field(description='Omit if the header is set.')]
 
 
-def register_mcp_adapter(mcp, route, run_session, board_of_session, *, name: str | None = None, description: str | None = None, annotations=None,
-                         show_board: bool = True) -> str:
+def register_mcp_adapter(
+    mcp,
+    route,
+    run_session,
+    board_of_session,
+    *,
+    name: str | None = None,
+    description: str | None = None,
+    annotations=None,
+    show_board: bool = True,
+) -> str:
     """An MCP tool for a REST operation. show_board=False (the agent profile) leaves board_id out of the schema agents see,
     so they never ask for it; a board_id passed anyway (older prompts) is still accepted and checked against the token."""
     endpoint = route.endpoint
     signature = inspect.signature(endpoint)
     hints = get_type_hints(endpoint)
-    parameters = [p.replace(annotation=BOARD_ID, default=None) if p.name == 'board_id' else p.replace(annotation=hints.get(p.name, p.annotation))
-                  for p in signature.parameters.values()]
+    parameters = [
+        p.replace(annotation=BOARD_ID, default=None) if p.name == 'board_id' else p.replace(annotation=hints.get(p.name, p.annotation))
+        for p in signature.parameters.values()
+    ]
     parameters.append(inspect.Parameter('board_token', inspect.Parameter.KEYWORD_ONLY, default=None, annotation=BOARD_TOKEN))
     # The former name, still accepted from older clients, no longer shown.
     parameters.append(inspect.Parameter('session_token', inspect.Parameter.KEYWORD_ONLY, default=None, annotation=str | None))
@@ -282,13 +355,20 @@ def register_mcp_adapter(mcp, route, run_session, board_of_session, *, name: str
         kwargs.pop('session_token', None)
         try:
             for name, annotation in hints.items():
-                if name in kwargs and inspect.isclass(annotation) and issubclass(annotation, StrictModel) and isinstance(kwargs[name], dict):
+                if (
+                    name in kwargs
+                    and inspect.isclass(annotation)
+                    and issubclass(annotation, StrictModel)
+                    and isinstance(kwargs[name], dict)
+                ):
                     kwargs[name] = annotation.model_validate(kwargs[name])
             if 'board_id' in signature.parameters:
+
                 async def run():
                     if not kwargs.get('board_id'):
                         kwargs['board_id'] = await board_of_session()
                     return await endpoint(**kwargs)
+
                 return await run_session(token, run)
             result = endpoint(**kwargs)
             return await result if inspect.isawaitable(result) else result
@@ -304,7 +384,12 @@ def register_mcp_adapter(mcp, route, run_session, board_of_session, *, name: str
     invoke.__doc__ = description or tool_description(route)
     tool = FunctionTool.from_function(invoke, name=invoke.__name__, annotations=annotations)
     # Only the advertised schema: arguments are validated against the function, which still accepts what is left out.
-    hidden = {'session_token'} | (set() if show_board else {'board_id'}) | (set() if 'board_id' in signature.parameters else {'board_token'})
-    tool.parameters = {**tool.parameters, 'properties': {key: value for key, value in tool.parameters.get('properties', {}).items() if key not in hidden}}
+    hidden = (
+        {'session_token'} | (set() if show_board else {'board_id'}) | (set() if 'board_id' in signature.parameters else {'board_token'})
+    )
+    tool.parameters = {
+        **tool.parameters,
+        'properties': {key: value for key, value in tool.parameters.get('properties', {}).items() if key not in hidden},
+    }
     mcp.add_tool(tool)
     return invoke.__name__

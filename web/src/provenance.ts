@@ -15,7 +15,10 @@ export function reviewKind(item: Assertion): ReviewKind {
 }
 
 export const REVIEW_LABEL: Record<ReviewKind, string> = {
-  import: 'Parsed by the import', analyst: 'Reviewed by an analyst', agent: 'Confirmed by an agent', open: 'To review',
+  import: 'Parsed by the import',
+  analyst: 'Reviewed by an analyst',
+  agent: 'Confirmed by an agent',
+  open: 'To review',
 }
 
 const AGENT_CHANNELS = ['REST', 'MCP']
@@ -56,7 +59,8 @@ export function reviewText(item: Assertion): string {
 
 /** "File import by an analyst", "Jo Doe by hand", "Agent via MCP (Gregor)", "Import by an agent via REST (Gregor)". */
 export function addedText(item: Assertion): string {
-  const via = item.created_via ?? null, by = item.created_by ?? null
+  const via = item.created_via ?? null,
+    by = item.created_by ?? null
   if (!via && !by) return 'Unknown (added before this was recorded)'
   if (by === 'Import' && (via === 'Import' || via === 'UI' || !via)) return 'File import by an analyst'
   if (via === 'REST' || via === 'MCP') {

@@ -468,7 +468,11 @@ npm test                                           # projection, review, converg
 npm run bench                                      # performance on a synthetic 12,000-action board; fails on large regressions
 npx playwright install chromium
 npm run test:e2e                                   # browser workflows against a real server
+npm run format                                     # Prettier (TypeScript, 140 columns); CI runs format:check
+cd .. && pip install --require-hashes -r requirements-dev.lock && ruff format app tests scripts   # Python, the same width
 ```
+
+The web interface is split by purpose: `App.tsx` (state, shortcuts, layout), `Inspector.tsx`, `Dialogs.tsx`, `Panels.tsx` (timeline, change log, explorer, command palette) and `ui.tsx` (shared building blocks).
 
 The browser tests run on temporary boards on port 18088 with a real MCP client. Among other things they cover analyst and agent review, offline sync with a concurrent merge in two browsers, activities, groups (including moving collapsed and expanded groups), layers, presence, export, mouse and trackpad navigation, the mobile layout, imports with preview and deduplication, and 10,000 imported evidence items.
 

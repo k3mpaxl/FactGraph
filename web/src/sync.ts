@@ -11,7 +11,10 @@ export type SyncSummary = Record<string, [maxClock: number, count: number, diges
 /** FNV-1a of an ID; XOR over a set is independent of order. */
 function hash(id: string): number {
   let h = 0x811c9dc5
-  for (let i = 0; i < id.length; i++) { h ^= id.charCodeAt(i); h = Math.imul(h, 0x01000193) }
+  for (let i = 0; i < id.length; i++) {
+    h ^= id.charCodeAt(i)
+    h = Math.imul(h, 0x01000193)
+  }
   return h >>> 0
 }
 
@@ -19,14 +22,20 @@ export function summarize(actions: BoardAction[]): SyncSummary {
   const summary: SyncSummary = {}
   for (const action of actions) {
     const entry = summary[action.actor] ?? (summary[action.actor] = [-1, 0, 0])
-    entry[0] = Math.max(entry[0], action.clock); entry[1]++; entry[2] = (entry[2] ^ hash(action.id)) >>> 0
+    entry[0] = Math.max(entry[0], action.clock)
+    entry[1]++
+    entry[2] = (entry[2] ^ hash(action.id)) >>> 0
   }
   return summary
 }
 
 export function isSummary(value: unknown): value is SyncSummary {
-  return !!value && typeof value === 'object' && !Array.isArray(value) &&
+  return (
+    !!value &&
+    typeof value === 'object' &&
+    !Array.isArray(value) &&
     Object.values(value).every(v => Array.isArray(v) && v.length === 3 && v.every(n => typeof n === 'number' && Number.isFinite(n)))
+  )
 }
 
 /**
@@ -36,15 +45,28 @@ export function isSummary(value: unknown): value is SyncSummary {
 export function syncPlan(actions: BoardAction[], theirs: SyncSummary | null): { send: BoardAction[]; askBack: boolean } {
   if (!theirs) return { send: actions, askBack: false }
   const byActor = new Map<string, BoardAction[]>()
-  for (const action of actions) { const list = byActor.get(action.actor); if (list) list.push(action); else byActor.set(action.actor, [action]) }
+  for (const action of actions) {
+    const list = byActor.get(action.actor)
+    if (list) list.push(action)
+    else byActor.set(action.actor, [action])
+  }
   const send: BoardAction[] = []
   let askBack = Object.keys(theirs).some(actor => !byActor.has(actor))
   for (const [actor, mine] of byActor) {
     const [max, count, digest] = theirs[actor] ?? [-1, 0, 0]
-    let below = 0, belowDigest = 0
-    for (const action of mine) if (action.clock <= max) { below++; belowDigest = (belowDigest ^ hash(action.id)) >>> 0 }
-    if (below === count && belowDigest === digest) { for (const action of mine) if (action.clock > max) send.push(action) }
-    else { send.push(...mine); askBack = true }
+    let below = 0,
+      belowDigest = 0
+    for (const action of mine)
+      if (action.clock <= max) {
+        below++
+        belowDigest = (belowDigest ^ hash(action.id)) >>> 0
+      }
+    if (below === count && belowDigest === digest) {
+      for (const action of mine) if (action.clock > max) send.push(action)
+    } else {
+      send.push(...mine)
+      askBack = true
+    }
   }
   return { send, askBack }
 }

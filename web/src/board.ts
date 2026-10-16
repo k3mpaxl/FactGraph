@@ -1,28 +1,116 @@
-import type { Assertion, Entity, EntityType, Fact, GraphData, Group, GroupBasis, GroupRule, Identifier, Participant, Perspective, Source, TruthState } from './types'
+import type {
+  Assertion,
+  Entity,
+  EntityType,
+  Fact,
+  GraphData,
+  Group,
+  GroupBasis,
+  GroupRule,
+  Identifier,
+  Participant,
+  Perspective,
+  Source,
+  TruthState,
+} from './types'
 import { initialPosition } from './layout'
 import { uuid } from './uuid'
 import { utc } from './time'
 
 export type ActionType =
-  | 'type.add' | 'type.update' | 'type.delete' | 'board.rename' | 'entity.add' | 'entity.update' | 'entity.position' | 'entity.delete' | 'entity.merge' | 'identifier.add' | 'identifier.delete'
-  | 'source.add' | 'source.update' | 'source.delete' | 'fact.add' | 'fact.update' | 'fact.delete'
-  | 'assertion.add' | 'assertion.update' | 'assertion.retract' | 'assertion.restore' | 'assertion.review' | 'assertion.delete' | 'action.undo' | 'action.redo' | 'identifier.update'
-  | 'fact.position' | 'group.add' | 'group.update' | 'group.delete' | 'view.add' | 'view.update' | 'view.delete'
+  | 'type.add'
+  | 'type.update'
+  | 'type.delete'
+  | 'board.rename'
+  | 'entity.add'
+  | 'entity.update'
+  | 'entity.position'
+  | 'entity.delete'
+  | 'entity.merge'
+  | 'identifier.add'
+  | 'identifier.delete'
+  | 'source.add'
+  | 'source.update'
+  | 'source.delete'
+  | 'fact.add'
+  | 'fact.update'
+  | 'fact.delete'
+  | 'assertion.add'
+  | 'assertion.update'
+  | 'assertion.retract'
+  | 'assertion.restore'
+  | 'assertion.review'
+  | 'assertion.delete'
+  | 'action.undo'
+  | 'action.redo'
+  | 'identifier.update'
+  | 'fact.position'
+  | 'group.add'
+  | 'group.update'
+  | 'group.delete'
+  | 'view.add'
+  | 'view.update'
+  | 'view.delete'
 
 export type BoardAction = {
-  boardId: string; id: string; actor: string; author: string; clock: number;
-  at: string; batch_id?: string; channel?: string; type: ActionType; payload: Record<string, unknown>;
+  boardId: string
+  id: string
+  actor: string
+  author: string
+  clock: number
+  at: string
+  batch_id?: string
+  channel?: string
+  type: ActionType
+  payload: Record<string, unknown>
 }
-export type ActionDraft = { id?: string; type: ActionType; payload: Record<string, unknown>; at?: string; author?: string; batch_id?: string; channel?: string }
+export type ActionDraft = {
+  id?: string
+  type: ActionType
+  payload: Record<string, unknown>
+  at?: string
+  author?: string
+  batch_id?: string
+  channel?: string
+}
 export type BoardProjection = { data: GraphData; name: string }
 
 const GROUP_BASES: GroupBasis[] = ['links', 'counterparts', 'shared-links', 'network']
 
 const actionTypes: ActionType[] = [
-  'type.add', 'type.update', 'type.delete', 'board.rename', 'entity.add', 'entity.update', 'entity.position', 'entity.delete', 'entity.merge', 'identifier.add', 'identifier.delete',
-  'source.add', 'source.update', 'source.delete', 'fact.add', 'fact.update', 'fact.delete',
-  'assertion.add', 'assertion.update', 'assertion.retract', 'assertion.restore', 'assertion.review', 'assertion.delete', 'action.undo', 'action.redo', 'identifier.update',
-  'fact.position', 'group.add', 'group.update', 'group.delete', 'view.add', 'view.update', 'view.delete',
+  'type.add',
+  'type.update',
+  'type.delete',
+  'board.rename',
+  'entity.add',
+  'entity.update',
+  'entity.position',
+  'entity.delete',
+  'entity.merge',
+  'identifier.add',
+  'identifier.delete',
+  'source.add',
+  'source.update',
+  'source.delete',
+  'fact.add',
+  'fact.update',
+  'fact.delete',
+  'assertion.add',
+  'assertion.update',
+  'assertion.retract',
+  'assertion.restore',
+  'assertion.review',
+  'assertion.delete',
+  'action.undo',
+  'action.redo',
+  'identifier.update',
+  'fact.position',
+  'group.add',
+  'group.update',
+  'group.delete',
+  'view.add',
+  'view.update',
+  'view.delete',
 ]
 // 'enthält': boards created with the earlier German interface still use it.
 export const CONTAINS_PREDICATES = ['contains', 'runs', 'hosts', 'includes', 'has', 'enthält']
@@ -35,29 +123,42 @@ export const CONTAINS_PREDICATES = ['contains', 'runs', 'hosts', 'includes', 'ha
 export const MAX_CLOCK = 2 ** 40
 const COLOR = /^#[0-9a-f]{6}$/i
 /** A colour from a peer, an action log or an API is used in SVG attributes and styles: only #rrggbb. */
-const color = (value: unknown) => typeof value === 'string' && COLOR.test(value) ? value : undefined
+const color = (value: unknown) => (typeof value === 'string' && COLOR.test(value) ? value : undefined)
 
 export function isAction(value: unknown): value is BoardAction {
   if (!value || typeof value !== 'object') return false
   const item = value as Partial<BoardAction>
-  return typeof item.boardId === 'string' && typeof item.id === 'string' &&
-    typeof item.actor === 'string' && typeof item.author === 'string' &&
-    Number.isSafeInteger(item.clock) && (item.clock ?? -1) >= 0 && (item.clock ?? 0) <= MAX_CLOCK &&
-    typeof item.at === 'string' && actionTypes.includes(item.type as ActionType) &&
-    !!item.payload && typeof item.payload === 'object' && !Array.isArray(item.payload)
+  return (
+    typeof item.boardId === 'string' &&
+    typeof item.id === 'string' &&
+    typeof item.actor === 'string' &&
+    typeof item.author === 'string' &&
+    Number.isSafeInteger(item.clock) &&
+    (item.clock ?? -1) >= 0 &&
+    (item.clock ?? 0) <= MAX_CLOCK &&
+    typeof item.at === 'string' &&
+    actionTypes.includes(item.type as ActionType) &&
+    !!item.payload &&
+    typeof item.payload === 'object' &&
+    !Array.isArray(item.payload)
+  )
 }
 
 export function isDraft(value: unknown): value is ActionDraft {
   if (!value || typeof value !== 'object') return false
   const item = value as Partial<ActionDraft>
-  return (item.id === undefined || typeof item.id === 'string') &&
-    actionTypes.includes(item.type as ActionType) && !!item.payload &&
-    typeof item.payload === 'object' && !Array.isArray(item.payload) &&
+  return (
+    (item.id === undefined || typeof item.id === 'string') &&
+    actionTypes.includes(item.type as ActionType) &&
+    !!item.payload &&
+    typeof item.payload === 'object' &&
+    !Array.isArray(item.payload) &&
     (item.author === undefined || typeof item.author === 'string')
+  )
 }
 
 export function sortActions(actions: BoardAction[]): BoardAction[] {
-  const compare = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0
+  const compare = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0)
   return [...actions].sort((a, b) => a.clock - b.clock || compare(a.actor, b.actor) || compare(a.id, b.id))
 }
 
@@ -66,14 +167,19 @@ export function normalizeIdentifier(scheme: string, raw: string) {
   return ['hostname', 'fqdn', 'email'].includes(scheme.toLowerCase()) ? trimmed.replace(/\.$/, '').toLowerCase() : trimmed
 }
 
-export function factKey(fact: Pick<Fact, 'subject_id' | 'predicate' | 'object_id' | 'valid_from' | 'valid_to'> & { participants?: Participant[] }) {
+export function factKey(
+  fact: Pick<Fact, 'subject_id' | 'predicate' | 'object_id' | 'valid_from' | 'valid_to'> & { participants?: Participant[] },
+) {
   const base = [fact.subject_id, fact.predicate.trim().toLowerCase(), fact.object_id, fact.valid_from ?? '', fact.valid_to ?? '']
   // Activities with the same operation but different participants are different events.
   return JSON.stringify(fact.participants?.length ? [...base, participantKey(fact.participants)] : base)
 }
 
 export function participantKey(participants: Participant[]) {
-  return participants.map(p => `${p.role.trim().toLowerCase()}:${p.entity_id}`).sort().join('|')
+  return participants
+    .map(p => `${p.role.trim().toLowerCase()}:${p.entity_id}`)
+    .sort()
+    .join('|')
 }
 
 export function parseParticipants(value: unknown): Participant[] | null {
@@ -82,10 +188,14 @@ export function parseParticipants(value: unknown): Participant[] | null {
   const items: Participant[] = []
   for (const item of value) {
     if (!item || typeof item !== 'object') return null
-    const entity_id = (item as Record<string, unknown>).entity_id, role = (item as Record<string, unknown>).role
+    const entity_id = (item as Record<string, unknown>).entity_id,
+      role = (item as Record<string, unknown>).role
     if (typeof entity_id !== 'string' || typeof role !== 'string' || !role.trim()) return null
     const key = `${role.trim().toLowerCase()}:${entity_id}`
-    if (!seen.has(key)) { seen.add(key); items.push({ entity_id, role: role.trim().toLowerCase() }) }
+    if (!seen.has(key)) {
+      seen.add(key)
+      items.push({ entity_id, role: role.trim().toLowerCase() })
+    }
   }
   return items
 }
@@ -93,7 +203,10 @@ export function parseParticipants(value: unknown): Participant[] | null {
 /** Subject is the first acting participant, object the first target; this keeps activities usable as edges. */
 export function activityEnds(participants: Participant[]) {
   const target = participants.find(p => p.role === 'target') ?? participants[participants.length - 1]
-  const subject = participants.find(p => p.entity_id !== target.entity_id && p.role !== 'target') ?? participants.find(p => p.entity_id !== target.entity_id) ?? participants[0]
+  const subject =
+    participants.find(p => p.entity_id !== target.entity_id && p.role !== 'target') ??
+    participants.find(p => p.entity_id !== target.entity_id) ??
+    participants[0]
   return { subject_id: subject.entity_id, object_id: target.entity_id }
 }
 
@@ -105,7 +218,7 @@ function parseRule(value: unknown): GroupRule | null {
   const container_id = typeof item.container_id === 'string' ? item.container_id : null
   return kinds.length || match.trim() || container_id ? { kinds, match, container_id } : null
 }
-const ids = (value: unknown) => Array.isArray(value) ? [...new Set(value.filter((v): v is string => typeof v === 'string'))] : []
+const ids = (value: unknown) => (Array.isArray(value) ? [...new Set(value.filter((v): v is string => typeof v === 'string'))] : [])
 
 /** Channels through which agents write: what arrives there is the agent's claim until an analyst vets it. */
 const AGENT_CHANNELS = new Set(['REST', 'MCP'])
@@ -129,12 +242,24 @@ export function project(boardId: string, operations: BoardAction[]): BoardProjec
   const aliases = new Map<string, string>()
   // Evidence by relationship and by source: deleting, merging or editing never scans all evidence, which would make
   // every replay of a long history quadratic (the projection runs on every change).
-  const byFact = new Map<string, Set<string>>(), bySource = new Map<string, Set<string>>()
-  const link = (index: Map<string, Set<string>>, key: string | null, id: string) => { if (!key) return; let set = index.get(key); if (!set) index.set(key, set = new Set()); set.add(id) }
-  const unlink = (index: Map<string, Set<string>>, key: string | null, id: string) => { if (key) index.get(key)?.delete(id) }
-  const evidenceOf = (index: Map<string, Set<string>>, key: string) => [...(index.get(key) ?? [])].map(id => assertions.get(id)).filter((a): a is Assertion => !!a)
+  const byFact = new Map<string, Set<string>>(),
+    bySource = new Map<string, Set<string>>()
+  const link = (index: Map<string, Set<string>>, key: string | null, id: string) => {
+    if (!key) return
+    let set = index.get(key)
+    if (!set) index.set(key, (set = new Set()))
+    set.add(id)
+  }
+  const unlink = (index: Map<string, Set<string>>, key: string | null, id: string) => {
+    if (key) index.get(key)?.delete(id)
+  }
+  const evidenceOf = (index: Map<string, Set<string>>, key: string) =>
+    [...(index.get(key) ?? [])].map(id => assertions.get(id)).filter((a): a is Assertion => !!a)
   const dropEvidence = (factId: string) => {
-    for (const assertion of evidenceOf(byFact, factId)) { assertions.delete(assertion.id); unlink(bySource, assertion.source_id, assertion.id) }
+    for (const assertion of evidenceOf(byFact, factId)) {
+      assertions.delete(assertion.id)
+      unlink(bySource, assertion.source_id, assertion.id)
+    }
     byFact.delete(factId)
   }
   // Merged entity IDs keep pointing at their target, so concurrent edits by other analysts that still
@@ -165,7 +290,14 @@ export function project(boardId: string, operations: BoardAction[]): BoardProjec
       const id = typeof item.id === 'string' ? item.id : ''
       switch (operation.type) {
         case 'type.add':
-          if (id && typeof item.name === 'string') entityTypes.set(id, {id,name:item.name,color:color(item.color) ?? '#8da9ce',icon:String(item.icon ?? 'Box'),...(typeof item.layer === 'string' && item.layer ? {layer:item.layer} : {})})
+          if (id && typeof item.name === 'string')
+            entityTypes.set(id, {
+              id,
+              name: item.name,
+              color: color(item.color) ?? '#8da9ce',
+              icon: String(item.icon ?? 'Box'),
+              ...(typeof item.layer === 'string' && item.layer ? { layer: item.layer } : {}),
+            })
           break
         case 'type.update': {
           const type = entityTypes.get(id)
@@ -178,18 +310,27 @@ export function project(boardId: string, operations: BoardAction[]): BoardProjec
           for (const entity of entities.values()) if (entity.kind === oldName) entity.kind = type.name
           break
         }
-        case 'type.delete': entityTypes.delete(id); break
+        case 'type.delete':
+          entityTypes.delete(id)
+          break
         case 'board.rename':
           if (typeof item.name === 'string' && item.name.trim()) name = item.name.trim().slice(0, 80)
           break
         case 'entity.add':
           if (id && typeof item.name === 'string' && typeof item.kind === 'string' && !entities.has(id)) {
             const fallback = initialPosition(placementIndex++)
-            entities.set(id, { id, name: item.name, kind: item.kind,
-              description: String(item.description ?? ''), created_at: String(item.created_at ?? operation.at), identifiers: [],
-              color: color(item.color), pinned: item.pinned === true,
+            entities.set(id, {
+              id,
+              name: item.name,
+              kind: item.kind,
+              description: String(item.description ?? ''),
+              created_at: String(item.created_at ?? operation.at),
+              identifiers: [],
+              color: color(item.color),
+              pinned: item.pinned === true,
               ...(typeof item.layer === 'string' && item.layer ? { layer: item.layer } : {}),
-              position: validPosition(item.x, item.y) ? { x: item.x as number, y: item.y as number } : fallback })
+              position: validPosition(item.x, item.y) ? { x: item.x as number, y: item.y as number } : fallback,
+            })
           }
           break
         case 'entity.update': {
@@ -199,24 +340,31 @@ export function project(boardId: string, operations: BoardAction[]): BoardProjec
           if (entity && item.compromise === null) delete entity.compromise
           else if (entity && item.compromise && typeof item.compromise === 'object') {
             const c = item.compromise as Record<string, unknown>
-            entity.compromise = { from: utc(c.from), to: utc(c.to), note: typeof c.note === 'string' ? c.note.slice(0, 2000) : '',
-              by: operation.author, at: operation.at, via: operation.channel ?? 'UI', ...(c.cleared === true ? { cleared: true } : {}), ...(c.level === 'suspected' || c.level === 'confirmed' ? { level: c.level } : {}) }
+            entity.compromise = {
+              from: utc(c.from),
+              to: utc(c.to),
+              note: typeof c.note === 'string' ? c.note.slice(0, 2000) : '',
+              by: operation.author,
+              at: operation.at,
+              via: operation.channel ?? 'UI',
+              ...(c.cleared === true ? { cleared: true } : {}),
+              ...(c.level === 'suspected' || c.level === 'confirmed' ? { level: c.level } : {}),
+            }
           }
           if (entity && item.rotated_at === null) delete entity.rotated_at
           else if (entity && utc(item.rotated_at)) entity.rotated_at = utc(item.rotated_at)!
           if (entity && (item.layer === null || item.layer === '')) delete entity.layer
           else if (entity && typeof item.layer === 'string') entity.layer = item.layer
           if (entity && color(item.color)) entity.color = color(item.color)
-          if (entity) for (const field of ['name', 'kind', 'description'] as const) {
-            if (typeof item[field] === 'string' && (field === 'description' || item[field].trim()))
-              entity[field] = item[field].trim()
-          }
+          if (entity)
+            for (const field of ['name', 'kind', 'description'] as const) {
+              if (typeof item[field] === 'string' && (field === 'description' || item[field].trim())) entity[field] = item[field].trim()
+            }
           break
         }
         case 'entity.position': {
           const entity = entities.get(id)
-          if (entity && validPosition(item.x, item.y))
-            entity.position = { x: item.x as number, y: item.y as number }
+          if (entity && validPosition(item.x, item.y)) entity.position = { x: item.x as number, y: item.y as number }
           break
         }
         case 'entity.delete':
@@ -226,20 +374,31 @@ export function project(boardId: string, operations: BoardAction[]): BoardProjec
             for (const [key, fact] of facts) {
               const remaining = fact.participants?.filter(p => p.entity_id !== id)
               // An activity loses the participant, whichever role it had, and keeps its evidence while two others remain.
-              if (fact.participants?.length && remaining!.length < fact.participants.length && new Set(remaining!.map(p => p.entity_id)).size >= 2) {
+              if (
+                fact.participants?.length &&
+                remaining!.length < fact.participants.length &&
+                new Set(remaining!.map(p => p.entity_id)).size >= 2
+              ) {
                 canonicalFacts.delete(factKey(fact))
                 fact.participants = remaining
                 Object.assign(fact, activityEnds(remaining!))
                 canonicalFacts.set(factKey(fact), key)
                 // The confirmed statement named the deleted participant: what remains has to be reviewed again.
                 for (const assertion of evidenceOf(byFact, key)) invalidateReview(assertion)
-              } else if (fact.subject_id === id || fact.object_id === id || (remaining && remaining.length < (fact.participants?.length ?? 0))) {
+              } else if (
+                fact.subject_id === id ||
+                fact.object_id === id ||
+                (remaining && remaining.length < (fact.participants?.length ?? 0))
+              ) {
                 facts.delete(key)
                 canonicalFacts.delete(factKey(fact))
                 dropEvidence(key)
               }
             }
-            for (const group of groups.values()) { group.members = group.members.filter(m => m !== id); group.excluded = group.excluded.filter(m => m !== id) }
+            for (const group of groups.values()) {
+              group.members = group.members.filter(m => m !== id)
+              group.excluded = group.excluded.filter(m => m !== id)
+            }
           }
           break
         case 'entity.merge': {
@@ -248,24 +407,31 @@ export function project(boardId: string, operations: BoardAction[]): BoardProjec
           if (!sourceId || !targetId || sourceId === targetId || !entities.has(sourceId) || !entities.has(targetId)) break
           for (const identifier of identifiers.values()) if (identifier.entity_id === sourceId) identifier.entity_id = targetId
           for (const [factId, fact] of [...facts]) {
-            if (fact.subject_id !== sourceId && fact.object_id !== sourceId && !fact.participants?.some(p => p.entity_id === sourceId)) continue
+            if (fact.subject_id !== sourceId && fact.object_id !== sourceId && !fact.participants?.some(p => p.entity_id === sourceId))
+              continue
             canonicalFacts.delete(factKey(fact))
             if (fact.subject_id === sourceId) fact.subject_id = targetId
             if (fact.object_id === sourceId) fact.object_id = targetId
-            if (fact.participants) fact.participants = parseParticipants(fact.participants.map(p => p.entity_id === sourceId ? { ...p, entity_id: targetId } : p)) ?? fact.participants
+            if (fact.participants)
+              fact.participants =
+                parseParticipants(fact.participants.map(p => (p.entity_id === sourceId ? { ...p, entity_id: targetId } : p))) ??
+                fact.participants
             for (const evidence of evidenceOf(byFact, factId)) invalidateReview(evidence)
             const key = factKey(fact)
             const existingId = canonicalFacts.get(key)
             if (existingId && existingId !== factId) {
-              for (const assertion of evidenceOf(byFact, factId)) { assertion.fact_id = existingId; link(byFact, existingId, assertion.id) }
+              for (const assertion of evidenceOf(byFact, factId)) {
+                assertion.fact_id = existingId
+                link(byFact, existingId, assertion.id)
+              }
               byFact.delete(factId)
               facts.delete(factId)
               aliases.set(factId, existingId)
             } else canonicalFacts.set(key, factId)
           }
           for (const group of groups.values()) {
-            group.members = [...new Set(group.members.map(m => m === sourceId ? targetId : m))]
-            group.excluded = [...new Set(group.excluded.map(m => m === sourceId ? targetId : m))]
+            group.members = [...new Set(group.members.map(m => (m === sourceId ? targetId : m)))]
+            group.excluded = [...new Set(group.excluded.map(m => (m === sourceId ? targetId : m)))]
             if (group.rule?.container_id === sourceId) group.rule.container_id = targetId
           }
           entities.delete(sourceId)
@@ -274,8 +440,16 @@ export function project(boardId: string, operations: BoardAction[]): BoardProjec
         }
         case 'source.add':
           if (id && typeof item.title === 'string' && !sources.has(id))
-            sources.set(id, { id, title: item.title, uri: String(item.uri ?? ''),
-              excerpt: String(item.excerpt ?? ''), source_kind: item.source_kind === 'primary' || item.source_kind === 'secondary' ? item.source_kind : 'unknown', query: String(item.query ?? ''), revision: operation.id, created_at: String(item.created_at ?? operation.at) })
+            sources.set(id, {
+              id,
+              title: item.title,
+              uri: String(item.uri ?? ''),
+              excerpt: String(item.excerpt ?? ''),
+              source_kind: item.source_kind === 'primary' || item.source_kind === 'secondary' ? item.source_kind : 'unknown',
+              query: String(item.query ?? ''),
+              revision: operation.id,
+              created_at: String(item.created_at ?? operation.at),
+            })
           break
         case 'source.update': {
           const source = sources.get(id)
@@ -283,33 +457,48 @@ export function project(boardId: string, operations: BoardAction[]): BoardProjec
             source.revision = operation.id
             for (const evidence of evidenceOf(bySource, id)) invalidateReview(evidence)
           }
-          if (source && ['primary', 'secondary', 'unknown'].includes(String(item.source_kind))) source.source_kind = item.source_kind as Source['source_kind']
-          if (source) for (const field of ['title', 'uri', 'excerpt', 'query'] as const)
-            if (typeof item[field] === 'string' && (field !== 'title' || item[field].trim())) source[field] = item[field].trim()
+          if (source && ['primary', 'secondary', 'unknown'].includes(String(item.source_kind)))
+            source.source_kind = item.source_kind as Source['source_kind']
+          if (source)
+            for (const field of ['title', 'uri', 'excerpt', 'query'] as const)
+              if (typeof item[field] === 'string' && (field !== 'title' || item[field].trim())) source[field] = item[field].trim()
           break
         }
         case 'source.delete':
           if (id) {
             sources.delete(id)
             for (const identifier of identifiers.values()) if (identifier.source_id === id) identifier.source_id = null
-            for (const assertion of evidenceOf(bySource, id)) { assertion.source_id = null; invalidateReview(assertion) }
+            for (const assertion of evidenceOf(bySource, id)) {
+              assertion.source_id = null
+              invalidateReview(assertion)
+            }
             bySource.delete(id)
           }
           break
         case 'identifier.add': {
           const owner = entityRef(item.entity_id)
           if (id && typeof owner === 'string' && entities.has(owner) && !identifiers.has(id))
-            identifiers.set(id, { id, entity_id: owner, scheme: String(item.scheme ?? 'other'),
-              namespace: String(item.namespace ?? ''), raw_value: String(item.raw_value ?? ''),
-              normalized_value: String(item.normalized_value ?? normalizeIdentifier(String(item.scheme ?? ''), String(item.raw_value ?? ''))),
-              confidence: Number(item.confidence ?? 1), source_id: typeof item.source_id === 'string' ? item.source_id : null,
-              valid_from: utc(item.valid_from), valid_to: utc(item.valid_to) })
+            identifiers.set(id, {
+              id,
+              entity_id: owner,
+              scheme: String(item.scheme ?? 'other'),
+              namespace: String(item.namespace ?? ''),
+              raw_value: String(item.raw_value ?? ''),
+              normalized_value: String(
+                item.normalized_value ?? normalizeIdentifier(String(item.scheme ?? ''), String(item.raw_value ?? '')),
+              ),
+              confidence: Number(item.confidence ?? 1),
+              source_id: typeof item.source_id === 'string' ? item.source_id : null,
+              valid_from: utc(item.valid_from),
+              valid_to: utc(item.valid_to),
+            })
           break
         }
         case 'identifier.update': {
           const identifier = identifiers.get(id)
           if (identifier) {
-            for (const field of ['scheme', 'namespace', 'raw_value'] as const) if (typeof item[field] === 'string') identifier[field] = item[field]
+            for (const field of ['scheme', 'namespace', 'raw_value'] as const)
+              if (typeof item[field] === 'string') identifier[field] = item[field]
             identifier.normalized_value = normalizeIdentifier(identifier.scheme, identifier.raw_value)
             if ('source_id' in item) identifier.source_id = typeof item.source_id === 'string' ? item.source_id : null
             for (const field of ['valid_from', 'valid_to'] as const) if (field in item) identifier[field] = utc(item[field])
@@ -322,12 +511,29 @@ export function project(boardId: string, operations: BoardAction[]): BoardProjec
           break
         case 'fact.add': {
           const given = refParticipants(item.participants)
-          const ends = given && given.length >= 2 && (typeof item.subject_id !== 'string' || typeof item.object_id !== 'string') ? activityEnds(given) : { subject_id: entityRef(item.subject_id), object_id: entityRef(item.object_id) }
-          if (!id || typeof ends.subject_id !== 'string' || typeof ends.object_id !== 'string' ||
-              !entities.has(ends.subject_id) || !entities.has(ends.object_id)) break
-          const fact: Fact = { id, subject_id: ends.subject_id, object_id: ends.object_id,
-            predicate: String(item.predicate ?? ''), valid_from: utc(item.valid_from), valid_to: utc(item.valid_to),
-            created_at: String(item.created_at ?? operation.at), assertions: [], truth_state: 'unknown' }
+          const ends =
+            given && given.length >= 2 && (typeof item.subject_id !== 'string' || typeof item.object_id !== 'string')
+              ? activityEnds(given)
+              : { subject_id: entityRef(item.subject_id), object_id: entityRef(item.object_id) }
+          if (
+            !id ||
+            typeof ends.subject_id !== 'string' ||
+            typeof ends.object_id !== 'string' ||
+            !entities.has(ends.subject_id) ||
+            !entities.has(ends.object_id)
+          )
+            break
+          const fact: Fact = {
+            id,
+            subject_id: ends.subject_id,
+            object_id: ends.object_id,
+            predicate: String(item.predicate ?? ''),
+            valid_from: utc(item.valid_from),
+            valid_to: utc(item.valid_to),
+            created_at: String(item.created_at ?? operation.at),
+            assertions: [],
+            truth_state: 'unknown',
+          }
           const participants = given
           if (participants) {
             if (participants.some(p => !entities.has(p.entity_id))) break
@@ -338,15 +544,18 @@ export function project(boardId: string, operations: BoardAction[]): BoardProjec
           const key = factKey(fact)
           const existing = canonicalFacts.get(key)
           if (existing) aliases.set(id, existing)
-          else { canonicalFacts.set(key, id); facts.set(id, fact) }
+          else {
+            canonicalFacts.set(key, id)
+            facts.set(id, fact)
+          }
           break
         }
         case 'fact.update': {
           const canonical = aliases.get(id) ?? id
           const fact = facts.get(canonical)
           if (!fact) break
-          const subject = typeof item.subject_id === 'string' ? entityRef(item.subject_id) as string : fact.subject_id
-          const object = typeof item.object_id === 'string' ? entityRef(item.object_id) as string : fact.object_id
+          const subject = typeof item.subject_id === 'string' ? (entityRef(item.subject_id) as string) : fact.subject_id
+          const object = typeof item.object_id === 'string' ? (entityRef(item.object_id) as string) : fact.object_id
           // An update that cannot apply (an end deleted or merged meanwhile, e.g. an offline edit) changes nothing,
           // so it must not reset reviews either.
           if (!entities.has(subject) || !entities.has(object)) break
@@ -354,7 +563,8 @@ export function project(boardId: string, operations: BoardAction[]): BoardProjec
           if (participants && participants.some(p => !entities.has(p.entity_id))) break
           const before = factKey(fact)
           canonicalFacts.delete(before)
-          fact.subject_id = subject; fact.object_id = object
+          fact.subject_id = subject
+          fact.object_id = object
           if (participants) {
             fact.participants = participants
             Object.assign(fact, activityEnds(participants))
@@ -378,12 +588,19 @@ export function project(boardId: string, operations: BoardAction[]): BoardProjec
         }
         case 'group.add':
           if (id && typeof item.name === 'string' && item.name.trim() && !groups.has(id))
-            groups.set(id, { id, name: item.name.trim().slice(0, 120), members: [...new Set(ids(item.members).map(m => entityRef(m) as string))].filter(m => entities.has(m)),
-              excluded: ids(item.excluded).map(m => entityRef(m) as string), rule: parseRule(item.rule), collapsed: item.collapsed !== false,
+            groups.set(id, {
+              id,
+              name: item.name.trim().slice(0, 120),
+              members: [...new Set(ids(item.members).map(m => entityRef(m) as string))].filter(m => entities.has(m)),
+              excluded: ids(item.excluded).map(m => entityRef(m) as string),
+              rule: parseRule(item.rule),
+              collapsed: item.collapsed !== false,
               color: color(item.color),
               position: validPosition(item.x, item.y) ? { x: item.x as number, y: item.y as number } : undefined,
-              created_at: String(item.created_at ?? operation.at), member_ids: [],
-              ...(GROUP_BASES.includes(item.basis as GroupBasis) ? { basis: item.basis as GroupBasis } : {}) })
+              created_at: String(item.created_at ?? operation.at),
+              member_ids: [],
+              ...(GROUP_BASES.includes(item.basis as GroupBasis) ? { basis: item.basis as GroupBasis } : {}),
+            })
           break
         case 'group.update': {
           const group = groups.get(id)
@@ -405,7 +622,9 @@ export function project(boardId: string, operations: BoardAction[]): BoardProjec
           if (validPosition(item.x, item.y)) group.position = { x: item.x as number, y: item.y as number }
           break
         }
-        case 'group.delete': groups.delete(id); break
+        case 'group.delete':
+          groups.delete(id)
+          break
         case 'view.add':
         case 'view.update': {
           const existing = views.get(id)
@@ -419,7 +638,9 @@ export function project(boardId: string, operations: BoardAction[]): BoardProjec
           if (view.name) views.set(id, view)
           break
         }
-        case 'view.delete': views.delete(id); break
+        case 'view.delete':
+          views.delete(id)
+          break
         case 'fact.delete': {
           const canonical = aliases.get(id) ?? id
           if (canonical) {
@@ -433,18 +654,43 @@ export function project(boardId: string, operations: BoardAction[]): BoardProjec
         case 'assertion.add': {
           const factId = typeof item.fact_id === 'string' ? (aliases.get(item.fact_id) ?? item.fact_id) : ''
           if (id && facts.has(factId) && !assertions.has(id) && (item.stance === 'supports' || item.stance === 'refutes'))
-            assertions.set(id, { id, fact_id: factId, stance: item.stance, confidence: Number(item.confidence ?? 1),
+            assertions.set(id, {
+              id,
+              fact_id: factId,
+              stance: item.stance,
+              confidence: Number(item.confidence ?? 1),
               source_id: typeof item.source_id === 'string' ? item.source_id : null,
-              valid_from: utc(item.valid_from), valid_to: utc(item.valid_to),
-              note: String(item.note ?? ''), observation: String(item.observation ?? ''), locator: String(item.locator ?? ''), interpretation: String(item.interpretation ?? ''), review_status: 'unconfirmed', revision: operation.id, created_at: String(item.created_at ?? operation.at),
+              valid_from: utc(item.valid_from),
+              valid_to: utc(item.valid_to),
+              note: String(item.note ?? ''),
+              observation: String(item.observation ?? ''),
+              locator: String(item.locator ?? ''),
+              interpretation: String(item.interpretation ?? ''),
+              review_status: 'unconfirmed',
+              revision: operation.id,
+              created_at: String(item.created_at ?? operation.at),
               retracted_at: typeof item.retracted_at === 'string' ? item.retracted_at : null,
-              created_by: operation.author ?? null, created_via: operation.channel ?? (operation.author === 'Import' ? 'Import' : 'UI') })
-          if (assertions.get(id)?.revision === operation.id) { link(byFact, factId, id); link(bySource, assertions.get(id)!.source_id, id) }
+              created_by: operation.author ?? null,
+              created_via: operation.channel ?? (operation.author === 'Import' ? 'Import' : 'UI'),
+            })
+          if (assertions.get(id)?.revision === operation.id) {
+            link(byFact, factId, id)
+            link(bySource, assertions.get(id)!.source_id, id)
+          }
           // Parsed from an original log row by a file import of an analyst: the row is the record, so it counts as checked.
           // Evidence written by hand, or rows an agent sent through REST or MCP (it could have written them itself), still
           // need a review. Editing it or its source asks for one again.
-          const added = assertions.get(id), source = sources.get(added?.source_id ?? '')
-          if (added && !added.retracted_at && operation.author === 'Import' && !AGENT_CHANNELS.has(operation.channel ?? '') && source?.source_kind === 'primary' && added.locator && (added.observation || added.note)) {
+          const added = assertions.get(id),
+            source = sources.get(added?.source_id ?? '')
+          if (
+            added &&
+            !added.retracted_at &&
+            operation.author === 'Import' &&
+            !AGENT_CHANNELS.has(operation.channel ?? '') &&
+            source?.source_kind === 'primary' &&
+            added.locator &&
+            (added.observation || added.note)
+          ) {
             added.review_status = 'confirmed'
             added.reviewed_by = operation.actor
             added.reviewed_at = operation.at
@@ -461,7 +707,8 @@ export function project(boardId: string, operations: BoardAction[]): BoardProjec
           if (assertion) {
             invalidateReview(assertion)
             assertion.revision = operation.id
-            for (const field of ['locator', 'observation', 'interpretation'] as const) if (typeof item[field] === 'string') assertion[field] = item[field]
+            for (const field of ['locator', 'observation', 'interpretation'] as const)
+              if (typeof item[field] === 'string') assertion[field] = item[field]
             if (item.stance === 'supports' || item.stance === 'refutes') assertion.stance = item.stance
             if (typeof item.confidence === 'number') assertion.confidence = Math.max(0, Math.min(1, item.confidence))
             if (item.source_id === null || typeof item.source_id === 'string') {
@@ -478,12 +725,24 @@ export function project(boardId: string, operations: BoardAction[]): BoardProjec
         case 'assertion.review': {
           const evidence = assertions.get(id)
           if (!evidence || item.expected_revision !== evidence.revision) break
-          if (item.review_status === 'unconfirmed') { invalidateReview(evidence); break }
+          if (item.review_status === 'unconfirmed') {
+            invalidateReview(evidence)
+            break
+          }
           const source = sources.get(evidence.source_id ?? '')
-          if (item.review_status !== 'confirmed' || evidence.retracted_at || !source ||
-              source.source_kind !== 'primary' || !source.uri.trim() || !source.excerpt.trim() ||
-              !evidence.locator?.trim() || !(evidence.observation || evidence.note).trim() ||
-              !String(item.review_note ?? '').trim() || item.expected_source_revision !== source.revision) break
+          if (
+            item.review_status !== 'confirmed' ||
+            evidence.retracted_at ||
+            !source ||
+            source.source_kind !== 'primary' ||
+            !source.uri.trim() ||
+            !source.excerpt.trim() ||
+            !evidence.locator?.trim() ||
+            !(evidence.observation || evidence.note).trim() ||
+            !String(item.review_note ?? '').trim() ||
+            item.expected_source_revision !== source.revision
+          )
+            break
           evidence.review_status = 'confirmed'
           evidence.reviewed_by = operation.actor
           evidence.reviewed_at = operation.at
@@ -496,17 +755,28 @@ export function project(boardId: string, operations: BoardAction[]): BoardProjec
         }
         case 'assertion.restore': {
           const evidence = assertions.get(id)
-          if (evidence) { evidence.retracted_at = null; invalidateReview(evidence); evidence.revision = operation.id }
+          if (evidence) {
+            evidence.retracted_at = null
+            invalidateReview(evidence)
+            evidence.revision = operation.id
+          }
           break
         }
         case 'assertion.retract': {
           const assertion = assertions.get(id)
-          if (assertion && !assertion.retracted_at) { assertion.retracted_at = String(item.retracted_at ?? operation.at); invalidateReview(assertion) }
+          if (assertion && !assertion.retracted_at) {
+            assertion.retracted_at = String(item.retracted_at ?? operation.at)
+            invalidateReview(assertion)
+          }
           break
         }
         case 'assertion.delete': {
           const assertion = assertions.get(id)
-          if (assertion) { assertions.delete(id); unlink(byFact, assertion.fact_id, id); unlink(bySource, assertion.source_id, id) }
+          if (assertion) {
+            assertions.delete(id)
+            unlink(byFact, assertion.fact_id, id)
+            unlink(bySource, assertion.source_id, id)
+          }
           break
         }
       }
@@ -523,19 +793,28 @@ export function project(boardId: string, operations: BoardAction[]): BoardProjec
   }
   const factList = [...facts.values()]
   resolveGroups([...groups.values()], [...entities.values()], factList)
-  return { name, data: {
-    groups: [...groups.values()].sort((a, b) => a.created_at.localeCompare(b.created_at)),
-    views: [...views.values()],
-    entity_types: [...entityTypes.values()],
-    entities: [...entities.values()].sort((a, b) => a.name.localeCompare(b.name, 'en')),
-    facts: factList.sort((a, b) => b.created_at.localeCompare(a.created_at)),
-    sources: [...sources.values()].sort((a, b) => b.created_at.localeCompare(a.created_at)),
-  } }
+  return {
+    name,
+    data: {
+      groups: [...groups.values()].sort((a, b) => a.created_at.localeCompare(b.created_at)),
+      views: [...views.values()],
+      entity_types: [...entityTypes.values()],
+      entities: [...entities.values()].sort((a, b) => a.name.localeCompare(b.name, 'en')),
+      facts: factList.sort((a, b) => b.created_at.localeCompare(a.created_at)),
+      sources: [...sources.values()].sort((a, b) => b.created_at.localeCompare(a.created_at)),
+    },
+  }
 }
 
 function validPosition(x: unknown, y: unknown): x is number {
-  return typeof x === 'number' && typeof y === 'number' &&
-    Number.isFinite(x) && Number.isFinite(y) && Math.abs(x) <= 100_000 && Math.abs(y) <= 100_000
+  return (
+    typeof x === 'number' &&
+    typeof y === 'number' &&
+    Number.isFinite(x) &&
+    Number.isFinite(y) &&
+    Math.abs(x) <= 100_000 &&
+    Math.abs(y) <= 100_000
+  )
 }
 
 export function demoDrafts(): ActionDraft[] {
@@ -543,25 +822,102 @@ export function demoDrafts(): ActionDraft[] {
   const [attacker, ip, sp, vault, device, pwsh, audit, intel, control, reads, listing] = Array.from({ length: 11 }, () => uuid())
   const drafts: ActionDraft[] = [
     { type: 'board.rename', payload: { name: 'Example: Key Vault secret access' } },
-    { type: 'source.add', payload: { id: audit, title: 'Key Vault AuditEvent', source_kind: 'primary', uri: 'log-analytics://kv-prod-secrets/AuditEvent',
-      query: 'AzureDiagnostics | where ResourceType == "VAULTS" and OperationName == "SecretList"',
-      excerpt: '[{"TimeGenerated":"2026-09-28T10:42:07Z","OperationName":"SecretList","CallerIPAddress":"203.0.113.7","identity_claim_appid_g":"sp-deploy-prod","CorrelationId":"7f3a"}]', created_at: at } },
-    { type: 'source.add', payload: { id: intel, title: 'Threat intel note', source_kind: 'secondary', uri: 'notes/intel.md', excerpt: '203.0.113.7 seen in earlier campaign infrastructure.', created_at: at } },
-    { type: 'entity.add', payload: { id: attacker, name: 'Unknown actor', kind: 'Threat Actor', description: 'Working hypothesis', x: 0, y: 0, created_at: at } },
+    {
+      type: 'source.add',
+      payload: {
+        id: audit,
+        title: 'Key Vault AuditEvent',
+        source_kind: 'primary',
+        uri: 'log-analytics://kv-prod-secrets/AuditEvent',
+        query: 'AzureDiagnostics | where ResourceType == "VAULTS" and OperationName == "SecretList"',
+        excerpt:
+          '[{"TimeGenerated":"2026-09-28T10:42:07Z","OperationName":"SecretList","CallerIPAddress":"203.0.113.7","identity_claim_appid_g":"sp-deploy-prod","CorrelationId":"7f3a"}]',
+        created_at: at,
+      },
+    },
+    {
+      type: 'source.add',
+      payload: {
+        id: intel,
+        title: 'Threat intel note',
+        source_kind: 'secondary',
+        uri: 'notes/intel.md',
+        excerpt: '203.0.113.7 seen in earlier campaign infrastructure.',
+        created_at: at,
+      },
+    },
+    {
+      type: 'entity.add',
+      payload: { id: attacker, name: 'Unknown actor', kind: 'Threat Actor', description: 'Working hypothesis', x: 0, y: 0, created_at: at },
+    },
     { type: 'entity.add', payload: { id: ip, name: '203.0.113.7', kind: 'IP', x: 0, y: 220, created_at: at } },
     { type: 'entity.add', payload: { id: sp, name: 'sp-deploy-prod', kind: 'Service Principal', x: 380, y: -160, created_at: at } },
     { type: 'entity.add', payload: { id: vault, name: 'kv-prod-secrets', kind: 'Key Vault', x: 800, y: 20, created_at: at } },
     { type: 'entity.add', payload: { id: device, name: 'WS-0142', kind: 'Device', x: -420, y: 220, created_at: at } },
     { type: 'entity.add', payload: { id: pwsh, name: 'powershell.exe', kind: 'Process', x: -420, y: 420, created_at: at } },
-    { type: 'identifier.add', payload: { id: uuid(), entity_id: device, scheme: 'hostname', namespace: 'corp', raw_value: 'WS-0142.corp.example', normalized_value: 'ws-0142.corp.example', confidence: 1, source_id: null, valid_from: null, valid_to: null } },
+    {
+      type: 'identifier.add',
+      payload: {
+        id: uuid(),
+        entity_id: device,
+        scheme: 'hostname',
+        namespace: 'corp',
+        raw_value: 'WS-0142.corp.example',
+        normalized_value: 'ws-0142.corp.example',
+        confidence: 1,
+        source_id: null,
+        valid_from: null,
+        valid_to: null,
+      },
+    },
     { type: 'fact.add', payload: { id: uuid(), subject_id: device, predicate: 'runs', object_id: pwsh, created_at: at } },
     { type: 'fact.add', payload: { id: reads, subject_id: pwsh, predicate: 'connected to', object_id: ip, created_at: at } },
     { type: 'fact.add', payload: { id: control, subject_id: attacker, predicate: 'controls', object_id: ip, created_at: at } },
-    { type: 'assertion.add', payload: { id: uuid(), fact_id: control, stance: 'supports', confidence: 0.6, source_id: intel, observation: 'IP listed in threat intel as campaign infrastructure', note: '', locator: 'intel.md line 3', created_at: at } },
-    { type: 'fact.add', payload: { id: listing, predicate: 'listed secrets', technique: 'T1555.006', valid_from: '2026-09-28T10:42:07Z',
-      participants: [{ entity_id: attacker, role: 'actor' }, { entity_id: ip, role: 'source' }, { entity_id: sp, role: 'identity' }, { entity_id: vault, role: 'target' }], created_at: at } },
-    { type: 'assertion.add', payload: { id: uuid(), fact_id: listing, stance: 'supports', confidence: 1, source_id: audit, observation: 'SecretList on kv-prod-secrets from 203.0.113.7 as sp-deploy-prod',
-      note: '', locator: 'CorrelationId=7f3a', valid_from: '2026-09-28T10:42:07Z', created_at: at } },
+    {
+      type: 'assertion.add',
+      payload: {
+        id: uuid(),
+        fact_id: control,
+        stance: 'supports',
+        confidence: 0.6,
+        source_id: intel,
+        observation: 'IP listed in threat intel as campaign infrastructure',
+        note: '',
+        locator: 'intel.md line 3',
+        created_at: at,
+      },
+    },
+    {
+      type: 'fact.add',
+      payload: {
+        id: listing,
+        predicate: 'listed secrets',
+        technique: 'T1555.006',
+        valid_from: '2026-09-28T10:42:07Z',
+        participants: [
+          { entity_id: attacker, role: 'actor' },
+          { entity_id: ip, role: 'source' },
+          { entity_id: sp, role: 'identity' },
+          { entity_id: vault, role: 'target' },
+        ],
+        created_at: at,
+      },
+    },
+    {
+      type: 'assertion.add',
+      payload: {
+        id: uuid(),
+        fact_id: listing,
+        stance: 'supports',
+        confidence: 1,
+        source_id: audit,
+        observation: 'SecretList on kv-prod-secrets from 203.0.113.7 as sp-deploy-prod',
+        note: '',
+        locator: 'CorrelationId=7f3a',
+        valid_from: '2026-09-28T10:42:07Z',
+        created_at: at,
+      },
+    },
   ]
   return drafts.map(draft => ({ ...draft, author: 'Example' }))
 }
@@ -580,21 +936,57 @@ export function legacyDrafts(value: unknown): ActionDraft[] {
   for (const source of graph.sources) drafts.push({ type: 'source.add', payload: { ...source }, author })
   // Fields a file leaves out stay out (an undefined value would fail validation).
   const defined = (payload: Record<string, unknown>) => Object.fromEntries(Object.entries(payload).filter(([, v]) => v !== undefined))
-  for (const entity of graph.entities) drafts.push({ type: 'entity.add', payload: defined({
-    id: entity.id, name: entity.name, kind: entity.kind, description: entity.description, created_at: entity.created_at, color: entity.color, x: entity.position?.x, y: entity.position?.y, pinned: entity.pinned,
-  }), author })
-  for (const entity of graph.entities) for (const identifier of entity.identifiers ?? [])
-    drafts.push({ type: 'identifier.add', payload: { ...identifier }, author })
+  for (const entity of graph.entities)
+    drafts.push({
+      type: 'entity.add',
+      payload: defined({
+        id: entity.id,
+        name: entity.name,
+        kind: entity.kind,
+        description: entity.description,
+        created_at: entity.created_at,
+        color: entity.color,
+        x: entity.position?.x,
+        y: entity.position?.y,
+        pinned: entity.pinned,
+      }),
+      author,
+    })
+  for (const entity of graph.entities)
+    for (const identifier of entity.identifiers ?? []) drafts.push({ type: 'identifier.add', payload: { ...identifier }, author })
   for (const fact of graph.facts) {
-    drafts.push({ type: 'fact.add', payload: { id: fact.id, subject_id: fact.subject_id,
-      predicate: fact.predicate, object_id: fact.object_id, valid_from: fact.valid_from,
-      valid_to: fact.valid_to, created_at: fact.created_at,
-      // Activities keep their participants, technique and position.
-      ...(fact.participants?.length ? { participants: fact.participants } : {}), ...(fact.technique ? { technique: fact.technique } : {}),
-      ...(fact.position ? { x: fact.position.x, y: fact.position.y } : {}) }, author })
+    drafts.push({
+      type: 'fact.add',
+      payload: {
+        id: fact.id,
+        subject_id: fact.subject_id,
+        predicate: fact.predicate,
+        object_id: fact.object_id,
+        valid_from: fact.valid_from,
+        valid_to: fact.valid_to,
+        created_at: fact.created_at,
+        // Activities keep their participants, technique and position.
+        ...(fact.participants?.length ? { participants: fact.participants } : {}),
+        ...(fact.technique ? { technique: fact.technique } : {}),
+        ...(fact.position ? { x: fact.position.x, y: fact.position.y } : {}),
+      },
+      author,
+    })
     for (const assertion of fact.assertions ?? []) {
-      const { review_status: _status, reviewed_by: _by, reviewed_at: _at, review_note: _note, reviewed_revision: _revision, reviewed_source_revision: _sourceRevision,
-        review_kind: _kind, reviewer_name: _reviewer, revision: _own, created_by: _creator, created_via: _via, ...payload } = assertion
+      const {
+        review_status: _status,
+        reviewed_by: _by,
+        reviewed_at: _at,
+        review_note: _note,
+        reviewed_revision: _revision,
+        reviewed_source_revision: _sourceRevision,
+        review_kind: _kind,
+        reviewer_name: _reviewer,
+        revision: _own,
+        created_by: _creator,
+        created_via: _via,
+        ...payload
+      } = assertion
       drafts.push({ type: 'assertion.add', payload: { ...payload }, author })
     }
   }
@@ -604,15 +996,19 @@ export function legacyDrafts(value: unknown): ActionDraft[] {
 /** Everything reachable from a container through containment relationships (device → process → file). */
 export function containedBy(containerId: string, facts: Fact[]) {
   const children = new Map<string, string[]>()
-  for (const fact of facts) if (CONTAINS_PREDICATES.includes(fact.predicate.trim().toLowerCase())) {
-    const list = children.get(fact.subject_id); if (list) list.push(fact.object_id); else children.set(fact.subject_id, [fact.object_id])
-  }
+  for (const fact of facts)
+    if (CONTAINS_PREDICATES.includes(fact.predicate.trim().toLowerCase())) {
+      const list = children.get(fact.subject_id)
+      if (list) list.push(fact.object_id)
+      else children.set(fact.subject_id, [fact.object_id])
+    }
   const found = new Set<string>()
   const queue = [...(children.get(containerId) ?? [])]
   while (queue.length) {
     const next = queue.shift()!
     if (next === containerId || found.has(next)) continue
-    found.add(next); queue.push(...(children.get(next) ?? []))
+    found.add(next)
+    queue.push(...(children.get(next) ?? []))
   }
   return [...found]
 }
@@ -622,13 +1018,21 @@ function resolveGroups(groups: Group[], entities: Entity[], facts: Fact[]) {
   const owner = new Map<string, string>()
   const ordered = [...groups].sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id))
   const entityIds = new Set(entities.map(e => e.id))
-  const claim = (group: Group, id: string) => { if (!owner.has(id) && entityIds.has(id) && !group.excluded.includes(id) && group.rule?.container_id !== id) { owner.set(id, group.id); group.member_ids.push(id) } }
+  const claim = (group: Group, id: string) => {
+    if (!owner.has(id) && entityIds.has(id) && !group.excluded.includes(id) && group.rule?.container_id !== id) {
+      owner.set(id, group.id)
+      group.member_ids.push(id)
+    }
+  }
   for (const group of ordered) group.member_ids = []
   for (const group of ordered) for (const id of group.members) claim(group, id)
   for (const group of ordered) {
     const rule = group.rule
     if (!rule) continue
-    if (rule.container_id) { for (const id of containedBy(rule.container_id, facts)) claim(group, id); continue }
+    if (rule.container_id) {
+      for (const id of containedBy(rule.container_id, facts)) claim(group, id)
+      continue
+    }
     const kinds = (rule.kinds ?? []).map(k => k.toLowerCase())
     const needle = (rule.match ?? '').trim().toLowerCase()
     for (const entity of entities) {
@@ -658,13 +1062,23 @@ function invalidateReview(evidence: Assertion) {
 
 /** Whose change an action is for undo: the analyst's own (UI, file imports) or the agents' working through this browser. */
 export type UndoScope = 'analyst' | 'agent'
-export const undoScopeOf = (action: Pick<BoardAction, 'channel'>): UndoScope => AGENT_CHANNELS.has(action.channel ?? '') ? 'agent' : 'analyst'
+export const undoScopeOf = (action: Pick<BoardAction, 'channel'>): UndoScope =>
+  AGENT_CHANNELS.has(action.channel ?? '') ? 'agent' : 'analyst'
 
 /** Every record an action points at: the record itself, its ends, its relationship, participants, members, container. */
 function references(payload: Record<string, unknown>): string[] {
-  const out: unknown[] = [payload.id, payload.subject_id, payload.object_id, payload.fact_id, payload.entity_id, payload.source_id, payload.target_id]
+  const out: unknown[] = [
+    payload.id,
+    payload.subject_id,
+    payload.object_id,
+    payload.fact_id,
+    payload.entity_id,
+    payload.source_id,
+    payload.target_id,
+  ]
   if (Array.isArray(payload.participants)) for (const p of payload.participants) out.push((p as Record<string, unknown>)?.entity_id)
-  for (const key of ['members', 'add_members', 'excluded', 'exclude']) if (Array.isArray(payload[key])) out.push(...(payload[key] as unknown[]))
+  for (const key of ['members', 'add_members', 'excluded', 'exclude'])
+    if (Array.isArray(payload[key])) out.push(...(payload[key] as unknown[]))
   const rule = payload.rule as Record<string, unknown> | null | undefined
   if (rule && typeof rule === 'object') out.push(rule.container_id)
   return out.filter((v): v is string => typeof v === 'string' && !!v)
@@ -682,17 +1096,43 @@ export function undoTargets(actions: BoardAction[], actor: string, scope: UndoSc
   if (!target) return null
   const targets = actions.filter(item => item.id === target.id || (!!target.batch_id && item.batch_id === target.batch_id && mine(item)))
   // The records these actions created or changed (a merge also changes both entities).
-  const touched = new Set(targets.flatMap(item => [item.payload.id, item.payload.source_id, item.payload.target_id]).filter((v): v is string => typeof v === 'string' && !!v))
-  if (actions.some(item => !mine(item) && item.clock > target.clock && !undone.has(item.id) && !item.type.startsWith('action.') && references(item.payload).some(id => touched.has(id))))
-    throw new Error(scope === 'analyst' ? 'Someone else (another analyst or an agent) has built on these records since. Review their changes before undoing.' : 'The analyst or someone else has changed these records since; undo refused.')
+  const touched = new Set(
+    targets
+      .flatMap(item => [item.payload.id, item.payload.source_id, item.payload.target_id])
+      .filter((v): v is string => typeof v === 'string' && !!v),
+  )
+  if (
+    actions.some(
+      item =>
+        !mine(item) &&
+        item.clock > target.clock &&
+        !undone.has(item.id) &&
+        !item.type.startsWith('action.') &&
+        references(item.payload).some(id => touched.has(id)),
+    )
+  )
+    throw new Error(
+      scope === 'analyst'
+        ? 'Someone else (another analyst or an agent) has built on these records since. Review their changes before undoing.'
+        : 'The analyst or someone else has changed these records since; undo refused.',
+    )
   return targets
 }
 
 /** The last undo of `actor` in `scope` that can be redone. */
 export function redoTarget(actions: BoardAction[], actor: string, scope: UndoScope): BoardAction | null {
   const undone = undoneActions(actions)
-  return [...actions].reverse().find(item => item.actor === actor && undoScopeOf(item) === scope && item.type === 'action.undo' &&
-    ((item.payload.action_ids as string[] | undefined) ?? [item.payload.action_id]).some(id => undone.has(String(id)))) ?? null
+  return (
+    [...actions]
+      .reverse()
+      .find(
+        item =>
+          item.actor === actor &&
+          undoScopeOf(item) === scope &&
+          item.type === 'action.undo' &&
+          ((item.payload.action_ids as string[] | undefined) ?? [item.payload.action_id]).some(id => undone.has(String(id))),
+      ) ?? null
+  )
 }
 
 export function undoneActions(ordered: BoardAction[]) {
@@ -700,10 +1140,11 @@ export function undoneActions(ordered: BoardAction[]) {
   for (const action of ordered) {
     if (action.type !== 'action.undo' && action.type !== 'action.redo') continue
     const targets = Array.isArray(action.payload.action_ids) ? action.payload.action_ids : [action.payload.action_id]
-    for (const id of targets) if (typeof id === 'string') {
-      if (action.type === 'action.undo') undone.add(id)
-      else undone.delete(id)
-    }
+    for (const id of targets)
+      if (typeof id === 'string') {
+        if (action.type === 'action.undo') undone.add(id)
+        else undone.delete(id)
+      }
   }
   return undone
 }

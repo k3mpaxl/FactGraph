@@ -15,4 +15,5 @@ export function utc(value: unknown): string | null {
 }
 
 /** Only a normalised time may go into a query (`datetime(…)` takes it unquoted). */
-export const isUtc = (value: string | null | undefined): value is string => !!value && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d{1,6})?Z$/.test(value)
+export const isUtc = (value: string | null | undefined): value is string =>
+  !!value && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d{1,6})?Z$/.test(value)

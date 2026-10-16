@@ -1,4 +1,5 @@
 """Shared request contracts for REST and MCP."""
+
 from __future__ import annotations
 from typing import Literal
 from datetime import datetime, timezone
@@ -19,13 +20,37 @@ def utc_iso(value: str) -> str:
     """The one stored time format, as the browser writes it: UTC with milliseconds; a time without a zone is UTC."""
     return as_utc(value).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
+
 class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     @model_validator(mode="after")
     def field_invariants(self):
-        nullable = {'id', 'source_id', 'valid_from', 'valid_to', 'color', 'x', 'y', 'subject_field', 'object_field', 'predicate_field', 'expected_source_revision', 'expected_revision',
-                    'layer', 'rule', 'technique', 'container_id', 'operation_field', 'layers', 'since', 'until', 'compromise', 'rotated_at', 'format'}
+        nullable = {
+            'id',
+            'source_id',
+            'valid_from',
+            'valid_to',
+            'color',
+            'x',
+            'y',
+            'subject_field',
+            'object_field',
+            'predicate_field',
+            'expected_source_revision',
+            'expected_revision',
+            'layer',
+            'rule',
+            'technique',
+            'container_id',
+            'operation_field',
+            'layers',
+            'since',
+            'until',
+            'compromise',
+            'rotated_at',
+            'format',
+        }
         for key in self.model_fields_set:
             value = getattr(self, key)
             if value is None and key not in nullable:
@@ -39,9 +64,13 @@ class StrictModel(BaseModel):
             raise ValueError('End must be after start')
         return self
 
+
 class EntityInput(StrictModel):
     name: str = Field(min_length=1, description="Concrete, human-readable name, e.g. 10.0.0.8, sp-deploy-prod, kv-prod-secrets.")
-    kind: str = Field(default="Other", description="Entity type such as IP, User, Service Principal, Key Vault, Repository, AKS Cluster, S3 Bucket, Threat Actor.")
+    kind: str = Field(
+        default="Other",
+        description="Entity type such as IP, User, Service Principal, Key Vault, Repository, AKS Cluster, S3 Bucket, Threat Actor.",
+    )
     description: str = ""
     color: str | None = Field(default=None, pattern=r"^#[0-9a-fA-F]{6}$")
     layer: Layer | None = Field(default=None, description=LAYER_HELP)
@@ -50,9 +79,13 @@ class EntityInput(StrictModel):
     y: float | None = Field(default=None, ge=-100000, le=100000, allow_inf_nan=False)
     id: str | None = None
 
+
 class RelationInput(StrictModel):
     subject_id: str = Field(description="Entity ID the claim starts from.")
-    predicate: str = Field(min_length=1, description="Specific verb, e.g. reads, signed in to, has role on. For events with more than two participants use an activity instead.")
+    predicate: str = Field(
+        min_length=1,
+        description="Specific verb, e.g. reads, signed in to, has role on. For events with more than two participants use an activity instead.",
+    )
     object_id: str = Field(description="Entity ID the claim points to.")
     source_id: str | None = None
     note: str = ""
@@ -62,13 +95,19 @@ class RelationInput(StrictModel):
     valid_to: str | None = None
     id: str | None = None
 
+
 class SourceInput(StrictModel):
     title: str = Field(min_length=1)
     uri: str = Field(default="", description="Where the original lives: log export path, repository path@commit, portal link.")
-    excerpt: str = Field(default="", description="Original result rows (JSON) or quoted text. Required before an analyst can confirm evidence.")
-    source_kind: Literal["primary", "secondary", "unknown"] = Field(default="unknown", description="primary = original logs, telemetry, files; secondary = context only, never proof.")
+    excerpt: str = Field(
+        default="", description="Original result rows (JSON) or quoted text. Required before an analyst can confirm evidence."
+    )
+    source_kind: Literal["primary", "secondary", "unknown"] = Field(
+        default="unknown", description="primary = original logs, telemetry, files; secondary = context only, never proof."
+    )
     query: str = Field(default="", description="Query text (e.g. KQL) that produced the excerpt. FactGraph never executes it.")
     id: str | None = None
+
 
 class EvidenceInput(StrictModel):
     observation: str = Field(default="", description="What the original record shows, in one factual sentence.")
@@ -82,14 +121,17 @@ class EvidenceInput(StrictModel):
     note: str = ""
     id: str | None = None
 
+
 class ActionInput(StrictModel):
     id: str | None = None
     type: str
     payload: dict
     author: str = "API"
 
+
 class ActionBatch(StrictModel):
     actions: list[ActionInput]
+
 
 class RowsInput(StrictModel):
     dry_run: bool = False
@@ -103,6 +145,7 @@ class RowsInput(StrictModel):
     subject_kind: str = "IP"
     object_kind: str = "File"
 
+
 class CompromiseInput(StrictModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
     since: str | None = Field(default=None, alias="from")
@@ -110,7 +153,9 @@ class CompromiseInput(StrictModel):
     note: str = Field(default="", max_length=2000)
     cleared: bool = False
     # An agent's mark is a hypothesis until an analyst confirms it in the board.
-    level: Literal["suspected", "confirmed"] = Field(default="suspected", description="suspected (default) until an analyst confirmed it; confirmed only if the evidence proves it.")
+    level: Literal["suspected", "confirmed"] = Field(
+        default="suspected", description="suspected (default) until an analyst confirmed it; confirmed only if the evidence proves it."
+    )
 
     @model_validator(mode="after")
     def window(self):
@@ -121,8 +166,11 @@ class CompromiseInput(StrictModel):
                 setattr(self, key, utc_iso(getattr(self, key)))
         return self
 
+
 class EntityUpdate(StrictModel):
-    compromise: CompromiseInput | None = Field(default=None, description="Stolen credential / attacker IP, ISO from/to optional; null clears.")
+    compromise: CompromiseInput | None = Field(
+        default=None, description="Stolen credential / attacker IP, ISO from/to optional; null clears."
+    )
     rotated_at: str | None = None
     pinned: bool | None = None
 
@@ -131,14 +179,17 @@ class EntityUpdate(StrictModel):
         if self.rotated_at:
             as_utc(self.rotated_at)
         return self
+
     layer: Layer | None = Field(default=None, description=LAYER_HELP + " Explicit null returns to the inferred layer.")
     name: str | None = Field(default=None, min_length=1)
     kind: str | None = Field(default=None, min_length=1)
     description: str | None = None
     color: str | None = Field(default=None, pattern=r"^#[0-9a-fA-F]{6}$")
 
+
 class EntityMergeInput(StrictModel):
     target_id: str
+
 
 class SourceUpdate(StrictModel):
     expected_revision: str | None = None
@@ -148,12 +199,14 @@ class SourceUpdate(StrictModel):
     uri: str | None = None
     excerpt: str | None = None
 
+
 class RelationUpdate(StrictModel):
     subject_id: str | None = None
     predicate: str | None = Field(default=None, min_length=1)
     object_id: str | None = None
     valid_from: str | None = None
     valid_to: str | None = None
+
 
 class EvidenceUpdate(StrictModel):
     expected_revision: str | None = None
@@ -166,4 +219,3 @@ class EvidenceUpdate(StrictModel):
     confidence: float | None = Field(default=None, ge=0, le=1)
     source_id: str | None = None
     note: str | None = None
-

@@ -19,12 +19,21 @@ function computePeriod(assertion: Assertion, fact: Fact): Period {
     try {
       const row = JSON.parse(assertion.note)
       for (const key of ['valid_from', 'StartTime', 'TimeGenerated', 'timestamp', 'Timestamp', 'time', 'event_time']) {
-        from = timestamp(row?.[key]); if (from) break
+        from = timestamp(row?.[key])
+        if (from) break
       }
-      for (const key of ['valid_to', 'EndTime']) { to = timestamp(row?.[key]); if (to) break }
-    } catch { /* Not JSON after all. */ }
+      for (const key of ['valid_to', 'EndTime']) {
+        to = timestamp(row?.[key])
+        if (to) break
+      }
+    } catch {
+      /* Not JSON after all. */
+    }
   }
-  if (!from && !to) { from = timestamp(fact.valid_from); to = timestamp(fact.valid_to) }
+  if (!from && !to) {
+    from = timestamp(fact.valid_from)
+    to = timestamp(fact.valid_to)
+  }
   const start = from ? Date.parse(from) : to ? Date.parse(to) : Number.NaN
   const end = to ? Date.parse(to) : from ? Date.parse(from) : Number.NaN
   return { from, to, start, end }
@@ -32,7 +41,10 @@ function computePeriod(assertion: Assertion, fact: Fact): Period {
 
 function period(assertion: Assertion, fact: Fact): Period {
   let cached = periods.get(assertion)
-  if (!cached) { cached = computePeriod(assertion, fact); periods.set(assertion, cached) }
+  if (!cached) {
+    cached = computePeriod(assertion, fact)
+    periods.set(assertion, cached)
+  }
   return cached
 }
 
@@ -42,11 +54,15 @@ export function evidencePeriod(assertion: Assertion, fact: Fact) {
 }
 
 export function timelineEntries(facts: Fact[]) {
-  const entries = facts.flatMap(fact => fact.assertions.filter(a => !a.retracted_at).map(assertion => {
-    const p = period(assertion, fact)
-    return { fact, assertion, from: p.from, to: p.to, sortKey: Number.isFinite(p.start) ? p.start : Infinity }
-  }))
-  entries.sort((a, b) => (a.sortKey - b.sortKey) || a.assertion.id.localeCompare(b.assertion.id))
+  const entries = facts.flatMap(fact =>
+    fact.assertions
+      .filter(a => !a.retracted_at)
+      .map(assertion => {
+        const p = period(assertion, fact)
+        return { fact, assertion, from: p.from, to: p.to, sortKey: Number.isFinite(p.start) ? p.start : Infinity }
+      }),
+  )
+  entries.sort((a, b) => a.sortKey - b.sortKey || a.assertion.id.localeCompare(b.assertion.id))
   return entries.map(({ sortKey: _sortKey, ...entry }) => entry)
 }
 
@@ -76,12 +92,13 @@ export function factIntersects(fact: Fact, from: string | null, to: string | nul
 /** All evidence times in milliseconds (from and to of every unretracted assertion). */
 function times(facts: Fact[]) {
   const values: number[] = []
-  for (const fact of facts) for (const assertion of fact.assertions) {
-    if (assertion.retracted_at) continue
-    const p = period(assertion, fact)
-    if (p.from && Number.isFinite(p.start)) values.push(p.start)
-    if (p.to && Number.isFinite(p.end)) values.push(p.end)
-  }
+  for (const fact of facts)
+    for (const assertion of fact.assertions) {
+      if (assertion.retracted_at) continue
+      const p = period(assertion, fact)
+      if (p.from && Number.isFinite(p.start)) values.push(p.start)
+      if (p.to && Number.isFinite(p.end)) values.push(p.end)
+    }
   return values
 }
 
@@ -89,7 +106,10 @@ export function timelineBounds(facts: Fact[]) {
   const values = times(facts)
   if (!values.length) return { from: null, to: null }
   // reduce, not Math.min(...values): spreading 100k+ values overflows the call stack.
-  return { from: new Date(values.reduce((a, b) => Math.min(a, b))).toISOString(), to: new Date(values.reduce((a, b) => Math.max(a, b))).toISOString() }
+  return {
+    from: new Date(values.reduce((a, b) => Math.min(a, b))).toISOString(),
+    to: new Date(values.reduce((a, b) => Math.max(a, b))).toISOString(),
+  }
 }
 
 export function timelineSteps(facts: Fact[]) {
@@ -109,8 +129,11 @@ export function factsInWindow(facts: Fact[], from: string | null, to: string | n
   const upper = to ? Date.parse(to) : Number.POSITIVE_INFINITY
   const out: Fact[] = []
   for (const fact of facts) {
-    const assertions = fact.assertions.filter(assertion => !assertion.retracted_at && intersects(period(assertion, fact), lower, upper, includeUndated))
-    if (assertions.length) out.push(assertions.length === fact.assertions.length ? fact : { ...fact, assertions, truth_state: truth(assertions) })
+    const assertions = fact.assertions.filter(
+      assertion => !assertion.retracted_at && intersects(period(assertion, fact), lower, upper, includeUndated),
+    )
+    if (assertions.length)
+      out.push(assertions.length === fact.assertions.length ? fact : { ...fact, assertions, truth_state: truth(assertions) })
   }
   return out
 }

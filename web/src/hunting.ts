@@ -12,7 +12,8 @@ export type HuntQuery = { id: string; title: string; why: string; query: string;
 
 const literal = (value: string) => `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`
 const list = (values: string[]) => `dynamic([${values.map(literal).join(', ')}])`
-const ident = (entity: Entity, ...names: string[]) => entity.identifiers.filter(i => names.includes(i.namespace) || names.includes(i.scheme)).map(i => i.normalized_value)
+const ident = (entity: Entity, ...names: string[]) =>
+  entity.identifiers.filter(i => names.includes(i.namespace) || names.includes(i.scheme)).map(i => i.normalized_value)
 const isKind = (entity: Entity, pattern: RegExp) => pattern.test(entity.kind)
 const MAX_VALUES = 200
 
@@ -22,22 +23,103 @@ const MAX_VALUES = 200
  * what for the summary. Defender XDR tables streamed to Sentinel keep their names.
  */
 const SESSION_TABLES: { table: string; token: string; session?: string; identity: string; ip: string; what: string; time?: string }[] = [
-  { table: 'SigninLogs', token: 'UniqueTokenIdentifier', session: 'SessionId', identity: 'UserPrincipalName', ip: 'IPAddress', what: 'AppDisplayName' },
-  { table: 'AADNonInteractiveUserSignInLogs', token: 'UniqueTokenIdentifier', session: 'SessionId', identity: 'UserPrincipalName', ip: 'IPAddress', what: 'AppDisplayName' },
-  { table: 'AADServicePrincipalSignInLogs', token: 'UniqueTokenIdentifier', session: 'SessionId', identity: 'ServicePrincipalName', ip: 'IPAddress', what: 'ResourceDisplayName' },
-  { table: 'AADManagedIdentitySignInLogs', token: 'UniqueTokenIdentifier', session: 'SessionId', identity: 'ServicePrincipalName', ip: 'IPAddress', what: 'ResourceDisplayName' },
-  { table: 'EntraIdSignInEvents', token: 'UniqueTokenId', session: 'SessionId', identity: 'AccountUpn', ip: 'IPAddress', what: 'Application' },
-  { table: 'EntraIdSpnSignInEvents', token: 'UniqueTokenId', session: 'SessionId', identity: 'ServicePrincipalName', ip: 'IPAddress', what: 'ResourceDisplayName' },
-  { table: 'AzureActivity', token: 'tostring(parse_json(Claims).uti)', identity: 'Caller', ip: 'CallerIpAddress', what: 'OperationNameValue' },
-  { table: 'MicrosoftGraphActivityLogs', token: 'coalesce(UniqueTokenId, SignInActivityId)', session: 'SessionId', identity: 'coalesce(UserId, ServicePrincipalId, AppId)', ip: 'IPAddress',
-    what: 'strcat(RequestMethod, " ", tostring(parse_url(RequestUri).Path))' },
-  { table: 'AADGraphActivityLogs', token: 'SignInActivityId', session: 'SessionId', identity: 'coalesce(UserId, ServicePrincipalId, AppId)', ip: 'CallerIpAddress',
-    what: 'strcat(RequestMethod, " ", tostring(parse_url(RequestUri).Path))', time: 'TimeRequested' },
-  { table: 'GraphAPIAuditEvents', token: 'UniqueTokenIdentifier', identity: 'coalesce(AccountObjectId, ServicePrincipalId, ApplicationId)', ip: 'IpAddress',
-    what: 'strcat(RequestMethod, " ", tostring(parse_url(RequestUri).Path))' },
-  { table: 'OfficeActivity', token: 'tostring(parse_json(AppAccessContext).UniqueTokenId)', session: 'tostring(parse_json(AppAccessContext).AADSessionId)', identity: 'UserId', ip: 'ClientIP', what: 'Operation' },
-  { table: 'CloudAppEvents', token: 'coalesce(tostring(RawEventData.AppAccessContext.UniqueTokenId), tostring(RawEventData.uniqueTokenId), tostring(RawEventData.claims.uti))',
-    session: 'coalesce(tostring(RawEventData.AppAccessContext.AADSessionId), tostring(RawEventData.claims.sid), tostring(RawEventData.SessionId))', identity: 'AccountObjectId', ip: 'IPAddress', what: 'ActionType' },
+  {
+    table: 'SigninLogs',
+    token: 'UniqueTokenIdentifier',
+    session: 'SessionId',
+    identity: 'UserPrincipalName',
+    ip: 'IPAddress',
+    what: 'AppDisplayName',
+  },
+  {
+    table: 'AADNonInteractiveUserSignInLogs',
+    token: 'UniqueTokenIdentifier',
+    session: 'SessionId',
+    identity: 'UserPrincipalName',
+    ip: 'IPAddress',
+    what: 'AppDisplayName',
+  },
+  {
+    table: 'AADServicePrincipalSignInLogs',
+    token: 'UniqueTokenIdentifier',
+    session: 'SessionId',
+    identity: 'ServicePrincipalName',
+    ip: 'IPAddress',
+    what: 'ResourceDisplayName',
+  },
+  {
+    table: 'AADManagedIdentitySignInLogs',
+    token: 'UniqueTokenIdentifier',
+    session: 'SessionId',
+    identity: 'ServicePrincipalName',
+    ip: 'IPAddress',
+    what: 'ResourceDisplayName',
+  },
+  {
+    table: 'EntraIdSignInEvents',
+    token: 'UniqueTokenId',
+    session: 'SessionId',
+    identity: 'AccountUpn',
+    ip: 'IPAddress',
+    what: 'Application',
+  },
+  {
+    table: 'EntraIdSpnSignInEvents',
+    token: 'UniqueTokenId',
+    session: 'SessionId',
+    identity: 'ServicePrincipalName',
+    ip: 'IPAddress',
+    what: 'ResourceDisplayName',
+  },
+  {
+    table: 'AzureActivity',
+    token: 'tostring(parse_json(Claims).uti)',
+    identity: 'Caller',
+    ip: 'CallerIpAddress',
+    what: 'OperationNameValue',
+  },
+  {
+    table: 'MicrosoftGraphActivityLogs',
+    token: 'coalesce(UniqueTokenId, SignInActivityId)',
+    session: 'SessionId',
+    identity: 'coalesce(UserId, ServicePrincipalId, AppId)',
+    ip: 'IPAddress',
+    what: 'strcat(RequestMethod, " ", tostring(parse_url(RequestUri).Path))',
+  },
+  {
+    table: 'AADGraphActivityLogs',
+    token: 'SignInActivityId',
+    session: 'SessionId',
+    identity: 'coalesce(UserId, ServicePrincipalId, AppId)',
+    ip: 'CallerIpAddress',
+    what: 'strcat(RequestMethod, " ", tostring(parse_url(RequestUri).Path))',
+    time: 'TimeRequested',
+  },
+  {
+    table: 'GraphAPIAuditEvents',
+    token: 'UniqueTokenIdentifier',
+    identity: 'coalesce(AccountObjectId, ServicePrincipalId, ApplicationId)',
+    ip: 'IpAddress',
+    what: 'strcat(RequestMethod, " ", tostring(parse_url(RequestUri).Path))',
+  },
+  {
+    table: 'OfficeActivity',
+    token: 'tostring(parse_json(AppAccessContext).UniqueTokenId)',
+    session: 'tostring(parse_json(AppAccessContext).AADSessionId)',
+    identity: 'UserId',
+    ip: 'ClientIP',
+    what: 'Operation',
+  },
+  {
+    table: 'CloudAppEvents',
+    token:
+      'coalesce(tostring(RawEventData.AppAccessContext.UniqueTokenId), tostring(RawEventData.uniqueTokenId), tostring(RawEventData.claims.uti))',
+    session:
+      'coalesce(tostring(RawEventData.AppAccessContext.AADSessionId), tostring(RawEventData.claims.sid), tostring(RawEventData.SessionId))',
+    identity: 'AccountObjectId',
+    ip: 'IPAddress',
+    what: 'ActionType',
+  },
 ]
 /** One branch per table: the time filter first (on TimeGenerated, which every table has and the store is partitioned by), then the key. */
 const sessionBranch = (t: (typeof SESSION_TABLES)[number], key: string) =>
@@ -72,14 +154,25 @@ export function huntingQueries(data: Pick<GraphData, 'entities' | 'sources'>, im
   // A derived compromise is known from its first use on; hunt two weeks earlier to find when it really started.
   const DAY = 86_400_000
   // Times go into datetime(…) unquoted: only normalised ones (the projection stores them so; peers and old logs may not).
-  const froms = impact.seeds.map(s => s.derived ? utc(new Date(Date.parse(s.derived.at) - 14 * DAY).toISOString()) : utc(compromiseOf(s.entity)?.from)).filter(isUtc).sort()
+  const froms = impact.seeds
+    .map(s => (s.derived ? utc(new Date(Date.parse(s.derived.at) - 14 * DAY).toISOString()) : utc(compromiseOf(s.entity)?.from)))
+    .filter(isUtc)
+    .sort()
   const tos = impact.seeds.map(s => utc(compromiseOf(s.entity)?.to))
   const first = utc(impact.first)
   const start = froms[0] ? `datetime(${froms[0]})` : isUtc(first) ? `datetime(${first}) - 1d` : 'ago(30d)'
   const end = tos.length && tos.every(isUtc) ? `datetime(${(tos as string[]).sort().at(-1)})` : 'now()'
   const window = `let start = ${start};\nlet end = ${end};\n`
   const add = (id: string, title: string, why: string, tables: string[], query: string, importable?: string) =>
-    queries.push({ id, title, why, query: window + query, tables, imported: tables.some(t => imported.has(t)), ...(importable ? { importable } : {}) })
+    queries.push({
+      id,
+      title,
+      why,
+      query: window + query,
+      tables,
+      imported: tables.some(t => imported.has(t)),
+      ...(importable ? { importable } : {}),
+    })
 
   const seeds = impact.seeds.map(s => s.entity)
   const newPivots = impact.pivots.filter(p => !p.before).map(p => p.entity)
@@ -88,93 +181,237 @@ export function huntingQueries(data: Pick<GraphData, 'entities' | 'sources'>, im
   const appIds = [...new Set(principals.flatMap(e => ident(e, 'entra-app-id')))].slice(0, MAX_VALUES)
   const keyIds = [...new Set(seeds.flatMap(e => ident(e, 'entra-credential-key-id')))].slice(0, MAX_VALUES)
   const users = [...seeds, ...newPivots].filter(e => isKind(e, /^user|account/i))
-  const upns = [...new Set(users.flatMap(e => ident(e, 'email')).concat(users.filter(e => e.name.includes('@')).map(e => e.name.toLowerCase())))].slice(0, MAX_VALUES)
-  const ips = [...new Set([...seeds, ...newPivots].filter(e => isKind(e, /^ip\b|ip address/i)).map(e => ident(e, 'ip')[0] ?? e.name))].slice(0, MAX_VALUES)
+  const upns = [
+    ...new Set(users.flatMap(e => ident(e, 'email')).concat(users.filter(e => e.name.includes('@')).map(e => e.name.toLowerCase()))),
+  ].slice(0, MAX_VALUES)
+  const ips = [
+    ...new Set([...seeds, ...newPivots].filter(e => isKind(e, /^ip\b|ip address/i)).map(e => ident(e, 'ip')[0] ?? e.name)),
+  ].slice(0, MAX_VALUES)
 
   if (keyIds.length) {
     const principalNames = [...new Set(principals.map(e => e.name))].slice(0, MAX_VALUES)
-    add('rotation-proof', 'Prove the rotation: were the stolen keys removed?',
+    add(
+      'rotation-proof',
+      'Prove the rotation: were the stolen keys removed?',
       'Every secret and certificate removed from or added to the affected app registrations and service principals since the attack (AuditLogs, one row per key). Export as CSV and drop it here: removed keys tick off the rotation list, keys added during the attack show up as backdoors to remove.',
       ['AuditLogs'],
-      `let keys = ${list(keyIds)};\nlet names = ${list(principalNames)};\nlet changes = AuditLogs\n    | where TimeGenerated between (start .. now())\n    | where OperationName has_any ("Certificates and secrets management", "service principal credentials", "Update application", "Update service principal")\n    | mv-expand Target = TargetResources\n    | mv-expand Property = Target.modifiedProperties\n    | where tostring(Property.displayName) == "KeyDescription"\n    | extend Old = tostring(Property.oldValue), New = tostring(Property.newValue)\n    | extend OldKeys = extract_all(@"KeyIdentifier=([0-9a-fA-F-]{36})", Old), NewKeys = extract_all(@"KeyIdentifier=([0-9a-fA-F-]{36})", New)\n    | extend Removed = set_difference(OldKeys, NewKeys), Added = set_difference(NewKeys, OldKeys)\n    | extend Application = tostring(Target.displayName), ApplicationObjectId = tostring(Target.id);\nlet apps = changes | where Old has_any (keys) or New has_any (keys) or Application in (names) | distinct ApplicationObjectId;\nunion\n    (changes | mv-expand KeyId = Removed to typeof(string) | extend CredentialChange = "removed", Description = Old),\n    (changes | mv-expand KeyId = Added to typeof(string) | extend CredentialChange = "added", Description = New)\n| where ApplicationObjectId in (apps) and isnotempty(KeyId)\n| extend KeyType = extract(strcat(@"KeyIdentifier=", KeyId, @",\\s*KeyType=(\\w+)"), 1, Description), KeyName = extract(strcat(@"KeyIdentifier=", KeyId, @"[^\\]]*DisplayName=([^\\]]*)"), 1, Description)\n| project TimeGenerated, CredentialChange, KeyId, KeyType, KeyName, Application, ApplicationObjectId,\n    Actor = coalesce(tostring(InitiatedBy.user.userPrincipalName), tostring(InitiatedBy.app.displayName)), ActorId = coalesce(tostring(InitiatedBy.user.id), tostring(InitiatedBy.app.servicePrincipalId)),\n    ActorIp = tostring(InitiatedBy.user.ipAddress), OperationName, Result, CorrelationId\n| order by TimeGenerated asc`, 'Entra credential changes')
-    add('credential-use', 'Where else was the stolen credential used, and is it still accepted?',
-      'Every sign-in with the stolen secret or certificate until now. New IPs and resources show the attacker beyond the board; after the rotation only failed attempts may remain. Export as CSV and drop it here to add them to the graph.', ['AADServicePrincipalSignInLogs'],
-      `AADServicePrincipalSignInLogs\n| where TimeGenerated between (start .. now())\n| where ServicePrincipalCredentialKeyId in (${list(keyIds)})\n| project TimeGenerated, ServicePrincipalName, ServicePrincipalId, AppId, ServicePrincipalCredentialKeyId, ServicePrincipalCredentialThumbprint, ClientCredentialType,\n    IPAddress, Location, LocationDetails, AutonomousSystemNumber, NetworkLocationDetails, ResourceDisplayName, ResourceIdentity, ResourceServicePrincipalId, ResultType, UserAgent, CorrelationId, Id\n| order by TimeGenerated asc`, 'AADServicePrincipalSignInLogs')
+      `let keys = ${list(keyIds)};\nlet names = ${list(principalNames)};\nlet changes = AuditLogs\n    | where TimeGenerated between (start .. now())\n    | where OperationName has_any ("Certificates and secrets management", "service principal credentials", "Update application", "Update service principal")\n    | mv-expand Target = TargetResources\n    | mv-expand Property = Target.modifiedProperties\n    | where tostring(Property.displayName) == "KeyDescription"\n    | extend Old = tostring(Property.oldValue), New = tostring(Property.newValue)\n    | extend OldKeys = extract_all(@"KeyIdentifier=([0-9a-fA-F-]{36})", Old), NewKeys = extract_all(@"KeyIdentifier=([0-9a-fA-F-]{36})", New)\n    | extend Removed = set_difference(OldKeys, NewKeys), Added = set_difference(NewKeys, OldKeys)\n    | extend Application = tostring(Target.displayName), ApplicationObjectId = tostring(Target.id);\nlet apps = changes | where Old has_any (keys) or New has_any (keys) or Application in (names) | distinct ApplicationObjectId;\nunion\n    (changes | mv-expand KeyId = Removed to typeof(string) | extend CredentialChange = "removed", Description = Old),\n    (changes | mv-expand KeyId = Added to typeof(string) | extend CredentialChange = "added", Description = New)\n| where ApplicationObjectId in (apps) and isnotempty(KeyId)\n| extend KeyType = extract(strcat(@"KeyIdentifier=", KeyId, @",\\s*KeyType=(\\w+)"), 1, Description), KeyName = extract(strcat(@"KeyIdentifier=", KeyId, @"[^\\]]*DisplayName=([^\\]]*)"), 1, Description)\n| project TimeGenerated, CredentialChange, KeyId, KeyType, KeyName, Application, ApplicationObjectId,\n    Actor = coalesce(tostring(InitiatedBy.user.userPrincipalName), tostring(InitiatedBy.app.displayName)), ActorId = coalesce(tostring(InitiatedBy.user.id), tostring(InitiatedBy.app.servicePrincipalId)),\n    ActorIp = tostring(InitiatedBy.user.ipAddress), OperationName, Result, CorrelationId\n| order by TimeGenerated asc`,
+      'Entra credential changes',
+    )
+    add(
+      'credential-use',
+      'Where else was the stolen credential used, and is it still accepted?',
+      'Every sign-in with the stolen secret or certificate until now. New IPs and resources show the attacker beyond the board; after the rotation only failed attempts may remain. Export as CSV and drop it here to add them to the graph.',
+      ['AADServicePrincipalSignInLogs'],
+      `AADServicePrincipalSignInLogs\n| where TimeGenerated between (start .. now())\n| where ServicePrincipalCredentialKeyId in (${list(keyIds)})\n| project TimeGenerated, ServicePrincipalName, ServicePrincipalId, AppId, ServicePrincipalCredentialKeyId, ServicePrincipalCredentialThumbprint, ClientCredentialType,\n    IPAddress, Location, LocationDetails, AutonomousSystemNumber, NetworkLocationDetails, ResourceDisplayName, ResourceIdentity, ResourceServicePrincipalId, ResultType, UserAgent, CorrelationId, Id\n| order by TimeGenerated asc`,
+      'AADServicePrincipalSignInLogs',
+    )
   }
   if (oids.length || appIds.length) {
-    const spFilter = [oids.length && `ServicePrincipalId in (${list(oids)})`, appIds.length && `AppId in (${list(appIds)})`].filter(Boolean).join(' or ')
-    add('sp-signins', 'All sign-ins of the service principal', 'Which IPs, credentials and resources it used since the compromise; an IP or key ID you do not know is the next pivot.', ['AADServicePrincipalSignInLogs'],
-      `AADServicePrincipalSignInLogs\n| where TimeGenerated between (start .. end)\n| where ${spFilter}\n| summarize SignIns = count(), Resources = make_set(ResourceDisplayName, 50), First = min(TimeGenerated), Last = max(TimeGenerated)\n    by IPAddress, Location, ServicePrincipalCredentialKeyId, ResultType\n| order by First asc`)
-    if (oids.length) add('sp-azure', 'Everything it did in Azure', 'All control-plane operations by the service principal: reading keys (listKeys, listCredentials) and changes are the impact.', ['AzureActivity'],
-      `AzureActivity\n| where TimeGenerated between (start .. end)\n| where Caller in~ (${list(oids)})\n| summarize Count = count(), Resources = make_set(_ResourceId, 100), First = min(TimeGenerated), Last = max(TimeGenerated)\n    by OperationNameValue, ActivityStatusValue, CallerIpAddress\n| order by First asc`)
-    if (appIds.length || oids.length) add('sp-keyvault', 'Key Vault secrets it read', 'SecretGet, KeyGet and CertificateGet show which secrets left the vault; each one has to be rotated at its origin.', ['AzureDiagnostics'],
-      `AzureDiagnostics\n| where TimeGenerated between (start .. end)\n| where ResourceProvider == "MICROSOFT.KEYVAULT"\n| where ${[appIds.length && `identity_claim_appid_g in (${list(appIds)})`, oids.length && `identity_claim_http_schemas_microsoft_com_identity_claims_objectidentifier_g in (${list(oids)})`].filter(Boolean).join(' or ')}${ips.length ? ` or CallerIPAddress in (${list(ips)})` : ''}\n| summarize Count = count(), Items = make_set(requestUri_s, 100), First = min(TimeGenerated), Last = max(TimeGenerated) by Resource, OperationName, CallerIPAddress, ResultSignature\n| order by First asc`)
-    if (appIds.length || oids.length) add('sp-graph', 'Microsoft Graph calls', 'Directory reads and changes through Graph (users, apps, mail) that never appear in AzureActivity.', ['MicrosoftGraphActivityLogs'],
-      `MicrosoftGraphActivityLogs\n| where TimeGenerated between (start .. end)\n| where ${[appIds.length && `AppId in (${list(appIds)})`, oids.length && `ServicePrincipalId in (${list(oids)})`].filter(Boolean).join(' or ')}\n| extend Path = tostring(split(tostring(parse_url(RequestUri).Path), "?")[0])\n| summarize Calls = count(), First = min(TimeGenerated), Last = max(TimeGenerated) by RequestMethod, Path, ResponseStatusCode, IPAddress\n| order by Calls desc`)
-    add('sp-persistence', 'Persistence: credentials, owners and roles added', 'An attacker keeps access by adding a secret, a federated credential, an owner or a role assignment; these survive the rotation.', ['AuditLogs', 'AzureActivity'],
-      `let ids = ${list([...oids, ...appIds])};\nunion isfuzzy=true\n  (AuditLogs\n   | where TimeGenerated between (start .. end)\n   | where OperationName has_any ("credential", "certificates and secrets", "owner", "app role assignment", "federated", "consent")\n   | where tostring(TargetResources) has_any (ids) or tostring(InitiatedBy) has_any (ids)\n   | project TimeGenerated, Table = "AuditLogs", Operation = OperationName, Actor = coalesce(tostring(InitiatedBy.app.displayName), tostring(InitiatedBy.user.userPrincipalName)), Target = tostring(TargetResources[0].displayName), Result),\n  (AzureActivity\n   | where TimeGenerated between (start .. end)\n   | where OperationNameValue has_any ("roleAssignments/write", "roleDefinitions/write", "federatedIdentityCredentials/write")\n   | where Caller in~ (ids) or tostring(Properties) has_any (ids)\n   | project TimeGenerated, Table = "AzureActivity", Operation = OperationNameValue, Actor = Caller, Target = _ResourceId, Result = ActivityStatusValue)\n| order by TimeGenerated asc`)
+    const spFilter = [oids.length && `ServicePrincipalId in (${list(oids)})`, appIds.length && `AppId in (${list(appIds)})`]
+      .filter(Boolean)
+      .join(' or ')
+    add(
+      'sp-signins',
+      'All sign-ins of the service principal',
+      'Which IPs, credentials and resources it used since the compromise; an IP or key ID you do not know is the next pivot.',
+      ['AADServicePrincipalSignInLogs'],
+      `AADServicePrincipalSignInLogs\n| where TimeGenerated between (start .. end)\n| where ${spFilter}\n| summarize SignIns = count(), Resources = make_set(ResourceDisplayName, 50), First = min(TimeGenerated), Last = max(TimeGenerated)\n    by IPAddress, Location, ServicePrincipalCredentialKeyId, ResultType\n| order by First asc`,
+    )
+    if (oids.length)
+      add(
+        'sp-azure',
+        'Everything it did in Azure',
+        'All control-plane operations by the service principal: reading keys (listKeys, listCredentials) and changes are the impact.',
+        ['AzureActivity'],
+        `AzureActivity\n| where TimeGenerated between (start .. end)\n| where Caller in~ (${list(oids)})\n| summarize Count = count(), Resources = make_set(_ResourceId, 100), First = min(TimeGenerated), Last = max(TimeGenerated)\n    by OperationNameValue, ActivityStatusValue, CallerIpAddress\n| order by First asc`,
+      )
+    if (appIds.length || oids.length)
+      add(
+        'sp-keyvault',
+        'Key Vault secrets it read',
+        'SecretGet, KeyGet and CertificateGet show which secrets left the vault; each one has to be rotated at its origin.',
+        ['AzureDiagnostics'],
+        `AzureDiagnostics\n| where TimeGenerated between (start .. end)\n| where ResourceProvider == "MICROSOFT.KEYVAULT"\n| where ${[appIds.length && `identity_claim_appid_g in (${list(appIds)})`, oids.length && `identity_claim_http_schemas_microsoft_com_identity_claims_objectidentifier_g in (${list(oids)})`].filter(Boolean).join(' or ')}${ips.length ? ` or CallerIPAddress in (${list(ips)})` : ''}\n| summarize Count = count(), Items = make_set(requestUri_s, 100), First = min(TimeGenerated), Last = max(TimeGenerated) by Resource, OperationName, CallerIPAddress, ResultSignature\n| order by First asc`,
+      )
+    if (appIds.length || oids.length)
+      add(
+        'sp-graph',
+        'Microsoft Graph calls',
+        'Directory reads and changes through Graph (users, apps, mail) that never appear in AzureActivity.',
+        ['MicrosoftGraphActivityLogs'],
+        `MicrosoftGraphActivityLogs\n| where TimeGenerated between (start .. end)\n| where ${[appIds.length && `AppId in (${list(appIds)})`, oids.length && `ServicePrincipalId in (${list(oids)})`].filter(Boolean).join(' or ')}\n| extend Path = tostring(split(tostring(parse_url(RequestUri).Path), "?")[0])\n| summarize Calls = count(), First = min(TimeGenerated), Last = max(TimeGenerated) by RequestMethod, Path, ResponseStatusCode, IPAddress\n| order by Calls desc`,
+      )
+    add(
+      'sp-persistence',
+      'Persistence: credentials, owners and roles added',
+      'An attacker keeps access by adding a secret, a federated credential, an owner or a role assignment; these survive the rotation.',
+      ['AuditLogs', 'AzureActivity'],
+      `let ids = ${list([...oids, ...appIds])};\nunion isfuzzy=true\n  (AuditLogs\n   | where TimeGenerated between (start .. end)\n   | where OperationName has_any ("credential", "certificates and secrets", "owner", "app role assignment", "federated", "consent")\n   | where tostring(TargetResources) has_any (ids) or tostring(InitiatedBy) has_any (ids)\n   | project TimeGenerated, Table = "AuditLogs", Operation = OperationName, Actor = coalesce(tostring(InitiatedBy.app.displayName), tostring(InitiatedBy.user.userPrincipalName)), Target = tostring(TargetResources[0].displayName), Result),\n  (AzureActivity\n   | where TimeGenerated between (start .. end)\n   | where OperationNameValue has_any ("roleAssignments/write", "roleDefinitions/write", "federatedIdentityCredentials/write")\n   | where Caller in~ (ids) or tostring(Properties) has_any (ids)\n   | project TimeGenerated, Table = "AzureActivity", Operation = OperationNameValue, Actor = Caller, Target = _ResourceId, Result = ActivityStatusValue)\n| order by TimeGenerated asc`,
+    )
   }
-  if (upns.length) add('user-activity', 'What the compromised user did', 'Interactive and token sign-ins, directory changes and Microsoft 365 activity of the account.', ['SigninLogs', 'AADNonInteractiveUserSignInLogs', 'AuditLogs', 'OfficeActivity'],
-    `let upns = ${list(upns)};\nunion isfuzzy=true\n  (SigninLogs | where TimeGenerated between (start .. end) | where UserPrincipalName in~ (upns) | project TimeGenerated, Table = "SigninLogs", What = AppDisplayName, IP = IPAddress, Result = ResultType),\n  (AADNonInteractiveUserSignInLogs | where TimeGenerated between (start .. end) | where UserPrincipalName in~ (upns) | project TimeGenerated, Table = "AADNonInteractiveUserSignInLogs", What = AppDisplayName, IP = IPAddress, Result = ResultType),\n  (AuditLogs | where TimeGenerated between (start .. end) | where tostring(InitiatedBy.user.userPrincipalName) in~ (upns) | project TimeGenerated, Table = "AuditLogs", What = OperationName, IP = tostring(InitiatedBy.user.ipAddress), Result),\n  (OfficeActivity | where TimeGenerated between (start .. end) | where UserId in~ (upns) | project TimeGenerated, Table = "OfficeActivity", What = Operation, IP = ClientIP, Result = ResultStatus)\n| summarize Count = count(), First = min(TimeGenerated), Last = max(TimeGenerated) by Table, What, IP, Result\n| order by First asc`)
+  if (upns.length)
+    add(
+      'user-activity',
+      'What the compromised user did',
+      'Interactive and token sign-ins, directory changes and Microsoft 365 activity of the account.',
+      ['SigninLogs', 'AADNonInteractiveUserSignInLogs', 'AuditLogs', 'OfficeActivity'],
+      `let upns = ${list(upns)};\nunion isfuzzy=true\n  (SigninLogs | where TimeGenerated between (start .. end) | where UserPrincipalName in~ (upns) | project TimeGenerated, Table = "SigninLogs", What = AppDisplayName, IP = IPAddress, Result = ResultType),\n  (AADNonInteractiveUserSignInLogs | where TimeGenerated between (start .. end) | where UserPrincipalName in~ (upns) | project TimeGenerated, Table = "AADNonInteractiveUserSignInLogs", What = AppDisplayName, IP = IPAddress, Result = ResultType),\n  (AuditLogs | where TimeGenerated between (start .. end) | where tostring(InitiatedBy.user.userPrincipalName) in~ (upns) | project TimeGenerated, Table = "AuditLogs", What = OperationName, IP = tostring(InitiatedBy.user.ipAddress), Result),\n  (OfficeActivity | where TimeGenerated between (start .. end) | where UserId in~ (upns) | project TimeGenerated, Table = "OfficeActivity", What = Operation, IP = ClientIP, Result = ResultStatus)\n| summarize Count = count(), First = min(TimeGenerated), Last = max(TimeGenerated) by Table, What, IP, Result\n| order by First asc`,
+    )
   if (ips.length) {
     const gitlab = gitlabTable(data)
-    add('ip-everywhere', `Everything from the attacker's IP${ips.length === 1 ? '' : 's'}`, 'The same infrastructure across sign-ins, Azure, Key Vault, storage, Graph and GitLab: other identities used from it are compromised too.',
-      ['SigninLogs', 'AADNonInteractiveUserSignInLogs', 'AADServicePrincipalSignInLogs', 'AzureActivity', 'AzureDiagnostics', 'StorageBlobLogs', 'MicrosoftGraphActivityLogs', 'OfficeActivity', ...(gitlab ? [gitlab] : [])],
-      `let ips = ${list(ips)};\nunion isfuzzy=true\n  (SigninLogs | where TimeGenerated between (start .. end) | where IPAddress in (ips) | project TimeGenerated, Table = "SigninLogs", Identity = UserPrincipalName, What = AppDisplayName, IP = IPAddress),\n  (AADNonInteractiveUserSignInLogs | where TimeGenerated between (start .. end) | where IPAddress in (ips) | project TimeGenerated, Table = "AADNonInteractiveUserSignInLogs", Identity = UserPrincipalName, What = AppDisplayName, IP = IPAddress),\n  (AADServicePrincipalSignInLogs | where TimeGenerated between (start .. end) | where IPAddress in (ips) | project TimeGenerated, Table = "AADServicePrincipalSignInLogs", Identity = ServicePrincipalName, What = ResourceDisplayName, IP = IPAddress),\n  (AzureActivity | where TimeGenerated between (start .. end) | where CallerIpAddress in (ips) | project TimeGenerated, Table = "AzureActivity", Identity = Caller, What = OperationNameValue, IP = CallerIpAddress),\n  (AzureDiagnostics | where TimeGenerated between (start .. end) | where CallerIPAddress in (ips) | project TimeGenerated, Table = "AzureDiagnostics", Identity = coalesce(identity_claim_appid_g, identity_claim_upn_s), What = strcat(ResourceProvider, " ", OperationName), IP = CallerIPAddress),\n  (StorageBlobLogs | where TimeGenerated between (start .. end) | extend IP = tostring(split(CallerIpAddress, ":")[0]) | where IP in (ips) | project TimeGenerated, Table = "StorageBlobLogs", Identity = strcat(AccountName, " ", AuthenticationType), What = OperationName, IP),\n  (MicrosoftGraphActivityLogs | where TimeGenerated between (start .. end) | where IPAddress in (ips) | project TimeGenerated, Table = "MicrosoftGraphActivityLogs", Identity = coalesce(AppId, UserId), What = RequestMethod, IP = IPAddress),\n  (OfficeActivity | where TimeGenerated between (start .. end) | where ClientIP in (ips) | project TimeGenerated, Table = "OfficeActivity", Identity = UserId, What = Operation, IP = ClientIP)${gitlab ? `,\n  (${gitlab} | where TimeGenerated between (start .. end) | where ip_address in (ips) | project TimeGenerated, Table = "${gitlab}", Identity = author_name, What = tostring(parse_json(details).event_name), IP = ip_address)` : ''}\n| summarize Count = count(), First = min(TimeGenerated), Last = max(TimeGenerated) by Table, Identity, What, IP\n| order by First asc`)
+    add(
+      'ip-everywhere',
+      `Everything from the attacker's IP${ips.length === 1 ? '' : 's'}`,
+      'The same infrastructure across sign-ins, Azure, Key Vault, storage, Graph and GitLab: other identities used from it are compromised too.',
+      [
+        'SigninLogs',
+        'AADNonInteractiveUserSignInLogs',
+        'AADServicePrincipalSignInLogs',
+        'AzureActivity',
+        'AzureDiagnostics',
+        'StorageBlobLogs',
+        'MicrosoftGraphActivityLogs',
+        'OfficeActivity',
+        ...(gitlab ? [gitlab] : []),
+      ],
+      `let ips = ${list(ips)};\nunion isfuzzy=true\n  (SigninLogs | where TimeGenerated between (start .. end) | where IPAddress in (ips) | project TimeGenerated, Table = "SigninLogs", Identity = UserPrincipalName, What = AppDisplayName, IP = IPAddress),\n  (AADNonInteractiveUserSignInLogs | where TimeGenerated between (start .. end) | where IPAddress in (ips) | project TimeGenerated, Table = "AADNonInteractiveUserSignInLogs", Identity = UserPrincipalName, What = AppDisplayName, IP = IPAddress),\n  (AADServicePrincipalSignInLogs | where TimeGenerated between (start .. end) | where IPAddress in (ips) | project TimeGenerated, Table = "AADServicePrincipalSignInLogs", Identity = ServicePrincipalName, What = ResourceDisplayName, IP = IPAddress),\n  (AzureActivity | where TimeGenerated between (start .. end) | where CallerIpAddress in (ips) | project TimeGenerated, Table = "AzureActivity", Identity = Caller, What = OperationNameValue, IP = CallerIpAddress),\n  (AzureDiagnostics | where TimeGenerated between (start .. end) | where CallerIPAddress in (ips) | project TimeGenerated, Table = "AzureDiagnostics", Identity = coalesce(identity_claim_appid_g, identity_claim_upn_s), What = strcat(ResourceProvider, " ", OperationName), IP = CallerIPAddress),\n  (StorageBlobLogs | where TimeGenerated between (start .. end) | extend IP = tostring(split(CallerIpAddress, ":")[0]) | where IP in (ips) | project TimeGenerated, Table = "StorageBlobLogs", Identity = strcat(AccountName, " ", AuthenticationType), What = OperationName, IP),\n  (MicrosoftGraphActivityLogs | where TimeGenerated between (start .. end) | where IPAddress in (ips) | project TimeGenerated, Table = "MicrosoftGraphActivityLogs", Identity = coalesce(AppId, UserId), What = RequestMethod, IP = IPAddress),\n  (OfficeActivity | where TimeGenerated between (start .. end) | where ClientIP in (ips) | project TimeGenerated, Table = "OfficeActivity", Identity = UserId, What = Operation, IP = ClientIP)${gitlab ? `,\n  (${gitlab} | where TimeGenerated between (start .. end) | where ip_address in (ips) | project TimeGenerated, Table = "${gitlab}", Identity = author_name, What = tostring(parse_json(details).event_name), IP = ip_address)` : ''}\n| summarize Count = count(), First = min(TimeGenerated), Last = max(TimeGenerated) by Table, Identity, What, IP\n| order by First asc`,
+    )
   }
 
   const sessions = sessionFindings(data as Pick<GraphData, 'entities' | 'facts'>, impact).slice(0, MAX_VALUES)
-  if (sessions.length) add('session-replay', 'Everything done with the replayed session tokens',
-    'Every sign-in, Azure operation, Graph call and Microsoft 365 action made with the session tokens seen from more than one IP (Entra UniqueTokenIdentifier, UniqueTokenId, the uti claim, Graph SignInActivityId): each further IP is a redirector of the attacker, or the place the token was stolen from. Padding is trimmed, case is kept.',
-    SESSION_TABLES.map(t => t.table),
-    `let utis = ${list(sessions.map(s => s.uti))};\nunion isfuzzy=true\n${SESSION_TABLES.map(t => sessionBranch(t, `where trim_end(@"=+", ${t.token}) in (utis)`)).join(',\n')}\n| summarize Count = count(), First = min(TimeGenerated), Last = max(TimeGenerated) by Session = Token, Identity, IP, Table, What\n| order by Session, First asc`)
+  if (sessions.length)
+    add(
+      'session-replay',
+      'Everything done with the replayed session tokens',
+      'Every sign-in, Azure operation, Graph call and Microsoft 365 action made with the session tokens seen from more than one IP (Entra UniqueTokenIdentifier, UniqueTokenId, the uti claim, Graph SignInActivityId): each further IP is a redirector of the attacker, or the place the token was stolen from. Padding is trimmed, case is kept.',
+      SESSION_TABLES.map(t => t.table),
+      `let utis = ${list(sessions.map(s => s.uti))};\nunion isfuzzy=true\n${SESSION_TABLES.map(t => sessionBranch(t, `where trim_end(@"=+", ${t.token}) in (utis)`)).join(',\n')}\n| summarize Count = count(), First = min(TimeGenerated), Last = max(TimeGenerated) by Session = Token, Identity, IP, Table, What\n| order by Session, First asc`,
+    )
 
   // Sign-in sessions (sid) the attacker worked in: every token issued in them and everything done with those tokens.
   const signIns = signInSessionFindings(data as Pick<GraphData, 'entities' | 'facts'>, impact)
-  const attackerSids = [...new Set([...signIns.map(f => f.sid), ...attackSessions(data as Pick<GraphData, 'entities' | 'facts'>, impact).flatMap(s => s.sid ? [s.sid] : [])])].slice(0, MAX_VALUES)
-  if (attackerSids.length) add('signin-session', "Everything in the attacker's sign-in sessions",
-    'A sign-in session (the Entra sid) holds every token refreshed from one sign-in, so a stolen session cookie or refresh token shows up as new tokens in the same session, possibly from new IPs. Lists each IP, identity and table per session with how many tokens it used. Session IDs are compared in lower case.',
-    SESSION_TABLES.filter(t => t.session).map(t => t.table),
-    `let sids = ${list(attackerSids)};\nunion isfuzzy=true\n${SESSION_TABLES.filter(t => t.session).map(t => sessionBranch(t, `extend SignInSession = tolower(${t.session}) | where SignInSession in (sids)`).replace(', Token,', ', SignInSession, Token,')).join(',\n')}\n| summarize Count = count(), Tokens = dcount(Token), First = min(TimeGenerated), Last = max(TimeGenerated) by SignInSession, Identity, IP, Table\n| order by SignInSession, First asc`)
+  const attackerSids = [
+    ...new Set([
+      ...signIns.map(f => f.sid),
+      ...attackSessions(data as Pick<GraphData, 'entities' | 'facts'>, impact).flatMap(s => (s.sid ? [s.sid] : [])),
+    ]),
+  ].slice(0, MAX_VALUES)
+  if (attackerSids.length)
+    add(
+      'signin-session',
+      "Everything in the attacker's sign-in sessions",
+      'A sign-in session (the Entra sid) holds every token refreshed from one sign-in, so a stolen session cookie or refresh token shows up as new tokens in the same session, possibly from new IPs. Lists each IP, identity and table per session with how many tokens it used. Session IDs are compared in lower case.',
+      SESSION_TABLES.filter(t => t.session).map(t => t.table),
+      `let sids = ${list(attackerSids)};\nunion isfuzzy=true\n${SESSION_TABLES.filter(t => t.session)
+        .map(t =>
+          sessionBranch(t, `extend SignInSession = tolower(${t.session}) | where SignInSession in (sids)`).replace(
+            ', Token,',
+            ', SignInSession, Token,',
+          ),
+        )
+        .join(
+          ',\n',
+        )}\n| summarize Count = count(), Tokens = dcount(Token), First = min(TimeGenerated), Last = max(TimeGenerated) by SignInSession, Identity, IP, Table\n| order by SignInSession, First asc`,
+    )
 
-  const agents = agentFindings(data as Pick<GraphData, 'entities' | 'facts'>, impact).filter(f => !f.baseline).slice(0, 20).map(f => f.agent)
-  if (agents.length) add('agent-hunt', "Who else used the attacker's user agents?",
-    'Sign-ins with the user agents that came with the attacker and that the compromised identities never used before. The same tooling from other IPs or identities is a lead; combine it with IP, ASN and time, since common agents are weak on their own.',
-    ['AADServicePrincipalSignInLogs', 'SigninLogs', 'AADNonInteractiveUserSignInLogs'],
-    `let agents = ${list(agents)};\nunion isfuzzy=true\n  (AADServicePrincipalSignInLogs | where UserAgent in (agents) | project TimeGenerated, Table = "AADServicePrincipalSignInLogs", Identity = ServicePrincipalName, IP = IPAddress, UserAgent, ResultType),\n  (SigninLogs | where UserAgent in (agents) | project TimeGenerated, Table = "SigninLogs", Identity = UserPrincipalName, IP = IPAddress, UserAgent, ResultType),\n  (AADNonInteractiveUserSignInLogs | where UserAgent in (agents) | project TimeGenerated, Table = "AADNonInteractiveUserSignInLogs", Identity = UserPrincipalName, IP = IPAddress, UserAgent, ResultType)\n| where TimeGenerated between (start .. now())\n| where ResultType == "0"\n| summarize SignIns = count(), Identities = make_set(Identity, 20), First = min(TimeGenerated), Last = max(TimeGenerated) by UserAgent, IP\n| order by First asc`)
-  if (ips.length) add('credential-usage', 'Every key of the service principals seen from the attacker, per IP and hour',
-    'Which client secrets and certificates of those service principals were used from which IPs, hour by hour: the attacker\'s hours stand out against the regular automation, and keys used only from attacker IPs are the stolen ones.',
-    ['AADServicePrincipalSignInLogs'],
-    `let ips = ${list(ips)};\nlet principals = AADServicePrincipalSignInLogs\n    | where TimeGenerated between (start .. now())\n    | where IPAddress in (ips)\n    | distinct ServicePrincipalId;\nAADServicePrincipalSignInLogs\n| where TimeGenerated between (start - 30d .. now())\n| where ServicePrincipalId in (principals) and ResultType == "0"\n| summarize SignIns = count(), FromAttacker = countif(IPAddress in (ips)) by ServicePrincipalName, ServicePrincipalCredentialKeyId, IPAddress, bin(TimeGenerated, 1h)\n| order by TimeGenerated asc`)
+  const agents = agentFindings(data as Pick<GraphData, 'entities' | 'facts'>, impact)
+    .filter(f => !f.baseline)
+    .slice(0, 20)
+    .map(f => f.agent)
+  if (agents.length)
+    add(
+      'agent-hunt',
+      "Who else used the attacker's user agents?",
+      'Sign-ins with the user agents that came with the attacker and that the compromised identities never used before. The same tooling from other IPs or identities is a lead; combine it with IP, ASN and time, since common agents are weak on their own.',
+      ['AADServicePrincipalSignInLogs', 'SigninLogs', 'AADNonInteractiveUserSignInLogs'],
+      `let agents = ${list(agents)};\nunion isfuzzy=true\n  (AADServicePrincipalSignInLogs | where UserAgent in (agents) | project TimeGenerated, Table = "AADServicePrincipalSignInLogs", Identity = ServicePrincipalName, IP = IPAddress, UserAgent, ResultType),\n  (SigninLogs | where UserAgent in (agents) | project TimeGenerated, Table = "SigninLogs", Identity = UserPrincipalName, IP = IPAddress, UserAgent, ResultType),\n  (AADNonInteractiveUserSignInLogs | where UserAgent in (agents) | project TimeGenerated, Table = "AADNonInteractiveUserSignInLogs", Identity = UserPrincipalName, IP = IPAddress, UserAgent, ResultType)\n| where TimeGenerated between (start .. now())\n| where ResultType == "0"\n| summarize SignIns = count(), Identities = make_set(Identity, 20), First = min(TimeGenerated), Last = max(TimeGenerated) by UserAgent, IP\n| order by First asc`,
+    )
+  if (ips.length)
+    add(
+      'credential-usage',
+      'Every key of the service principals seen from the attacker, per IP and hour',
+      "Which client secrets and certificates of those service principals were used from which IPs, hour by hour: the attacker's hours stand out against the regular automation, and keys used only from attacker IPs are the stolen ones.",
+      ['AADServicePrincipalSignInLogs'],
+      `let ips = ${list(ips)};\nlet principals = AADServicePrincipalSignInLogs\n    | where TimeGenerated between (start .. now())\n    | where IPAddress in (ips)\n    | distinct ServicePrincipalId;\nAADServicePrincipalSignInLogs\n| where TimeGenerated between (start - 30d .. now())\n| where ServicePrincipalId in (principals) and ResultType == "0"\n| summarize SignIns = count(), FromAttacker = countif(IPAddress in (ips)) by ServicePrincipalName, ServicePrincipalCredentialKeyId, IPAddress, bin(TimeGenerated, 1h)\n| order by TimeGenerated asc`,
+    )
 
   // Resources whose keys or credentials were read: was the stolen key used afterwards?
   const exposed = impact.impacted.filter(i => i.effect === 'secret')
   const byOperation = (pattern: RegExp) => exposed.filter(i => i.operations.some(o => pattern.test(o.operation.toLowerCase())))
   const resourceIds = (entries: typeof exposed) => [...new Set(entries.flatMap(i => ident(i.entity, 'resource_id')))].slice(0, MAX_VALUES)
-  const firstOf = (entries: typeof exposed) => entries.map(i => i.first).filter((t): t is string => !!t).sort()[0]
-  const since = (entries: typeof exposed) => { const t = utc(firstOf(entries)); return isUtc(t) ? `datetime(${t})` : 'start' }
+  const firstOf = (entries: typeof exposed) =>
+    entries
+      .map(i => i.first)
+      .filter((t): t is string => !!t)
+      .sort()[0]
+  const since = (entries: typeof exposed) => {
+    const t = utc(firstOf(entries))
+    return isUtc(t) ? `datetime(${t})` : 'start'
+  }
   const aks = byOperation(/listcluster\w*credential/)
-  if (aks.length) add('aks-admin', 'Was the stolen kubeconfig used?', 'listClusterAdminCredential hands out a cluster-admin certificate ("masterclient"); the Kubernetes audit log shows what was done with it.', ['AKSAudit', 'AKSAuditAdmin'],
-    `let clusters = ${list(resourceIds(aks))};\nunion isfuzzy=true AKSAudit, AKSAuditAdmin\n| where TimeGenerated between (${since(aks)} .. end)\n| where _ResourceId in~ (clusters)\n| extend User = tostring(User.username), Resource = tostring(ObjectRef.resource), Namespace = tostring(ObjectRef.namespace)\n| where User in ("masterclient", "clusterAdmin", "clusterUser") or User startswith "system:serviceaccount:kube-system"\n| summarize Count = count(), First = min(TimeGenerated), Last = max(TimeGenerated) by _ResourceId, User, Verb, Resource, Namespace, SourceIps = tostring(SourceIps)\n| order by First asc`)
+  if (aks.length)
+    add(
+      'aks-admin',
+      'Was the stolen kubeconfig used?',
+      'listClusterAdminCredential hands out a cluster-admin certificate ("masterclient"); the Kubernetes audit log shows what was done with it.',
+      ['AKSAudit', 'AKSAuditAdmin'],
+      `let clusters = ${list(resourceIds(aks))};\nunion isfuzzy=true AKSAudit, AKSAuditAdmin\n| where TimeGenerated between (${since(aks)} .. end)\n| where _ResourceId in~ (clusters)\n| extend User = tostring(User.username), Resource = tostring(ObjectRef.resource), Namespace = tostring(ObjectRef.namespace)\n| where User in ("masterclient", "clusterAdmin", "clusterUser") or User startswith "system:serviceaccount:kube-system"\n| summarize Count = count(), First = min(TimeGenerated), Last = max(TimeGenerated) by _ResourceId, User, Verb, Resource, Namespace, SourceIps = tostring(SourceIps)\n| order by First asc`,
+    )
   const acr = byOperation(/(containerregistry|registries).*listcredentials|listcredentials.*(containerregistry|registries)/)
-  if (acr.length) add('acr-use', 'Was the registry password used?', 'Logins and pushes with the admin credentials after they were listed: a pushed image is a supply-chain foothold.', ['ContainerRegistryLoginEvents', 'ContainerRegistryRepositoryEvents'],
-    `let registries = ${list(resourceIds(acr))};\nunion isfuzzy=true\n  (ContainerRegistryLoginEvents | where _ResourceId in~ (registries) | project TimeGenerated, Event = strcat("login ", ResultDescription), Identity, CallerIpAddress, Repository = ""),\n  (ContainerRegistryRepositoryEvents | where _ResourceId in~ (registries) | project TimeGenerated, Event = OperationName, Identity, CallerIpAddress, Repository = strcat(Repository, ":", Tag))\n| where TimeGenerated between (${since(acr)} .. end)\n| summarize Count = count(), First = min(TimeGenerated), Last = max(TimeGenerated) by Event, Identity, CallerIpAddress, Repository\n| order by First asc`)
+  if (acr.length)
+    add(
+      'acr-use',
+      'Was the registry password used?',
+      'Logins and pushes with the admin credentials after they were listed: a pushed image is a supply-chain foothold.',
+      ['ContainerRegistryLoginEvents', 'ContainerRegistryRepositoryEvents'],
+      `let registries = ${list(resourceIds(acr))};\nunion isfuzzy=true\n  (ContainerRegistryLoginEvents | where _ResourceId in~ (registries) | project TimeGenerated, Event = strcat("login ", ResultDescription), Identity, CallerIpAddress, Repository = ""),\n  (ContainerRegistryRepositoryEvents | where _ResourceId in~ (registries) | project TimeGenerated, Event = OperationName, Identity, CallerIpAddress, Repository = strcat(Repository, ":", Tag))\n| where TimeGenerated between (${since(acr)} .. end)\n| summarize Count = count(), First = min(TimeGenerated), Last = max(TimeGenerated) by Event, Identity, CallerIpAddress, Repository\n| order by First asc`,
+    )
   const storage = byOperation(/storage.*(listkeys|listaccountsas|listservicesas)|(listkeys|listaccountsas|listservicesas).*storage/)
-  if (storage.length) add('storage-keys', 'Was the storage key used?', 'Requests authenticated with the account key or a SAS after the keys were listed; unknown IPs mean data access with the stolen key.', ['StorageBlobLogs', 'StorageFileLogs', 'StorageQueueLogs', 'StorageTableLogs'],
-    `let accounts = ${list([...new Set(storage.map(i => i.entity.name.split('/').pop()!.toLowerCase()))])};\nunion isfuzzy=true StorageBlobLogs, StorageFileLogs, StorageQueueLogs, StorageTableLogs\n| where TimeGenerated between (${since(storage)} .. end)\n| where AccountName in~ (accounts) and AuthenticationType in ("AccountKey", "SAS")\n| extend IP = tostring(split(CallerIpAddress, ":")[0])\n| summarize Requests = count(), Operations = make_set(OperationName, 20), First = min(TimeGenerated), Last = max(TimeGenerated) by AccountName, AuthenticationType, IP\n| order by First asc`)
+  if (storage.length)
+    add(
+      'storage-keys',
+      'Was the storage key used?',
+      'Requests authenticated with the account key or a SAS after the keys were listed; unknown IPs mean data access with the stolen key.',
+      ['StorageBlobLogs', 'StorageFileLogs', 'StorageQueueLogs', 'StorageTableLogs'],
+      `let accounts = ${list([...new Set(storage.map(i => i.entity.name.split('/').pop()!.toLowerCase()))])};\nunion isfuzzy=true StorageBlobLogs, StorageFileLogs, StorageQueueLogs, StorageTableLogs\n| where TimeGenerated between (${since(storage)} .. end)\n| where AccountName in~ (accounts) and AuthenticationType in ("AccountKey", "SAS")\n| extend IP = tostring(split(CallerIpAddress, ":")[0])\n| summarize Requests = count(), Operations = make_set(OperationName, 20), First = min(TimeGenerated), Last = max(TimeGenerated) by AccountName, AuthenticationType, IP\n| order by First asc`,
+    )
   const cognitive = byOperation(/cognitiveservices|openai/)
-  if (cognitive.length) add('ai-keys', 'Were the AI service keys used?', 'Calls to the Cognitive Services / Azure OpenAI accounts after their keys were listed (e.g. model abuse, data access).', ['AzureDiagnostics'],
-    `let accounts = ${list([...new Set(cognitive.map(i => i.entity.name.split('/').pop()!.toUpperCase()))])};\nAzureDiagnostics\n| where TimeGenerated between (${since(cognitive)} .. end)\n| where ResourceProvider == "MICROSOFT.COGNITIVESERVICES" and Resource in (accounts)\n| summarize Calls = count(), First = min(TimeGenerated), Last = max(TimeGenerated) by Resource, OperationName, CallerIPAddress, ResultSignature\n| order by First asc`)
+  if (cognitive.length)
+    add(
+      'ai-keys',
+      'Were the AI service keys used?',
+      'Calls to the Cognitive Services / Azure OpenAI accounts after their keys were listed (e.g. model abuse, data access).',
+      ['AzureDiagnostics'],
+      `let accounts = ${list([...new Set(cognitive.map(i => i.entity.name.split('/').pop()!.toUpperCase()))])};\nAzureDiagnostics\n| where TimeGenerated between (${since(cognitive)} .. end)\n| where ResourceProvider == "MICROSOFT.COGNITIVESERVICES" and Resource in (accounts)\n| summarize Calls = count(), First = min(TimeGenerated), Last = max(TimeGenerated) by Resource, OperationName, CallerIPAddress, ResultSignature\n| order by First asc`,
+    )
   const sites = byOperation(/web\/sites/)
-  if (sites.length) add('app-publishing', 'Were publishing credentials or function keys used?', 'FTP / Web Deploy logins after the publish profile or keys were read: a changed deployment is code execution.', ['AppServiceAuditLogs', 'AzureActivity'],
-    `let sites = ${list(resourceIds(sites))};\nunion isfuzzy=true\n  (AppServiceAuditLogs | where _ResourceId in~ (sites) | project TimeGenerated, Event = strcat(Protocol, " ", OperationName), Who = User, IP = UserAddress, Resource = _ResourceId),\n  (AzureActivity | where _ResourceId in~ (sites) | where OperationNameValue has_any ("sites/write", "deployments", "config/write", "slots") | project TimeGenerated, Event = OperationNameValue, Who = Caller, IP = CallerIpAddress, Resource = _ResourceId)\n| where TimeGenerated between (${since(sites)} .. end)\n| summarize Count = count(), First = min(TimeGenerated), Last = max(TimeGenerated) by Event, Who, IP, Resource\n| order by First asc`)
+  if (sites.length)
+    add(
+      'app-publishing',
+      'Were publishing credentials or function keys used?',
+      'FTP / Web Deploy logins after the publish profile or keys were read: a changed deployment is code execution.',
+      ['AppServiceAuditLogs', 'AzureActivity'],
+      `let sites = ${list(resourceIds(sites))};\nunion isfuzzy=true\n  (AppServiceAuditLogs | where _ResourceId in~ (sites) | project TimeGenerated, Event = strcat(Protocol, " ", OperationName), Who = User, IP = UserAddress, Resource = _ResourceId),\n  (AzureActivity | where _ResourceId in~ (sites) | where OperationNameValue has_any ("sites/write", "deployments", "config/write", "slots") | project TimeGenerated, Event = OperationNameValue, Who = Caller, IP = CallerIpAddress, Resource = _ResourceId)\n| where TimeGenerated between (${since(sites)} .. end)\n| summarize Count = count(), First = min(TimeGenerated), Last = max(TimeGenerated) by Event, Who, IP, Resource\n| order by First asc`,
+    )
   const touched = impact.impacted.filter(i => i.effect !== 'attempt' && ident(i.entity, 'resource_id').length)
-  if (touched.length) add('resource-others', 'Who else touched the impacted resources?', 'Other callers on the same resources after the attacker: a second identity working with the same goal is likely compromised too.', ['AzureActivity'],
-    `let resources = ${list(resourceIds(touched))};\nAzureActivity\n| where TimeGenerated between (start .. end)\n| where _ResourceId in~ (resources)${oids.length ? `\n| where Caller !in~ (${list(oids)})` : ''}\n| summarize Count = count(), Operations = make_set(OperationNameValue, 20), First = min(TimeGenerated), Last = max(TimeGenerated) by Caller, CallerIpAddress\n| order by First asc`)
+  if (touched.length)
+    add(
+      'resource-others',
+      'Who else touched the impacted resources?',
+      'Other callers on the same resources after the attacker: a second identity working with the same goal is likely compromised too.',
+      ['AzureActivity'],
+      `let resources = ${list(resourceIds(touched))};\nAzureActivity\n| where TimeGenerated between (start .. end)\n| where _ResourceId in~ (resources)${oids.length ? `\n| where Caller !in~ (${list(oids)})` : ''}\n| summarize Count = count(), Operations = make_set(OperationNameValue, 20), First = min(TimeGenerated), Last = max(TimeGenerated) by Caller, CallerIpAddress\n| order by First asc`,
+    )
   if (impact.variables.length) {
     const gitlab = gitlabTable(data)
-    add('gitlab-projects', 'Who else worked in the exposed GitLab projects?', 'Pipelines, variable reads and git operations in the projects whose CI/CD variables the attacker read; the secrets in them reach further systems.', [gitlab ?? 'GitLab audit table'],
-      `let projects = ${list(impact.variables.map(v => v.path).slice(0, MAX_VALUES))};\n${gitlab ?? 'GitLabAudit_CL /* replace with your GitLab audit table */'}\n| where TimeGenerated between (start .. end)\n| where entity_path in (projects)\n| extend Event = tostring(parse_json(details).event_name)\n| summarize Count = count(), Projects = dcount(entity_path), First = min(TimeGenerated), Last = max(TimeGenerated) by author_name, ip_address, Event\n| order by First asc`)
+    add(
+      'gitlab-projects',
+      'Who else worked in the exposed GitLab projects?',
+      'Pipelines, variable reads and git operations in the projects whose CI/CD variables the attacker read; the secrets in them reach further systems.',
+      [gitlab ?? 'GitLab audit table'],
+      `let projects = ${list(impact.variables.map(v => v.path).slice(0, MAX_VALUES))};\n${gitlab ?? 'GitLabAudit_CL /* replace with your GitLab audit table */'}\n| where TimeGenerated between (start .. end)\n| where entity_path in (projects)\n| extend Event = tostring(parse_json(details).event_name)\n| summarize Count = count(), Projects = dcount(entity_path), First = min(TimeGenerated), Last = max(TimeGenerated) by author_name, ip_address, Event\n| order by First asc`,
+    )
   }
   return queries
 }
@@ -185,23 +422,77 @@ export function impactReport(data: Pick<GraphData, 'entities' | 'facts' | 'sourc
   const byId = new Map(data.entities.map(e => [e.id, e]))
   const name = (id: string) => byId.get(id)?.name ?? id
   const guidance: string[] = []
-  const guide = (detail: string) => { let index = guidance.indexOf(detail); if (index < 0) index = guidance.push(detail) - 1; return index }
+  const guide = (detail: string) => {
+    let index = guidance.indexOf(detail)
+    if (index < 0) index = guidance.push(detail) - 1
+    return index
+  }
   return {
-    seeds: impact.seeds.map(s => ({ id: s.entity.id, name: s.entity.name, kind: s.entity.kind, ...(s.derived ? { derived: { via: name(s.derived.via), first_use: s.derived.at } } : compromiseOf(s.entity)) })),
-    first: impact.first, last: impact.last, undated_evidence: impact.undated,
-    steps: impact.steps.slice(0, 100).map(s => ({ operation: s.operation, effect: s.effect, by: s.seeds.map(name), with: s.others.slice(0, 5).map(name), with_total: s.others.length, targets: s.targets.length,
-      sample_targets: s.targets.slice(0, 3).map(name), count: s.count, first: s.first, last: s.last })),
+    seeds: impact.seeds.map(s => ({
+      id: s.entity.id,
+      name: s.entity.name,
+      kind: s.entity.kind,
+      ...(s.derived ? { derived: { via: name(s.derived.via), first_use: s.derived.at } } : compromiseOf(s.entity)),
+    })),
+    first: impact.first,
+    last: impact.last,
+    undated_evidence: impact.undated,
+    steps: impact.steps.slice(0, 100).map(s => ({
+      operation: s.operation,
+      effect: s.effect,
+      by: s.seeds.map(name),
+      with: s.others.slice(0, 5).map(name),
+      with_total: s.others.length,
+      targets: s.targets.length,
+      sample_targets: s.targets.slice(0, 3).map(name),
+      count: s.count,
+      first: s.first,
+      last: s.last,
+    })),
     steps_total: impact.steps.length,
-    impacted: impact.impacted.slice(0, 100).map(i => ({ id: i.entity.id, name: i.entity.name, kind: i.entity.kind, effect: i.effect,
-      operations: i.operations.slice(0, 3).map(o => `${o.operation} ×${o.count}`), last: i.last })),
+    impacted: impact.impacted.slice(0, 100).map(i => ({
+      id: i.entity.id,
+      name: i.entity.name,
+      kind: i.entity.kind,
+      effect: i.effect,
+      operations: i.operations.slice(0, 3).map(o => `${o.operation} ×${o.count}`),
+      last: i.last,
+    })),
     impacted_total: impact.impacted.length,
-    pivots: impact.pivots.slice(0, 100).map(p => ({ id: p.entity.id, name: p.entity.name, kind: p.entity.kind, roles: p.roles, count: p.count,
-      new_since_compromise: !p.before, seen_before: p.before, first: p.first, last: p.last })),
-    rotate: impact.rotation.slice(0, 100).map(r => ({ entity_id: r.entityId, category: r.category, title: r.title, guidance: guide(r.detail), last_use: r.lastUse, rotated_at: r.rotatedAt, stale: r.stale })),
+    pivots: impact.pivots.slice(0, 100).map(p => ({
+      id: p.entity.id,
+      name: p.entity.name,
+      kind: p.entity.kind,
+      roles: p.roles,
+      count: p.count,
+      new_since_compromise: !p.before,
+      seen_before: p.before,
+      first: p.first,
+      last: p.last,
+    })),
+    rotate: impact.rotation.slice(0, 100).map(r => ({
+      entity_id: r.entityId,
+      category: r.category,
+      title: r.title,
+      guidance: guide(r.detail),
+      last_use: r.lastUse,
+      rotated_at: r.rotatedAt,
+      stale: r.stale,
+    })),
     rotate_total: impact.rotation.length,
     rotation_guidance: guidance,
-    variables_read: { projects: impact.variables.slice(0, 200).map(v => v.path), inherited_from_groups: [...new Set(impact.variables.flatMap(v => v.groups))].sort(), total: impact.variables.length },
-    hunting: huntingQueries(data, impact).map(q => ({ title: q.title, why: q.why, tables: q.tables, imported: q.imported, query: q.query })),
+    variables_read: {
+      projects: impact.variables.slice(0, 200).map(v => v.path),
+      inherited_from_groups: [...new Set(impact.variables.flatMap(v => v.groups))].sort(),
+      total: impact.variables.length,
+    },
+    hunting: huntingQueries(data, impact).map(q => ({
+      title: q.title,
+      why: q.why,
+      tables: q.tables,
+      imported: q.imported,
+      query: q.query,
+    })),
   }
 }
 
@@ -215,7 +506,10 @@ const SOURCE_TABLES: Record<string, { table: string; keys?: string[] }> = {
  * custom tables such as GitLab), the key columns from its locator ("AzureActivity CorrelationId=… EventDataId=…") and
  * a ten-minute window around its time.
  */
-export function evidenceQuery(item: { locator?: string; valid_from: string | null; source_id: string | null }, sources: Pick<GraphData['sources'][number], 'id' | 'title' | 'excerpt'>[]): string | null {
+export function evidenceQuery(
+  item: { locator?: string; valid_from: string | null; source_id: string | null },
+  sources: Pick<GraphData['sources'][number], 'id' | 'title' | 'excerpt'>[],
+): string | null {
   const locator = item.locator ?? ''
   const first = locator.search(/\s\S+=/)
   const name = (first < 0 ? locator : locator.slice(0, first)).trim()

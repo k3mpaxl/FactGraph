@@ -1,4 +1,5 @@
 """Defender XDR and Sentinel exports: table recognition, column mapping, identifiers across imports."""
+
 import csv
 import io
 import json
@@ -17,23 +18,56 @@ def csv_bytes(rows: list[dict]) -> bytes:
     return ("﻿" + out.getvalue()).encode()
 
 
-NETWORK = [{
-    "Timestamp": "2026-09-28T10:42:07.1234567Z", "DeviceId": "a1b2c3d4e5f6", "DeviceName": "WS-0142.corp.example",
-    "ActionType": "ConnectionSuccess", "RemoteIP": "203.0.113.7", "RemotePort": "443", "RemoteUrl": "evil.example",
-    "LocalIP": "10.0.0.5", "LocalPort": "51234", "Protocol": "Tcp", "InitiatingProcessFileName": "powershell.exe",
-    "InitiatingProcessSHA1": "AB" * 20, "InitiatingProcessAccountName": "jdoe", "InitiatingProcessAccountDomain": "corp",
-    "InitiatingProcessAccountUpn": "J.Doe@corp.example", "InitiatingProcessAccountObjectId": "11111111-2222-3333-4444-555555555555",
-    "ReportId": "18842", "AppGuardContainerId": ""}]
+NETWORK = [
+    {
+        "Timestamp": "2026-09-28T10:42:07.1234567Z",
+        "DeviceId": "a1b2c3d4e5f6",
+        "DeviceName": "WS-0142.corp.example",
+        "ActionType": "ConnectionSuccess",
+        "RemoteIP": "203.0.113.7",
+        "RemotePort": "443",
+        "RemoteUrl": "evil.example",
+        "LocalIP": "10.0.0.5",
+        "LocalPort": "51234",
+        "Protocol": "Tcp",
+        "InitiatingProcessFileName": "powershell.exe",
+        "InitiatingProcessSHA1": "AB" * 20,
+        "InitiatingProcessAccountName": "jdoe",
+        "InitiatingProcessAccountDomain": "corp",
+        "InitiatingProcessAccountUpn": "J.Doe@corp.example",
+        "InitiatingProcessAccountObjectId": "11111111-2222-3333-4444-555555555555",
+        "ReportId": "18842",
+        "AppGuardContainerId": "",
+    }
+]
 
 # Log Analytics "Export to CSV": " [UTC]" on datetime headers, US date format, dynamic columns as JSON text.
-SIGNIN = [{
-    "TimeGenerated [UTC]": "9/28/2026, 10:40:01.512 AM", "UserPrincipalName": "j.doe@corp.example",
-    "UserId": "11111111-2222-3333-4444-555555555555", "AppDisplayName": "Azure Portal", "AppId": "c44b4083-3bb0-49c1-b47d-974e53cbdf3c",
-    "IPAddress": "203.0.113.7", "ResultType": "0", "ConditionalAccessStatus": "success", "CorrelationId": "corr-1",
-    "DeviceDetail": json.dumps({"deviceId": "dev-guid-1", "displayName": "WS-0142", "operatingSystem": "Windows 11"})},
-    {"TimeGenerated [UTC]": "9/28/2026, 10:41:12.000 AM", "UserPrincipalName": "j.doe@corp.example",
-     "UserId": "11111111-2222-3333-4444-555555555555", "AppDisplayName": "Azure Portal", "AppId": "c44b4083-3bb0-49c1-b47d-974e53cbdf3c",
-     "IPAddress": "198.51.100.9", "ResultType": "50126", "ConditionalAccessStatus": "notApplied", "CorrelationId": "corr-2", "DeviceDetail": "{}"}]
+SIGNIN = [
+    {
+        "TimeGenerated [UTC]": "9/28/2026, 10:40:01.512 AM",
+        "UserPrincipalName": "j.doe@corp.example",
+        "UserId": "11111111-2222-3333-4444-555555555555",
+        "AppDisplayName": "Azure Portal",
+        "AppId": "c44b4083-3bb0-49c1-b47d-974e53cbdf3c",
+        "IPAddress": "203.0.113.7",
+        "ResultType": "0",
+        "ConditionalAccessStatus": "success",
+        "CorrelationId": "corr-1",
+        "DeviceDetail": json.dumps({"deviceId": "dev-guid-1", "displayName": "WS-0142", "operatingSystem": "Windows 11"}),
+    },
+    {
+        "TimeGenerated [UTC]": "9/28/2026, 10:41:12.000 AM",
+        "UserPrincipalName": "j.doe@corp.example",
+        "UserId": "11111111-2222-3333-4444-555555555555",
+        "AppDisplayName": "Azure Portal",
+        "AppId": "c44b4083-3bb0-49c1-b47d-974e53cbdf3c",
+        "IPAddress": "198.51.100.9",
+        "ResultType": "50126",
+        "ConditionalAccessStatus": "notApplied",
+        "CorrelationId": "corr-2",
+        "DeviceDetail": "{}",
+    },
+]
 
 
 def apply(board: str, drafts: list[dict], index: dict) -> None:
@@ -44,7 +78,9 @@ def apply(board: str, drafts: list[dict], index: dict) -> None:
         if draft["type"] == "entity.add":
             entities[p["id"]] = {"id": p["id"], "kind": p["kind"], "name": p["name"], "identifiers": []}
         elif draft["type"] == "identifier.add":
-            entities[p["entity_id"]]["identifiers"].append({"scheme": p["scheme"], "namespace": p["namespace"], "normalized_value": p["normalized_value"]})
+            entities[p["entity_id"]]["identifiers"].append(
+                {"scheme": p["scheme"], "namespace": p["namespace"], "normalized_value": p["normalized_value"]}
+            )
         elif draft["type"] == "fact.add":
             index["facts"].append({"id": p["id"]})
         elif draft["type"] == "source.add":
@@ -61,9 +97,17 @@ def run(board: str, rows: list[dict], index: dict):
             key = identifier_key(e["kind"], i["scheme"], i["namespace"], i["normalized_value"])
             by_identifier.setdefault(key, e["id"])
             owned.add((e["id"], *key[1:]))
-    drafts, summary = table_rows_to_actions(board, rows, detection.mapping, title=detection.table, existing_entities=by_name,
-        existing_identifiers=by_identifier, known_identifiers=owned, existing_facts={f["id"] for f in index["facts"]},
-        existing_sources={s["id"] for s in index["sources"]})
+    drafts, summary = table_rows_to_actions(
+        board,
+        rows,
+        detection.mapping,
+        title=detection.table,
+        existing_entities=by_name,
+        existing_identifiers=by_identifier,
+        known_identifiers=owned,
+        existing_facts={f["id"] for f in index["facts"]},
+        existing_sources={s["id"] for s in index["sources"]},
+    )
     apply(board, drafts, index)
     return detection, drafts, summary
 
@@ -96,13 +140,25 @@ class TablesTest(unittest.TestCase):
         activity = next(d["payload"] for d in drafts if d["type"] == "fact.add")
         self.assertEqual(activity["predicate"], "connection success")
         names = {d["payload"]["name"]: d["payload"]["kind"] for d in drafts if d["type"] == "entity.add"}
-        self.assertEqual(names, {"ws-0142.corp.example": "Device", "j.doe@corp.example": "User", "powershell.exe": "Process",
-                                 "203.0.113.7": "IP", "evil.example": "Domain"})
+        self.assertEqual(
+            names,
+            {
+                "ws-0142.corp.example": "Device",
+                "j.doe@corp.example": "User",
+                "powershell.exe": "Process",
+                "203.0.113.7": "IP",
+                "evil.example": "Domain",
+            },
+        )
         evidence = next(d["payload"] for d in drafts if d["type"] == "assertion.add")
         self.assertEqual(evidence["valid_from"], "2026-09-28T10:42:07.123456Z")
         self.assertEqual(evidence["locator"], "DeviceNetworkEvents ReportId=18842 DeviceId=a1b2c3d4e5f6")
         self.assertIn("source ws-0142.corp.example", evidence["observation"])
-        idents = {(d["payload"]["namespace"] or d["payload"]["scheme"], d["payload"]["normalized_value"]) for d in drafts if d["type"] == "identifier.add"}
+        idents = {
+            (d["payload"]["namespace"] or d["payload"]["scheme"], d["payload"]["normalized_value"])
+            for d in drafts
+            if d["type"] == "identifier.add"
+        }
         self.assertIn(("mde-device-id", "a1b2c3d4e5f6"), idents)
         self.assertIn(("sha1", "ab" * 20), idents)
         self.assertIn(("entra-object-id", "11111111-2222-3333-4444-555555555555"), idents)
@@ -130,9 +186,20 @@ class TablesTest(unittest.TestCase):
     def test_device_id_joins_differently_named_devices(self):
         board, index = str(uuid4()), {"entities": [], "facts": [], "sources": []}
         run(board, NETWORK, index)
-        logon = [{"Timestamp": "2026-09-28T11:00:00Z", "DeviceId": "A1B2C3D4E5F6", "DeviceName": "ws-0142", "ActionType": "LogonSuccess",
-                  "LogonType": "RemoteInteractive", "AccountName": "adm-jdoe", "AccountDomain": "corp", "AccountSid": "S-1-5-21-1",
-                  "RemoteIP": "203.0.113.7", "ReportId": "7"}]
+        logon = [
+            {
+                "Timestamp": "2026-09-28T11:00:00Z",
+                "DeviceId": "A1B2C3D4E5F6",
+                "DeviceName": "ws-0142",
+                "ActionType": "LogonSuccess",
+                "LogonType": "RemoteInteractive",
+                "AccountName": "adm-jdoe",
+                "AccountDomain": "corp",
+                "AccountSid": "S-1-5-21-1",
+                "RemoteIP": "203.0.113.7",
+                "ReportId": "7",
+            }
+        ]
         detection, drafts, _ = run(board, logon, index)
         self.assertEqual(detection.table, "DeviceLogonEvents")
         self.assertEqual(sorted(d["payload"]["name"] for d in drafts if d["type"] == "entity.add"), ["corp\\adm-jdoe"])
@@ -148,17 +215,30 @@ class TablesTest(unittest.TestCase):
         self.assertEqual(names, ["powershell.exe", "ws-0142.corp.example"])
         kinds = detect({"TimeGenerated", "Caller", "OperationNameValue", "ResourceGroup", "CallerIpAddress", "_ResourceId"})
         from app.tables import participants_of
-        row = {"Caller": "a@b.c", "OperationNameValue": "x", "ResourceGroup": "rg", "CallerIpAddress": "1.2.3.4",
-               "_ResourceId": "/subscriptions/0/resourceGroups/rg/providers/Microsoft.KeyVault/vaults/kv-prod"}
+
+        row = {
+            "Caller": "a@b.c",
+            "OperationNameValue": "x",
+            "ResourceGroup": "rg",
+            "CallerIpAddress": "1.2.3.4",
+            "_ResourceId": "/subscriptions/0/resourceGroups/rg/providers/Microsoft.KeyVault/vaults/kv-prod",
+        }
         target = next(p for p in participants_of(kinds.mapping, row) if p["role"] == "target")
         self.assertEqual((target["name"], target["kind"]), ("kv-prod", "Key Vault"))
 
     def test_files_on_different_devices_or_folders_stay_apart(self):
         board, index = str(uuid4()), {"entities": [], "facts": [], "sources": []}
-        row = lambda device, folder, report: {"Timestamp": "2026-09-28T10:00:00Z", "DeviceId": f"id-{device}", "DeviceName": device,  # noqa: E731
-                                              "ActionType": "FileCreated", "FileName": ".env", "FolderPath": folder,
-                                              "InitiatingProcessFileName": "git.exe", "InitiatingProcessFolderPath": "C:\\Program Files\\Git\\git.exe",
-                                              "ReportId": report}
+        row = lambda device, folder, report: {
+            "Timestamp": "2026-09-28T10:00:00Z",
+            "DeviceId": f"id-{device}",
+            "DeviceName": device,  # noqa: E731
+            "ActionType": "FileCreated",
+            "FileName": ".env",
+            "FolderPath": folder,
+            "InitiatingProcessFileName": "git.exe",
+            "InitiatingProcessFolderPath": "C:\\Program Files\\Git\\git.exe",
+            "ReportId": report,
+        }
         rows = [row("ws-a", "C:\\repo-a\\.env", "1"), row("ws-b", "C:\\repo-b\\.env", "2")]
         detection, drafts, _ = run(board, rows, index)
         self.assertEqual(detection.table, "DeviceFileEvents")
@@ -166,7 +246,9 @@ class TablesTest(unittest.TestCase):
         self.assertEqual(len(files), 2, "two .env files on two devices are two entities")
         targets = {p["entity_id"] for d in drafts if d["type"] == "fact.add" for p in d["payload"]["participants"] if p["role"] == "target"}
         self.assertEqual(targets, {f["id"] for f in files})
-        paths = {d["payload"]["normalized_value"] for d in drafts if d["type"] == "identifier.add" and d["payload"]["namespace"] == "device-path"}
+        paths = {
+            d["payload"]["normalized_value"] for d in drafts if d["type"] == "identifier.add" and d["payload"]["namespace"] == "device-path"
+        }
         self.assertIn("ws-a|c:\\repo-a\\.env", paths)
         # git.exe without a hash: one entity per device too.
         self.assertEqual(sum(d["payload"]["name"] == "git.exe" for d in drafts if d["type"] == "entity.add"), 2)
@@ -174,26 +256,48 @@ class TablesTest(unittest.TestCase):
         _, again, _ = run(board, [row("ws-a", "C:\\Repo-A\\.env", "3")], index)
         self.assertFalse([d for d in again if d["type"] == "entity.add"])
         # The same hash on two devices is deliberately one binary.
-        hashed = [{**row("ws-a", "C:\\x\\tool.exe", "4"), "FileName": "tool.exe", "SHA256": "e" * 64},
-                  {**row("ws-b", "D:\\y\\tool.exe", "5"), "FileName": "tool.exe", "SHA256": "e" * 64}]
+        hashed = [
+            {**row("ws-a", "C:\\x\\tool.exe", "4"), "FileName": "tool.exe", "SHA256": "e" * 64},
+            {**row("ws-b", "D:\\y\\tool.exe", "5"), "FileName": "tool.exe", "SHA256": "e" * 64},
+        ]
         _, drafts, _ = run(board, hashed, index)
         self.assertEqual(sum(d["payload"]["name"] == "tool.exe" for d in drafts if d["type"] == "entity.add"), 1)
         # First seen without a hash on ws-c, later with its hash on ws-c and on ws-d: still one entity.
         first = [{**row("ws-c", "C:\\z\\agent.exe", "6"), "FileName": "agent.exe"}]
         _, drafts, _ = run(board, first, index)
         agent = next(d["payload"]["id"] for d in drafts if d["type"] == "entity.add" and d["payload"]["name"] == "agent.exe")
-        later = [{**row("ws-c", "C:\\z\\agent.exe", "7"), "FileName": "agent.exe", "SHA256": "f" * 64},
-                 {**row("ws-d", "E:\\agent.exe", "8"), "FileName": "agent.exe", "SHA256": "f" * 64}]
+        later = [
+            {**row("ws-c", "C:\\z\\agent.exe", "7"), "FileName": "agent.exe", "SHA256": "f" * 64},
+            {**row("ws-d", "E:\\agent.exe", "8"), "FileName": "agent.exe", "SHA256": "f" * 64},
+        ]
         _, drafts, _ = run(board, later, index)
         self.assertFalse([d for d in drafts if d["type"] == "entity.add" and d["payload"]["name"] == "agent.exe"])
-        self.assertEqual({p["entity_id"] for d in drafts if d["type"] == "fact.add" for p in d["payload"]["participants"] if p["role"] == "target"}, {agent})
+        self.assertEqual(
+            {p["entity_id"] for d in drafts if d["type"] == "fact.add" for p in d["payload"]["participants"] if p["role"] == "target"},
+            {agent},
+        )
 
     def test_asim_and_heuristics(self):
-        asim = detect({"TimeGenerated", "EventType", "EventResult", "EventSchema", "SrcIpAddr", "TargetUsername", "TargetAppName", "EventProduct"})
+        asim = detect(
+            {"TimeGenerated", "EventType", "EventResult", "EventSchema", "SrcIpAddr", "TargetUsername", "TargetAppName", "EventProduct"}
+        )
         self.assertEqual(asim.product, "Sentinel ASIM")
         self.assertTrue(asim.table.startswith("ASIM"))
         # A documented table without a curated mapping gets the heuristic and is still imported automatically.
-        info = detect({"Timestamp", "DeviceId", "DeviceName", "ClientVersion", "PublicIP", "OSPlatform", "OSBuild", "IsAzureADJoined", "LoggedOnUsers", "ReportId"})
+        info = detect(
+            {
+                "Timestamp",
+                "DeviceId",
+                "DeviceName",
+                "ClientVersion",
+                "PublicIP",
+                "OSPlatform",
+                "OSBuild",
+                "IsAzureADJoined",
+                "LoggedOnUsers",
+                "ReportId",
+            }
+        )
         self.assertEqual(info.table, "DeviceInfo")
         # Unknown columns: no automatic import, but a suggestion for the dialog.
         unknown = detect({"src", "dst", "when"})
@@ -244,7 +348,11 @@ class TableEndpointTest(unittest.TestCase):
             self.assertEqual((legacy["table"], legacy["product"]), ("Log rows", "IPAddress → FilePath"))
             # Unknown columns: 422 with a suggestion for the dialog.
             with self.assertRaises(main.HTTPException) as caught:
-                asyncio.run(main.import_table(board, [{"ClientIP": "198.51.100.9", "UserPrincipalName": "eve@corp.example", "Operation": "FileDownloaded"}]))
+                asyncio.run(
+                    main.import_table(
+                        board, [{"ClientIP": "198.51.100.9", "UserPrincipalName": "eve@corp.example", "Operation": "FileDownloaded"}]
+                    )
+                )
             self.assertEqual(caught.exception.status_code, 422)
             self.assertTrue(caught.exception.detail["needs_mapping"])
             self.assertEqual(caught.exception.detail["suggestion"]["operation_field"], "Operation")
@@ -254,22 +362,38 @@ class TableEndpointTest(unittest.TestCase):
 
 class SentinelNestedTest(unittest.TestCase):
     """AzureActivity, service principal sign-ins and GitLab audit events with nested JSON columns (synthetic values)."""
+
     SP = "0b7f0c1e-1111-4222-8333-444444444444"
     APP = "5a5a5a5a-1111-4222-8333-555555555555"
     KEY = "45f3c2d1-1111-4222-8333-666666666666"
 
     def activity(self, status, operation="MICROSOFT.COGNITIVESERVICES/ACCOUNTS/DEPLOYMENTS/WRITE", event="e1"):
-        return {"TimeGenerated [UTC]": "9/27/2026, 10:15:00.250 AM", "Caller": self.SP, "CallerIpAddress": "203.0.113.50", "OperationName": "",
-                "OperationNameValue": operation, "ActivityStatusValue": status, "ResourceGroup": "rg-ai", "CorrelationId": "c1", "EventDataId": event,
-                "_ResourceId": "/subscriptions/0/resourcegroups/rg-ai/providers/microsoft.cognitiveservices/accounts/ai-acc",
-                "Claims": json.dumps({"appid": self.APP, "idtyp": "app", "http://schemas.microsoft.com/identity/claims/objectidentifier": self.SP}),
-                "Authorization": json.dumps({"action": operation, "evidence": {"role": "Owner", "principalType": "ServicePrincipal"}}),
-                "Properties": json.dumps({"statusMessage": {"error": {"code": "InvalidTemplate"}}} if status == "Failure" else {}),
-                "Category": ""}
+        return {
+            "TimeGenerated [UTC]": "9/27/2026, 10:15:00.250 AM",
+            "Caller": self.SP,
+            "CallerIpAddress": "203.0.113.50",
+            "OperationName": "",
+            "OperationNameValue": operation,
+            "ActivityStatusValue": status,
+            "ResourceGroup": "rg-ai",
+            "CorrelationId": "c1",
+            "EventDataId": event,
+            "_ResourceId": "/subscriptions/0/resourcegroups/rg-ai/providers/microsoft.cognitiveservices/accounts/ai-acc",
+            "Claims": json.dumps(
+                {"appid": self.APP, "idtyp": "app", "http://schemas.microsoft.com/identity/claims/objectidentifier": self.SP}
+            ),
+            "Authorization": json.dumps({"action": operation, "evidence": {"role": "Owner", "principalType": "ServicePrincipal"}}),
+            "Properties": json.dumps({"statusMessage": {"error": {"code": "InvalidTemplate"}}} if status == "Failure" else {}),
+            "Category": "",
+        }
 
     def test_paths_in_json_columns(self):
         from app.tables import get
-        row = {"Claims": json.dumps({"http://schemas.microsoft.com/identity/claims/objectidentifier": "abc"}), "LocationDetails": '{"countryOrRegion": "DE"}'}
+
+        row = {
+            "Claims": json.dumps({"http://schemas.microsoft.com/identity/claims/objectidentifier": "abc"}),
+            "LocationDetails": '{"countryOrRegion": "DE"}',
+        }
         self.assertEqual(get(row, "Claims[http://schemas.microsoft.com/identity/claims/objectidentifier]"), "abc")
         self.assertEqual(get(row, "LocationDetails.CountryOrRegion"), "DE")
 
@@ -278,11 +402,20 @@ class SentinelNestedTest(unittest.TestCase):
         detection, drafts, _ = run(str(uuid4()), rows, {"entities": [], "facts": [], "sources": []})
         self.assertEqual(detection.table, "AzureActivity")
         sp = next(d["payload"] for d in drafts if d["type"] == "entity.add" and d["payload"]["kind"] == "Service Principal")
-        ids = {(d["payload"]["namespace"], d["payload"]["normalized_value"]) for d in drafts if d["type"] == "identifier.add" and d["payload"]["entity_id"] == sp["id"]}
-        self.assertEqual(ids, {("entra-object-id", self.SP), ("entra-app-id", self.APP)}, "object ID from Caller, app ID from the token claims")
+        ids = {
+            (d["payload"]["namespace"], d["payload"]["normalized_value"])
+            for d in drafts
+            if d["type"] == "identifier.add" and d["payload"]["entity_id"] == sp["id"]
+        }
+        self.assertEqual(
+            ids, {("entra-object-id", self.SP), ("entra-app-id", self.APP)}, "object ID from Caller, app ID from the token claims"
+        )
         predicates = sorted(d["payload"]["predicate"] for d in drafts if d["type"] == "fact.add")
-        self.assertEqual(predicates, ["write cognitiveservices/accounts/deployments", "write cognitiveservices/accounts/deployments (failed)"],
-                         "Start and Success are one activity; the failure is its own")
+        self.assertEqual(
+            predicates,
+            ["write cognitiveservices/accounts/deployments", "write cognitiveservices/accounts/deployments (failed)"],
+            "Start and Success are one activity; the failure is its own",
+        )
         failed = next(d["payload"] for d in drafts if d["type"] == "assertion.add" and "Failure" in d["payload"]["observation"])
         self.assertIn("role Owner", failed["observation"])
         self.assertIn("error InvalidTemplate", failed["observation"])
@@ -295,13 +428,27 @@ class SentinelNestedTest(unittest.TestCase):
     def test_service_principal_sign_ins_join_and_name_the_service_principal(self):
         board, index = str(uuid4()), {"entities": [], "facts": [], "sources": []}
         run(board, clean_rows([self.activity("Success")]), index)
-        signin = {"TimeGenerated [UTC]": "9/27/2026, 10:00:00.000 AM", "ServicePrincipalName": "deploy-bot", "ServicePrincipalId": self.SP,
-                  "AppId": self.APP, "ServicePrincipalCredentialKeyId": self.KEY, "ServicePrincipalCredentialThumbprint": "", "ClientCredentialType": "clientSecret",
-                  "IPAddress": "203.0.113.50", "ResourceDisplayName": "Azure Resource Manager", "ResourceIdentity": "797f4846-ba00-4fd7-ba43-dac1f8f63013",
-                  "ResourceServicePrincipalId": "9b9b9b9b-1111-4222-8333-777777777777", "ResultType": "0", "CorrelationId": "s1", "Id": "i1",
-                  "AutonomousSystemNumber": "64500", "Location": "DE", "UserAgent": "python-requests/2.32",
-                  "LocationDetails": json.dumps({"city": "Springfield", "state": "Testland", "countryOrRegion": "DE"}),
-                  "NetworkLocationDetails": json.dumps([{"networkType": "namedNetwork", "networkNames": ["Office"]}])}
+        signin = {
+            "TimeGenerated [UTC]": "9/27/2026, 10:00:00.000 AM",
+            "ServicePrincipalName": "deploy-bot",
+            "ServicePrincipalId": self.SP,
+            "AppId": self.APP,
+            "ServicePrincipalCredentialKeyId": self.KEY,
+            "ServicePrincipalCredentialThumbprint": "",
+            "ClientCredentialType": "clientSecret",
+            "IPAddress": "203.0.113.50",
+            "ResourceDisplayName": "Azure Resource Manager",
+            "ResourceIdentity": "797f4846-ba00-4fd7-ba43-dac1f8f63013",
+            "ResourceServicePrincipalId": "9b9b9b9b-1111-4222-8333-777777777777",
+            "ResultType": "0",
+            "CorrelationId": "s1",
+            "Id": "i1",
+            "AutonomousSystemNumber": "64500",
+            "Location": "DE",
+            "UserAgent": "python-requests/2.32",
+            "LocationDetails": json.dumps({"city": "Springfield", "state": "Testland", "countryOrRegion": "DE"}),
+            "NetworkLocationDetails": json.dumps([{"networkType": "namedNetwork", "networkNames": ["Office"]}]),
+        }
         detection, drafts, _ = run(board, clean_rows([signin]), index)
         self.assertEqual(detection.table, "AADServicePrincipalSignInLogs")
         # The service principal from AzureActivity (known only by its object ID) is the same one and gets its display name.
@@ -311,26 +458,80 @@ class SentinelNestedTest(unittest.TestCase):
         new = {d["payload"]["kind"]: d["payload"]["name"] for d in drafts if d["type"] == "entity.add"}
         self.assertEqual(new["Credential"], f"clientSecret {self.KEY}")
         self.assertEqual(new["Location"], "DE")
-        credential = next(d["payload"] for d in drafts if d["type"] == "identifier.add" and d["payload"]["namespace"] == "entra-credential-key-id")
+        credential = next(
+            d["payload"] for d in drafts if d["type"] == "identifier.add" and d["payload"]["namespace"] == "entra-credential-key-id"
+        )
         self.assertEqual(credential["normalized_value"], self.KEY)
         observation = next(d["payload"]["observation"] for d in drafts if d["type"] == "assertion.add")
-        for part in ("tool clientSecret", "location Springfield, Testland", "ASN 64500", "named network Office", "user agent python-requests/2.32"):
+        for part in (
+            "tool clientSecret",
+            "location Springfield, Testland",
+            "ASN 64500",
+            "named network Office",
+            "user agent python-requests/2.32",
+        ):
             self.assertIn(part, observation)
 
     def test_gitlab_audit_events(self):
-        base = {"author_id": "4711", "author_name": "release-bot", "entity_type": "Project", "target_type": "Project", "ip_address": "198.51.100.77",
-                "created_at [UTC]": "9/27/2026, 10:15:00.250 AM", "TimeGenerated [UTC]": "9/27/2026, 10:15:00.250 AM"}
-        rows = clean_rows([
-            {**base, "id": "1", "entity_id": "101", "entity_path": "team/app", "event_type": "repository_file_accessed_api",
-             "details": json.dumps({"event_name": "repository_file_accessed_api", "file_path": "config/secrets.yml", "ref": "main",
-                                    "custom_message": "User accessed repository file 'config/secrets.yml' at ref 'main' via API"})},
-            {**base, "id": "2", "entity_id": "102", "entity_path": "team/other", "event_type": "repository_file_accessed_api",
-             "details": json.dumps({"event_name": "repository_file_accessed_api", "file_path": "config/secrets.yml", "ref": "main"})},
-            {**base, "id": "3", "entity_id": "101", "entity_path": "team/app", "event_type": "repository_git_operation",
-             "details": json.dumps({"custom_message": {"protocol": "ssh", "verb": "push", "gl_key_id": 555, "gl_key_type": "key"}})},
-            {**base, "id": "4", "entity_id": "4711", "entity_path": "release-bot", "entity_type": "User", "event_type": "personal_access_token_used_from_unseen_ip",
-             "details": json.dumps({"pat_id": 9001, "pat_name": "ci-token", "custom_message": "Personal access token used from a previously unseen IP address"})},
-        ])
+        base = {
+            "author_id": "4711",
+            "author_name": "release-bot",
+            "entity_type": "Project",
+            "target_type": "Project",
+            "ip_address": "198.51.100.77",
+            "created_at [UTC]": "9/27/2026, 10:15:00.250 AM",
+            "TimeGenerated [UTC]": "9/27/2026, 10:15:00.250 AM",
+        }
+        rows = clean_rows(
+            [
+                {
+                    **base,
+                    "id": "1",
+                    "entity_id": "101",
+                    "entity_path": "team/app",
+                    "event_type": "repository_file_accessed_api",
+                    "details": json.dumps(
+                        {
+                            "event_name": "repository_file_accessed_api",
+                            "file_path": "config/secrets.yml",
+                            "ref": "main",
+                            "custom_message": "User accessed repository file 'config/secrets.yml' at ref 'main' via API",
+                        }
+                    ),
+                },
+                {
+                    **base,
+                    "id": "2",
+                    "entity_id": "102",
+                    "entity_path": "team/other",
+                    "event_type": "repository_file_accessed_api",
+                    "details": json.dumps({"event_name": "repository_file_accessed_api", "file_path": "config/secrets.yml", "ref": "main"}),
+                },
+                {
+                    **base,
+                    "id": "3",
+                    "entity_id": "101",
+                    "entity_path": "team/app",
+                    "event_type": "repository_git_operation",
+                    "details": json.dumps({"custom_message": {"protocol": "ssh", "verb": "push", "gl_key_id": 555, "gl_key_type": "key"}}),
+                },
+                {
+                    **base,
+                    "id": "4",
+                    "entity_id": "4711",
+                    "entity_path": "release-bot",
+                    "entity_type": "User",
+                    "event_type": "personal_access_token_used_from_unseen_ip",
+                    "details": json.dumps(
+                        {
+                            "pat_id": 9001,
+                            "pat_name": "ci-token",
+                            "custom_message": "Personal access token used from a previously unseen IP address",
+                        }
+                    ),
+                },
+            ]
+        )
         detection, drafts, _ = run(str(uuid4()), rows, {"entities": [], "facts": [], "sources": []})
         self.assertEqual((detection.table, detection.product), ("GitLab audit events", "GitLab"))
         entities = [d["payload"] for d in drafts if d["type"] == "entity.add"]
@@ -346,38 +547,58 @@ class LargeExportTest(unittest.TestCase):
     """A large export is kept in several sources, so no action outgrows the relay's 16 MiB WebSocket message limit."""
 
     def rows(self, count):
-        return clean_rows([{"TimeGenerated [UTC]": "9/27/2026, 10:15:00.250 AM", "Caller": "0b7f0c1e-1111-4222-8333-444444444444",
-                            "CallerIpAddress": "203.0.113.50", "OperationNameValue": "MICROSOFT.COGNITIVESERVICES/ACCOUNTS/WRITE",
-                            "ActivityStatusValue": "Success", "ResourceGroup": "rg", "CorrelationId": f"c{i}", "EventDataId": f"e{i}",
-                            "_ResourceId": f"/subscriptions/0/resourcegroups/rg/providers/microsoft.cognitiveservices/accounts/acc-{i % 7}",
-                            "Properties": json.dumps({"padding": "x" * 400, "quote": 'a "quoted" value'})} for i in range(count)])
+        return clean_rows(
+            [
+                {
+                    "TimeGenerated [UTC]": "9/27/2026, 10:15:00.250 AM",
+                    "Caller": "0b7f0c1e-1111-4222-8333-444444444444",
+                    "CallerIpAddress": "203.0.113.50",
+                    "OperationNameValue": "MICROSOFT.COGNITIVESERVICES/ACCOUNTS/WRITE",
+                    "ActivityStatusValue": "Success",
+                    "ResourceGroup": "rg",
+                    "CorrelationId": f"c{i}",
+                    "EventDataId": f"e{i}",
+                    "_ResourceId": f"/subscriptions/0/resourcegroups/rg/providers/microsoft.cognitiveservices/accounts/acc-{i % 7}",
+                    "Properties": json.dumps({"padding": "x" * 400, "quote": 'a "quoted" value'}),
+                }
+                for i in range(count)
+            ]
+        )
 
     def test_large_export_keeps_a_sample_in_the_source_and_every_row_with_its_evidence(self):
         from unittest import mock
         import app.ingest as ingest
+
         board, index, rows = str(uuid4()), {"entities": [], "facts": [], "sources": []}, self.rows(40)
         with mock.patch.object(ingest, "SOURCE_PART_BYTES", 5_000), mock.patch.object(ingest, "SOURCE_SAMPLE_BYTES", 3_000):
             _, drafts, summary = run(board, rows, index)
         sources = [d["payload"] for d in drafts if d["type"] == "source.add"]
         self.assertEqual((len(sources), summary["source_parts"]), (1, 1), "one source, not every row twice")
         sample = json.loads(sources[0]["excerpt"])
-        self.assertEqual(sample, rows[:len(sample)])
+        self.assertEqual(sample, rows[: len(sample)])
         self.assertTrue(0 < len(sample) < 40 and len(sources[0]["excerpt"].encode()) <= 3_000)
         self.assertIn(f"first {len(sample)} of 40 rows", sources[0]["title"])
         evidence = [d["payload"] for d in drafts if d["type"] == "assertion.add"]
         self.assertEqual(len(evidence), 40)
         self.assertTrue(all(item["source_id"] == sources[0]["id"] for item in evidence))
-        self.assertEqual(sorted(json.loads(item["note"])["CorrelationId"] for item in evidence), sorted(f"c{i}" for i in range(40)), "every row is kept with its evidence")
+        self.assertEqual(
+            sorted(json.loads(item["note"])["CorrelationId"] for item in evidence),
+            sorted(f"c{i}" for i in range(40)),
+            "every row is kept with its evidence",
+        )
         # The same file again: nothing new.
         with mock.patch.object(ingest, "SOURCE_PART_BYTES", 5_000), mock.patch.object(ingest, "SOURCE_SAMPLE_BYTES", 3_000):
             _, again, _ = run(board, rows, {**index, "sources": [{"id": sources[0]["id"]}]})
         self.assertFalse([d for d in again if d["type"] == "source.add"])
-        self.assertEqual({d["id"] for d in again if d["type"] == "assertion.add"}, {d["id"] for d in drafts if d["type"] == "assertion.add"})
+        self.assertEqual(
+            {d["id"] for d in again if d["type"] == "assertion.add"}, {d["id"] for d in drafts if d["type"] == "assertion.add"}
+        )
 
     def test_an_export_imported_in_parts_before_keeps_its_parts(self):
         from unittest import mock
         import hashlib
         import app.ingest as ingest
+
         board, rows = str(uuid4()), self.rows(40)
         canonical = json.dumps(rows, sort_keys=True, ensure_ascii=False, default=str)
         digest = hashlib.sha256(("AzureActivity\n\nAzureActivity\n" + canonical).encode()).hexdigest()
@@ -391,17 +612,21 @@ class LargeExportTest(unittest.TestCase):
     def test_small_export_keeps_one_source_with_its_former_id(self):
         import hashlib
         from app.ingest import _stable
+
         board, rows = str(uuid4()), self.rows(3)
         _, drafts, summary = run(board, rows, {"entities": [], "facts": [], "sources": []})
         source = next(d["payload"] for d in drafts if d["type"] == "source.add")
         canonical = json.dumps(rows, sort_keys=True, ensure_ascii=False, default=str)
         digest = hashlib.sha256(("AzureActivity\n\nAzureActivity\n" + canonical).encode()).hexdigest()
-        self.assertEqual(source["id"], _stable(board, "import", digest), "re-imports of files imported before the split are still recognised")
+        self.assertEqual(
+            source["id"], _stable(board, "import", digest), "re-imports of files imported before the split are still recognised"
+        )
         self.assertEqual((source["title"], source["excerpt"], summary["source_parts"]), ("AzureActivity", canonical, 1))
 
     def test_a_single_oversized_row_is_rejected(self):
         from unittest import mock
         import app.ingest as ingest
+
         with mock.patch.object(ingest, "MAX_ROW_BYTES", 500), self.assertRaisesRegex(ValueError, "Row 1 is larger"):
             run(str(uuid4()), self.rows(2), {"entities": [], "facts": [], "sources": []})
 
@@ -420,17 +645,59 @@ class CredentialChangesTest(unittest.TestCase):
 
     def test_removed_key_joins_the_signed_in_credential(self):
         board, index = str(uuid4()), {"entities": [], "facts": [], "sources": []}
-        key, new_key, app = "45f3c2d1-1111-4222-8333-666666666666", "7c7c7c7c-1111-4222-8333-888888888888", "a1a1a1a1-1111-4222-8333-999999999999"
-        run(board, clean_rows([{"TimeGenerated [UTC]": "9/27/2026, 10:00:00.000 AM", "ServicePrincipalName": "deploy-bot", "ServicePrincipalId": "0b7f0c1e-1111-4222-8333-444444444444",
-            "AppId": "5a5a5a5a-1111-4222-8333-555555555555", "ServicePrincipalCredentialKeyId": key, "ClientCredentialType": "clientSecret", "IPAddress": "198.51.100.66",
-            "ResourceDisplayName": "Azure Resource Manager", "ResultType": "0", "CorrelationId": "s1", "Id": "i1"}]), index)
-        change = {"TimeGenerated [UTC]": "9/28/2026, 09:30:00.000 AM", "KeyType": "Password", "KeyName": "ci", "Application": "deploy-bot", "ApplicationObjectId": app,
-                  "Actor": "admin@contoso.example", "ActorId": "c0c0c0c0-1111-4222-8333-000000000001", "ActorIp": "203.0.113.20",
-                  "OperationName": "Update application – Certificates and secrets management ", "Result": "success", "CorrelationId": "c1"}
-        detection, drafts, _ = run(board, clean_rows([{**change, "CredentialChange": "removed", "KeyId": key}, {**change, "CredentialChange": "added", "KeyId": new_key}]), index)
+        key, new_key, app = (
+            "45f3c2d1-1111-4222-8333-666666666666",
+            "7c7c7c7c-1111-4222-8333-888888888888",
+            "a1a1a1a1-1111-4222-8333-999999999999",
+        )
+        run(
+            board,
+            clean_rows(
+                [
+                    {
+                        "TimeGenerated [UTC]": "9/27/2026, 10:00:00.000 AM",
+                        "ServicePrincipalName": "deploy-bot",
+                        "ServicePrincipalId": "0b7f0c1e-1111-4222-8333-444444444444",
+                        "AppId": "5a5a5a5a-1111-4222-8333-555555555555",
+                        "ServicePrincipalCredentialKeyId": key,
+                        "ClientCredentialType": "clientSecret",
+                        "IPAddress": "198.51.100.66",
+                        "ResourceDisplayName": "Azure Resource Manager",
+                        "ResultType": "0",
+                        "CorrelationId": "s1",
+                        "Id": "i1",
+                    }
+                ]
+            ),
+            index,
+        )
+        change = {
+            "TimeGenerated [UTC]": "9/28/2026, 09:30:00.000 AM",
+            "KeyType": "Password",
+            "KeyName": "ci",
+            "Application": "deploy-bot",
+            "ApplicationObjectId": app,
+            "Actor": "admin@contoso.example",
+            "ActorId": "c0c0c0c0-1111-4222-8333-000000000001",
+            "ActorIp": "203.0.113.20",
+            "OperationName": "Update application – Certificates and secrets management ",
+            "Result": "success",
+            "CorrelationId": "c1",
+        }
+        detection, drafts, _ = run(
+            board,
+            clean_rows(
+                [{**change, "CredentialChange": "removed", "KeyId": key}, {**change, "CredentialChange": "added", "KeyId": new_key}]
+            ),
+            index,
+        )
         self.assertEqual(detection.table, "Entra credential changes")
         credentials = [e for e in index["entities"] if e["kind"] == "Credential"]
-        self.assertEqual(sorted(e["name"] for e in credentials), [f"clientSecret {key}", f"clientSecret {new_key}"], "the removed key is the one from the sign-in")
+        self.assertEqual(
+            sorted(e["name"] for e in credentials),
+            [f"clientSecret {key}", f"clientSecret {new_key}"],
+            "the removed key is the one from the sign-in",
+        )
         principals = [e for e in index["entities"] if e["kind"] == "Service Principal"]
         self.assertEqual(len(principals), 1, "the application joins the service principal of the same name")
         self.assertIn(("entra-application-object-id", app), {(i["namespace"], i["normalized_value"]) for i in principals[0]["identifiers"]})

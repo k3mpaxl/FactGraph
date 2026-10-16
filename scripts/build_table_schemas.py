@@ -8,6 +8,7 @@ Only table names, column names and data types are taken (and a link to the Micro
 Advanced hunting tables come from defender-xdr/advanced-hunting-*-table.md, Sentinel ASIM schemas from
 sentinel/normalization-schema-*.md plus the common ASIM fields.
 """
+
 from __future__ import annotations
 
 import json
@@ -49,8 +50,11 @@ def main(mirror: Path) -> None:
         cols = columns(text, "| Column name")
         if not title or len(cols) < 3:
             continue
-        tables[title.group(1)] = {"product": "Defender XDR", "doc": f"https://learn.microsoft.com/en-us/defender-xdr/{path.stem}",
-                                  "columns": cols}
+        tables[title.group(1)] = {
+            "product": "Defender XDR",
+            "doc": f"https://learn.microsoft.com/en-us/defender-xdr/{path.stem}",
+            "columns": cols,
+        }
     common = columns((mirror / "sentinel/normalization-common-fields.md").read_text(encoding="utf-8"), "| Field")
     asim: dict[str, dict] = {}
     for path in sorted((mirror / "sentinel").glob("normalization-schema-*.md")):
@@ -60,8 +64,13 @@ def main(mirror: Path) -> None:
         cols = columns(path.read_text(encoding="utf-8"), "| Field")
         if len(cols) >= 5:
             asim[name] = {"doc": f"https://learn.microsoft.com/en-us/azure/sentinel/{path.stem}", "columns": cols}
-    out = {"generated": date.today().isoformat(), "source": "https://github.com/merill/defender-docs-mirror",
-           "tables": tables, "asim": asim, "asim_common": common}
+    out = {
+        "generated": date.today().isoformat(),
+        "source": "https://github.com/merill/defender-docs-mirror",
+        "tables": tables,
+        "asim": asim,
+        "asim_common": common,
+    }
     target = Path(__file__).resolve().parents[1] / "app" / "data" / "table_schemas.json"
     target.parent.mkdir(exist_ok=True)
     target.write_text(json.dumps(out, indent=1, sort_keys=True) + "\n", encoding="utf-8")

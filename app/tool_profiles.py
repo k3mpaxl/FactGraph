@@ -4,6 +4,7 @@ The default "agent" profile exposes a small, task-oriented set of tools: fewer t
 and lead to better tool choices. FACTGRAPH_MCP_TOOLS=full exposes one rest_<operation> tool per REST
 operation instead (complete REST parity). REST itself always stays complete.
 """
+
 from __future__ import annotations
 
 import os
@@ -14,7 +15,10 @@ from mcp.types import ToolAnnotations
 AGENT_TOOLS: dict[str, tuple[str, str | None]] = {
     'get_graph': ('get_graph', None),
     'get_impact': ('get_impact', None),
-    'list_entities': ('find_entities', 'Find existing entities by name, identifier or type (q) before creating new ones; returns IDs and identifiers. Paginate with offset/limit.'),
+    'list_entities': (
+        'find_entities',
+        'Find existing entities by name, identifier or type (q) before creating new ones; returns IDs and identifiers. Paginate with offset/limit.',
+    ),
     'create_entity': ('create_entity', None),
     'update_entity': ('update_entity', None),
     'merge_entity': ('merge_entities', None),
@@ -31,11 +35,23 @@ AGENT_TOOLS: dict[str, tuple[str, str | None]] = {
     'update_evidence': ('update_evidence', None),
     'review_evidence': ('review_evidence', None),
     'retract_evidence': ('retract_evidence', None),
-    'import_activity': ('import_rows', 'Import already exported log or query result rows as subject → predicate → object relationships; every row becomes one unconfirmed evidence item. query is optional. Use dry_run first; repeating an import never duplicates.'),
+    'import_activity': (
+        'import_rows',
+        'Import already exported log or query result rows as subject → predicate → object relationships; every row becomes one unconfirmed evidence item. query is optional. Use dry_run first; repeating an import never duplicates.',
+    ),
     'import_activities': ('import_activities', None),
-    'import_table_export': ('import_defender_rows', 'Import Defender XDR / Sentinel result rows: table recognised from columns, entities matched by IDs. Other exports: pass a format from list_import_formats. dry_run first.'),
-    'list_import_formats': ('list_import_formats', 'Column mappings the analyst saved for exports FactGraph does not recognise; pass one as format to import_defender_rows.'),
-    'list_column_relations': ('find_joins', 'Where else a column of a Defender XDR / Sentinel row leads (token, session, user, device, app IDs): other table and column, join guidance, KQL. Plan the next query; no args lists key kinds.'),
+    'import_table_export': (
+        'import_defender_rows',
+        'Import Defender XDR / Sentinel result rows: table recognised from columns, entities matched by IDs. Other exports: pass a format from list_import_formats. dry_run first.',
+    ),
+    'list_import_formats': (
+        'list_import_formats',
+        'Column mappings the analyst saved for exports FactGraph does not recognise; pass one as format to import_defender_rows.',
+    ),
+    'list_column_relations': (
+        'find_joins',
+        'Where else a column of a Defender XDR / Sentinel row leads (token, session, user, device, app IDs): other table and column, join guidance, KQL. Plan the next query; no args lists key kinds.',
+    ),
     'create_group': ('create_group', None),
     'update_group': ('update_group', None),
     'export_image': ('export_image', None),
@@ -47,8 +63,12 @@ PROFILES = ('agent', 'full')
 
 def annotations_for(method: str, name: str) -> ToolAnnotations:
     read_only = method == 'GET'
-    return ToolAnnotations(readOnlyHint=read_only, destructiveHint=method == 'DELETE' or name in ('merge_entity', 'undo_board'),
-                           idempotentHint=read_only or method in ('PATCH', 'DELETE'), openWorldHint=False)
+    return ToolAnnotations(
+        readOnlyHint=read_only,
+        destructiveHint=method == 'DELETE' or name in ('merge_entity', 'undo_board'),
+        idempotentHint=read_only or method in ('PATCH', 'DELETE'),
+        openWorldHint=False,
+    )
 
 
 def set_tool_profile(mcp, profile: str, agent_names: set[str], full_names: set[str]) -> str:

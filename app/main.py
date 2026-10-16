@@ -27,9 +27,33 @@ from fastmcp import FastMCP
 from pydantic import BaseModel, Field, ConfigDict
 from typing import Literal
 
-from app.contracts import (StrictModel, EntityInput, RelationInput, SourceInput, EvidenceInput, ActionInput, ActionBatch, RowsInput, EntityUpdate, EntityMergeInput, SourceUpdate, RelationUpdate, EvidenceUpdate)
+from app.contracts import (
+    StrictModel,
+    EntityInput,
+    RelationInput,
+    SourceInput,
+    EvidenceInput,
+    ActionInput,
+    ActionBatch,
+    RowsInput,
+    EntityUpdate,
+    EntityMergeInput,
+    SourceUpdate,
+    RelationUpdate,
+    EvidenceUpdate,
+)
 
-from app.ingest import OBJECT_FIELDS, SUBJECT_FIELDS, action, entity_actions, identifier_key, parse_rows, relation_actions, rows_to_actions, table_rows_to_actions
+from app.ingest import (
+    OBJECT_FIELDS,
+    SUBJECT_FIELDS,
+    action,
+    entity_actions,
+    identifier_key,
+    parse_rows,
+    relation_actions,
+    rows_to_actions,
+    table_rows_to_actions,
+)
 from app.tables import clean_rows, detect
 from app.formats import ImportFormat, compile_format, inspect_rows, missing_columns, preview_rows
 
@@ -95,6 +119,7 @@ class HideBoardIds(logging.Filter):
     """The board ID is the board's access key. Uvicorn logs every WebSocket connection with its path (/ws/boards/<id>), also
     with --no-access-log, and hosting platforms keep container logs (App Service log stream and storage): the ID is
     replaced in every Uvicorn record, and in access log lines should someone switch them on."""
+
     def filter(self, record: logging.LogRecord) -> bool:
         if isinstance(record.msg, str):
             record.msg = BOARD_IN_PATH.sub(r"\1<board>", record.msg)
@@ -113,9 +138,11 @@ def token_matches(expected: str | None, given: str) -> bool:
 
 # The board UUID in the URL is the access key: never leak it via Referer, framing or third-party content.
 # Swagger UI (/docs) loads its assets from a CDN and keeps FastAPI's defaults.
-CSP = ("default-src 'self'; script-src 'self' 'sha256-{theme}'; style-src 'self' 'unsafe-inline'; "
-       "img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:; "
-       "object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
+CSP = (
+    "default-src 'self'; script-src 'self' 'sha256-{theme}'; style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:; "
+    "object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+)
 SECURITY_HEADERS = {
     "Referrer-Policy": "no-referrer",
     "X-Content-Type-Options": "nosniff",
@@ -131,6 +158,7 @@ def inline_script_hash() -> str:
     import base64
     import hashlib
     import re
+
     try:
         html = (WEB_DIR / "index.html").read_text(encoding="utf-8")
     except OSError:
@@ -257,20 +285,17 @@ def start_peer(peer: Peer) -> Peer:
     return peer
 
 
-async def send_to_room(board_id: str, message: dict, *, exclude: str | None = None,
-                       target: str | None = None) -> None:
+async def send_to_room(board_id: str, message: dict, *, exclude: str | None = None, target: str | None = None) -> None:
     text = json.dumps(message)
     async with rooms_lock:
-        recipients = [peer for actor, peer in rooms.get(board_id, {}).items()
-                      if actor != exclude and (target is None or actor == target)]
+        recipients = [peer for actor, peer in rooms.get(board_id, {}).items() if actor != exclude and (target is None or actor == target)]
     for peer in recipients:
         deliver(peer, text)
 
 
 async def send_bytes_to_room(board_id: str, data: bytes, *, exclude: str | None = None, target: str | None = None) -> None:
     async with rooms_lock:
-        recipients = [peer for actor, peer in rooms.get(board_id, {}).items()
-                      if actor != exclude and (target is None or actor == target)]
+        recipients = [peer for actor, peer in rooms.get(board_id, {}).items() if actor != exclude and (target is None or actor == target)]
     for peer in recipients:
         deliver(peer, data)
 
@@ -299,8 +324,7 @@ async def browser_command(board_id: str, operation: str, **values) -> dict:
         future: asyncio.Future[dict] = loop.create_future()
         pending[request_id] = (peer.websocket, future)
     try:
-        deliver(peer, json.dumps({"type": "api-command", "requestId": request_id,
-                                  "boardId": board_id, "operation": operation, **values}))
+        deliver(peer, json.dumps({"type": "api-command", "requestId": request_id, "boardId": board_id, "operation": operation, **values}))
         result = await asyncio.wait_for(future, timeout=30)
         if not result.get("ok"):
             error = str(result.get("error") or "Browser rejected the command")
@@ -327,30 +351,39 @@ async def apply_drafts(board_id: str, drafts: list[dict]) -> int:
     if len(drafts) > 200_000:
         raise HTTPException(413, "Too many actions in one request")
     from uuid import uuid4
+
     batch_id = request_batch.get() or str(uuid4())
     channel = request_channel.get()
-    drafts = [{**draft, "batch_id": batch_id, "channel": channel, "author": channel if draft.get("author") in (None, "API") else draft["author"]}
-              for draft in drafts]
+    drafts = [
+        {**draft, "batch_id": batch_id, "channel": channel, "author": channel if draft.get("author") in (None, "API") else draft["author"]}
+        for draft in drafts
+    ]
     accepted = 0
     for offset in range(0, len(drafts), 200):
         chunk_number = offset // 200 + 1
         defer_render = offset + 200 < len(drafts) and chunk_number % 25 != 0
         try:
-            response = await browser_command(board_id, "apply", drafts=drafts[offset:offset + 200],
-                                             deferRender=defer_render)
+            response = await browser_command(board_id, "apply", drafts=drafts[offset : offset + 200], deferRender=defer_render)
         except HTTPException as error:
             if offset:
-                raise HTTPException(error.status_code, {
-                    "message": error.detail, "accepted_actions": accepted,
-                    "acknowledged_drafts": offset, "batch_id": batch_id,
-                    "retry": "Retry the same import or action IDs; already stored operations are deduplicated. The last chunk may have been saved before the connection failed.",
-                }) from error
+                raise HTTPException(
+                    error.status_code,
+                    {
+                        "message": error.detail,
+                        "accepted_actions": accepted,
+                        "acknowledged_drafts": offset,
+                        "batch_id": batch_id,
+                        "retry": "Retry the same import or action IDs; already stored operations are deduplicated. The last chunk may have been saved before the connection failed.",
+                    },
+                ) from error
             raise
         accepted += int(response.get("accepted", 0))
     return accepted
 
 
-async def import_table(board_id: str, rows: list[dict], *, title: str = "", query: str = "", dry_run: bool = False, filename: str = "") -> dict:
+async def import_table(
+    board_id: str, rows: list[dict], *, title: str = "", query: str = "", dry_run: bool = False, filename: str = ""
+) -> dict:
     """A Defender XDR / Sentinel export: detect the table, map its columns, import. Unsure detection → 422 with a suggestion."""
     if not valid_uuid(board_id):
         raise HTTPException(422, "Invalid board UUID")
@@ -358,18 +391,37 @@ async def import_table(board_id: str, rows: list[dict], *, title: str = "", quer
         raise HTTPException(422, "The file contains no result rows")
     columns = set().union(*(row.keys() for row in rows))
     detection = detect(columns)
-    if (not detection.confident or not detection.mapping) and any(c in columns for c in SUBJECT_FIELDS) and any(c in columns for c in OBJECT_FIELDS):
+    if (
+        (not detection.confident or not detection.mapping)
+        and any(c in columns for c in SUBJECT_FIELDS)
+        and any(c in columns for c in OBJECT_FIELDS)
+    ):
         # Not an XDR/Sentinel table, but the classic two-column log (IPAddress → FilePath): import it as before.
-        summary = await import_rows(board_id, RowsInput(rows=rows, title=title or (filename or "Activity logs"), query=query, dry_run=dry_run))
-        return {**summary, "table": "Log rows", "product": f"{summary['subject_field']} → {summary['object_field']}",
-                "detection": {**detection.summary(), "table": "Log rows", "confident": True}}
+        summary = await import_rows(
+            board_id, RowsInput(rows=rows, title=title or (filename or "Activity logs"), query=query, dry_run=dry_run)
+        )
+        return {
+            **summary,
+            "table": "Log rows",
+            "product": f"{summary['subject_field']} → {summary['object_field']}",
+            "detection": {**detection.summary(), "table": "Log rows", "confident": True},
+        }
     if not detection.confident or not detection.mapping:
         mapping = detection.mapping
-        raise HTTPException(422, {
-            "message": f"Could not recognise the table of {filename or 'this file'}. Check the column mapping.",
-            "needs_mapping": True, "detection": detection.summary(),
-            "suggestion": {"roles": [{"field": p.fields[0], "role": p.role, "kind": p.kind} for p in (mapping.parts if mapping else ())],
-                           "operation_field": next((c for c in ("ActionType", "OperationName", "Operation", "Activity", "EventType") if c in columns), None)}})
+        raise HTTPException(
+            422,
+            {
+                "message": f"Could not recognise the table of {filename or 'this file'}. Check the column mapping.",
+                "needs_mapping": True,
+                "detection": detection.summary(),
+                "suggestion": {
+                    "roles": [{"field": p.fields[0], "role": p.role, "kind": p.kind} for p in (mapping.parts if mapping else ())],
+                    "operation_field": next(
+                        (c for c in ("ActionType", "OperationName", "Operation", "Activity", "EventType") if c in columns), None
+                    ),
+                },
+            },
+        )
     if not title or title in ("Activity logs", "Access Logs"):
         title = f"{detection.table} ({detection.product})" if detection.product else detection.table
     if filename and filename not in title:
@@ -388,10 +440,19 @@ async def import_mapped(board_id: str, rows: list[dict], mapping, *, title: str,
             by_identifier.setdefault(key, item["id"])
             owned.add((item["id"], *key[1:]))
     try:
-        drafts, summary = table_rows_to_actions(board_id, rows, mapping, title=title, query=query,
-            existing_entities=entities, existing_identifiers=by_identifier, known_identifiers=owned,
-            existing_facts={item["id"] for item in index["facts"]}, existing_sources={item["id"] for item in index["sources"]},
-            existing_rows=set(index.get("rows", [])))
+        drafts, summary = table_rows_to_actions(
+            board_id,
+            rows,
+            mapping,
+            title=title,
+            query=query,
+            existing_entities=entities,
+            existing_identifiers=by_identifier,
+            known_identifiers=owned,
+            existing_facts={item["id"] for item in index["facts"]},
+            existing_sources={item["id"] for item in index["sources"]},
+            existing_rows=set(index.get("rows", [])),
+        )
     except (ValueError, KeyError) as error:
         raise HTTPException(422, str(error)) from error
     summary["detection"] = detection
@@ -402,8 +463,9 @@ async def import_mapped(board_id: str, rows: list[dict], mapping, *, title: str,
     return summary
 
 
-async def import_with_format(board_id: str, rows: list[dict], fmt: ImportFormat, *, title: str = "", query: str = "",
-                             dry_run: bool = False, filename: str = "") -> dict:
+async def import_with_format(
+    board_id: str, rows: list[dict], fmt: ImportFormat, *, title: str = "", query: str = "", dry_run: bool = False, filename: str = ""
+) -> dict:
     """Rows of an export the analyst mapped in the import dialog and saved as a format."""
     if not valid_uuid(board_id):
         raise HTTPException(422, "Invalid board UUID")
@@ -411,7 +473,9 @@ async def import_with_format(board_id: str, rows: list[dict], fmt: ImportFormat,
         raise HTTPException(422, "The file contains no result rows")
     missing = missing_columns(fmt, set().union(*(row.keys() for row in rows)))
     if missing:
-        raise HTTPException(422, f"{filename or 'The rows'} lack{'s' if filename else ''} columns of the format {fmt.name}: {', '.join(missing)}")
+        raise HTTPException(
+            422, f"{filename or 'The rows'} lack{'s' if filename else ''} columns of the format {fmt.name}: {', '.join(missing)}"
+        )
     if not title or title in ("Activity logs", "Access Logs"):
         title = fmt.name
     if filename and filename not in title:
@@ -419,10 +483,24 @@ async def import_with_format(board_id: str, rows: list[dict], fmt: ImportFormat,
     described = {"table": fmt.name, "product": "format", "format": fmt.name, "confident": True}
     if fmt.rows == "relationship":
         first, second = fmt.entities
-        summary = await import_rows(board_id, RowsInput(rows=rows, title=title, query=query, dry_run=dry_run, subject_field=first.column,
-                                                        object_field=second.column, predicate=fmt.operation.strip() or "related to",
-                                                        predicate_field=fmt.operation_column, subject_kind=first.kind, object_kind=second.kind),
-                                    time_field=fmt.time, end_field=fmt.end, locator_fields=tuple(fmt.locator))
+        summary = await import_rows(
+            board_id,
+            RowsInput(
+                rows=rows,
+                title=title,
+                query=query,
+                dry_run=dry_run,
+                subject_field=first.column,
+                object_field=second.column,
+                predicate=fmt.operation.strip() or "related to",
+                predicate_field=fmt.operation_column,
+                subject_kind=first.kind,
+                object_kind=second.kind,
+            ),
+            time_field=fmt.time,
+            end_field=fmt.end,
+            locator_fields=tuple(fmt.locator),
+        )
         return {**summary, "table": fmt.name, "product": "format", "detection": described, "title": title}
     return await import_mapped(board_id, rows, compile_format(fmt), title=title, query=query, dry_run=dry_run, detection=described)
 
@@ -431,18 +509,29 @@ async def import_rows(board_id: str, data: RowsInput, **columns) -> dict:
     if not valid_uuid(board_id):
         raise HTTPException(422, "Invalid board UUID")
     index = (await browser_command(board_id, "index"))["index"]
-    entity_index = {(item["kind"].casefold(), item["name"].casefold()): item["id"]
-                    for item in index["entities"]}
-    fact_index = {(item["subject_id"], item["predicate"].casefold(), item["object_id"]): item["id"]
-                  for item in index["facts"] if item.get("valid_from") is None and item.get("valid_to") is None and not item.get("activity")}
+    entity_index = {(item["kind"].casefold(), item["name"].casefold()): item["id"] for item in index["entities"]}
+    fact_index = {
+        (item["subject_id"], item["predicate"].casefold(), item["object_id"]): item["id"]
+        for item in index["facts"]
+        if item.get("valid_from") is None and item.get("valid_to") is None and not item.get("activity")
+    }
     try:
-        drafts, summary = rows_to_actions(board_id, data.rows, title=data.title,
-            query=data.query, subject_field=data.subject_field,
-            object_field=data.object_field, predicate=data.predicate,
+        drafts, summary = rows_to_actions(
+            board_id,
+            data.rows,
+            title=data.title,
+            query=data.query,
+            subject_field=data.subject_field,
+            object_field=data.object_field,
+            predicate=data.predicate,
             predicate_field=data.predicate_field,
-            subject_kind=data.subject_kind, object_kind=data.object_kind,
-            existing_entities=entity_index, existing_facts=fact_index,
-            existing_sources={item["id"] for item in index["sources"]}, **columns)
+            subject_kind=data.subject_kind,
+            object_kind=data.object_kind,
+            existing_entities=entity_index,
+            existing_facts=fact_index,
+            existing_sources={item["id"] for item in index["sources"]},
+            **columns,
+        )
     except (ValueError, KeyError) as error:
         raise HTTPException(422, str(error)) from error
     if data.dry_run:
@@ -462,8 +551,7 @@ async def board_status(board_id: str):
         raise HTTPException(422, "Invalid board UUID")
     async with rooms_lock:
         peers = len(rooms.get(str(UUID(board_id)), {}))
-    return {"board_id": board_id, "online_browsers": peers,
-            "durable_storage": "browser-indexeddb"}
+    return {"board_id": board_id, "online_browsers": peers, "durable_storage": "browser-indexeddb"}
 
 
 @app.get("/api/boards/{board_id}/graph")
@@ -518,10 +606,8 @@ async def merge_entity(board_id: str, entity_id: str, body: EntityMergeInput):
         raise HTTPException(404, "Source or target entity does not exist on this board")
     if entity_id == body.target_id:
         raise HTTPException(422, "An entity cannot be merged into itself")
-    accepted = await apply_drafts(board_id, [action("entity.merge", {
-        "source_id": entity_id, "target_id": body.target_id})])
-    return {"board_id": str(UUID(board_id)), "source_id": entity_id,
-            "target_id": body.target_id, "accepted_actions": accepted}
+    accepted = await apply_drafts(board_id, [action("entity.merge", {"source_id": entity_id, "target_id": body.target_id})])
+    return {"board_id": str(UUID(board_id)), "source_id": entity_id, "target_id": body.target_id, "accepted_actions": accepted}
 
 
 @app.delete("/api/boards/{board_id}/entities/{entity_id}")
@@ -559,10 +645,18 @@ async def delete_source(board_id: str, source_id: str):
 @app.post("/api/boards/{board_id}/relations", status_code=201)
 async def create_relation(board_id: str, body: RelationInput):
     try:
-        relation_id, drafts = relation_actions(body.subject_id, body.predicate,
-            body.object_id, source_id=body.source_id, note=body.note,
-            stance=body.stance, confidence=body.confidence,
-            valid_from=body.valid_from, valid_to=body.valid_to, relation_id=body.id)
+        relation_id, drafts = relation_actions(
+            body.subject_id,
+            body.predicate,
+            body.object_id,
+            source_id=body.source_id,
+            note=body.note,
+            stance=body.stance,
+            confidence=body.confidence,
+            valid_from=body.valid_from,
+            valid_to=body.valid_to,
+            relation_id=body.id,
+        )
     except ValueError as error:
         raise HTTPException(422, str(error)) from error
     index = (await browser_command(board_id, "index"))["index"]
@@ -571,7 +665,19 @@ async def create_relation(board_id: str, body: RelationInput):
         raise HTTPException(422, "Source or target entity does not exist on this board")
     if body.source_id and body.source_id not in {source["id"] for source in index["sources"]}:
         raise HTTPException(422, "Source does not exist on this board")
-    existing = next((f for f in index['facts'] if not f.get('activity') and f['subject_id'] == body.subject_id and f['object_id'] == body.object_id and f['predicate'].strip().casefold() == body.predicate.strip().casefold() and f.get('valid_from') == body.valid_from and f.get('valid_to') == body.valid_to), None)
+    existing = next(
+        (
+            f
+            for f in index['facts']
+            if not f.get('activity')
+            and f['subject_id'] == body.subject_id
+            and f['object_id'] == body.object_id
+            and f['predicate'].strip().casefold() == body.predicate.strip().casefold()
+            and f.get('valid_from') == body.valid_from
+            and f.get('valid_to') == body.valid_to
+        ),
+        None,
+    )
     if existing:
         relation_id = existing['id']
         drafts = [d for d in drafts if d['type'] != 'fact.add']
@@ -591,7 +697,11 @@ async def update_relation(board_id: str, relation_id: str, body: RelationUpdate)
     if "predicate" in values and (not isinstance(values["predicate"], str) or not values["predicate"].strip()):
         raise HTTPException(422, "Relationship predicate cannot be empty")
     entity_ids = {entity["id"] for entity in index["entities"]}
-    if any(not isinstance(values.get(field), str) or values.get(field) not in entity_ids for field in ("subject_id", "object_id") if field in values):
+    if any(
+        not isinstance(values.get(field), str) or values.get(field) not in entity_ids
+        for field in ("subject_id", "object_id")
+        if field in values
+    ):
         raise HTTPException(422, "Source or target entity does not exist on this board")
     if not values:
         raise HTTPException(422, "At least one relationship field is required")
@@ -611,16 +721,31 @@ async def delete_relation(board_id: str, relation_id: str):
 @app.post("/api/boards/{board_id}/sources", status_code=201)
 async def create_source(board_id: str, body: SourceInput):
     from uuid import uuid4
+
     source_id = body.id or str(uuid4())
-    accepted = await apply_drafts(board_id, [action("source.add", {
-        "id": source_id, "title": body.title, "uri": body.uri,
-        "excerpt": body.excerpt, "source_kind": body.source_kind, "query": body.query})])
+    accepted = await apply_drafts(
+        board_id,
+        [
+            action(
+                "source.add",
+                {
+                    "id": source_id,
+                    "title": body.title,
+                    "uri": body.uri,
+                    "excerpt": body.excerpt,
+                    "source_kind": body.source_kind,
+                    "query": body.query,
+                },
+            )
+        ],
+    )
     return {"id": source_id, "accepted_actions": accepted}
 
 
 @app.post("/api/boards/{board_id}/relations/{relation_id}/evidence", status_code=201)
 async def create_evidence(board_id: str, relation_id: str, body: EvidenceInput):
     from uuid import uuid4
+
     index = (await browser_command(board_id, "index"))["index"]
     if relation_id not in {fact["id"] for fact in index["facts"]}:
         raise HTTPException(422, "Relationship does not exist on this board")
@@ -629,10 +754,27 @@ async def create_evidence(board_id: str, relation_id: str, body: EvidenceInput):
     if body.stance not in {"supports", "refutes"}:
         raise HTTPException(422, "Stance must be supports or refutes")
     evidence_id = body.id or str(uuid4())
-    accepted = await apply_drafts(board_id, [action("assertion.add", {
-        "id": evidence_id, "fact_id": relation_id, "stance": body.stance,
-        "confidence": body.confidence, "source_id": body.source_id,
-        "note": body.note, "observation": body.observation, "locator": body.locator, "interpretation": body.interpretation, "valid_from": body.valid_from, "valid_to": body.valid_to})])
+    accepted = await apply_drafts(
+        board_id,
+        [
+            action(
+                "assertion.add",
+                {
+                    "id": evidence_id,
+                    "fact_id": relation_id,
+                    "stance": body.stance,
+                    "confidence": body.confidence,
+                    "source_id": body.source_id,
+                    "note": body.note,
+                    "observation": body.observation,
+                    "locator": body.locator,
+                    "interpretation": body.interpretation,
+                    "valid_from": body.valid_from,
+                    "valid_to": body.valid_to,
+                },
+            )
+        ],
+    )
     return {"id": evidence_id, "accepted_actions": accepted}
 
 
@@ -651,8 +793,7 @@ async def update_evidence(board_id: str, relation_id: str, evidence_id: str, bod
     if not values:
         raise HTTPException(422, "At least one evidence field is required")
     accepted = await apply_drafts(board_id, [action("assertion.update", {"id": evidence_id, **values})])
-    return {"board_id": str(UUID(board_id)), "relation_id": relation_id,
-            "id": evidence_id, "accepted_actions": accepted}
+    return {"board_id": str(UUID(board_id)), "relation_id": relation_id, "id": evidence_id, "accepted_actions": accepted}
 
 
 @app.delete("/api/boards/{board_id}/relations/{relation_id}/evidence/{evidence_id}")
@@ -668,8 +809,7 @@ async def delete_evidence(board_id: str, relation_id: str, evidence_id: str):
 async def create_actions(board_id: str, body: ActionBatch):
     if len(body.actions) > 50_000:
         raise HTTPException(413, "At most 50,000 actions per request")
-    drafts = [action(item.type, item.payload, action_id=item.id,
-                     author=item.author) for item in body.actions]
+    drafts = [action(item.type, item.payload, action_id=item.id, author=item.author) for item in body.actions]
     return {"accepted_actions": await apply_drafts(board_id, drafts)}
 
 
@@ -679,7 +819,9 @@ class TableRowsInput(StrictModel):
     query: str = Field(default="", max_length=20_000, description="KQL that produced the rows (provenance).")
     dry_run: bool = False
     # An object, validated below: the full schema would cost every agent session about 800 tokens of tool definition.
-    format: dict | None = Field(default=None, description="An import format as list_import_formats returns it, used instead of recognising the table.")
+    format: dict | None = Field(
+        default=None, description="An import format as list_import_formats returns it, used instead of recognising the table."
+    )
 
 
 @app.post("/api/boards/{board_id}/imports/table")
@@ -697,7 +839,9 @@ async def import_table_export(board_id: str, body: TableRowsInput):
     except ValueError as error:
         raise HTTPException(422, str(error)) from error
     if body.format:
-        return await import_with_format(board_id, rows, parse_format(json.dumps(body.format)), title=body.title, query=body.query, dry_run=body.dry_run)
+        return await import_with_format(
+            board_id, rows, parse_format(json.dumps(body.format)), title=body.title, query=body.query, dry_run=body.dry_run
+        )
     return await import_table(board_id, rows, title=body.title, query=body.query, dry_run=body.dry_run)
 
 
@@ -753,21 +897,45 @@ async def import_activity(board_id: str, body: RowsInput):
 
 
 @app.post("/api/boards/{board_id}/imports/file")
-async def import_file(board_id: str, file: UploadFile = File(...),
-                      title: str = Form("Activity logs"), query: str = Form(""), dry_run: bool = Form(False),
-                      subject_field: str = Form(""), object_field: str = Form(""),
-                      predicate: str = Form("accessed"), predicate_field: str = Form(""),
-                      subject_kind: str = Form("IP"),
-                      object_kind: str = Form("File"), roles: str = Form(""),
-                      auto: bool = Form(False, description="Recognise Defender XDR / Sentinel exports and map their columns automatically."),
-                      format: str = Form("", description="A saved import format as JSON (see GET /imports/formats); used instead of the other mapping fields."),
-                      batch_id: str = Form("", description="Optional UUID for the change batch, so the uploading browser recognises its own import.")):
+async def import_file(
+    board_id: str,
+    file: UploadFile = File(...),
+    title: str = Form("Activity logs"),
+    query: str = Form(""),
+    dry_run: bool = Form(False),
+    subject_field: str = Form(""),
+    object_field: str = Form(""),
+    predicate: str = Form("accessed"),
+    predicate_field: str = Form(""),
+    subject_kind: str = Form("IP"),
+    object_kind: str = Form("File"),
+    roles: str = Form(""),
+    auto: bool = Form(False, description="Recognise Defender XDR / Sentinel exports and map their columns automatically."),
+    format: str = Form(
+        "", description="A saved import format as JSON (see GET /imports/formats); used instead of the other mapping fields."
+    ),
+    batch_id: str = Form("", description="Optional UUID for the change batch, so the uploading browser recognises its own import."),
+):
     # File uploads are imports: the change log and the notifications show them as such, not as agent writes.
     channel_context = request_channel.set("Import")
     batch_context = request_batch.set(str(UUID(batch_id)) if batch_id and valid_uuid(batch_id) else None)
     try:
-        return await _import_file(board_id, file, title, query, dry_run, subject_field, object_field, predicate, predicate_field,
-                                  subject_kind, object_kind, roles, auto, format)
+        return await _import_file(
+            board_id,
+            file,
+            title,
+            query,
+            dry_run,
+            subject_field,
+            object_field,
+            predicate,
+            predicate_field,
+            subject_kind,
+            object_kind,
+            roles,
+            auto,
+            format,
+        )
     finally:
         request_channel.reset(channel_context)
         request_batch.reset(batch_context)
@@ -785,6 +953,7 @@ async def read_upload(file: UploadFile) -> list[dict]:
 
 def parse_format(text: str) -> ImportFormat:
     from pydantic import ValidationError
+
     try:
         return ImportFormat.model_validate_json(text)
     except ValidationError as error:
@@ -792,27 +961,62 @@ def parse_format(text: str) -> ImportFormat:
         raise HTTPException(422, f"Invalid import format: {problems}") from error
 
 
-async def _import_file(board_id, file, title, query, dry_run, subject_field, object_field, predicate, predicate_field,
-                       subject_kind, object_kind, roles, auto=False, format=""):
+async def _import_file(
+    board_id,
+    file,
+    title,
+    query,
+    dry_run,
+    subject_field,
+    object_field,
+    predicate,
+    predicate_field,
+    subject_kind,
+    object_kind,
+    roles,
+    auto=False,
+    format="",
+):
     rows = await read_upload(file)
     if format.strip():
-        return await import_with_format(board_id, rows, parse_format(format), title=title, query=query, dry_run=dry_run, filename=file.filename or "")
+        return await import_with_format(
+            board_id, rows, parse_format(format), title=title, query=query, dry_run=dry_run, filename=file.filename or ""
+        )
     if auto:
         return await import_table(board_id, rows, title=title, query=query, dry_run=dry_run, filename=file.filename or "")
     if roles.strip():
         from app.structures import ActivityRowsInput
         from pydantic import ValidationError
         import json
+
         try:
-            body = ActivityRowsInput(rows=rows, title=title, query=query, dry_run=dry_run, roles=json.loads(roles),
-                                     operation=predicate or "performed", operation_field=predicate_field or None)
+            body = ActivityRowsInput(
+                rows=rows,
+                title=title,
+                query=query,
+                dry_run=dry_run,
+                roles=json.loads(roles),
+                operation=predicate or "performed",
+                operation_field=predicate_field or None,
+            )
         except (ValueError, ValidationError) as error:
             raise HTTPException(422, str(error)) from error
         return await import_activity_rows(board_id, body)
-    return await import_rows(board_id, RowsInput(rows=rows, title=title, query=query, dry_run=dry_run,
-        subject_field=subject_field or None, object_field=object_field or None,
-        predicate=predicate, predicate_field=predicate_field or None,
-        subject_kind=subject_kind, object_kind=object_kind))
+    return await import_rows(
+        board_id,
+        RowsInput(
+            rows=rows,
+            title=title,
+            query=query,
+            dry_run=dry_run,
+            subject_field=subject_field or None,
+            object_field=object_field or None,
+            predicate=predicate,
+            predicate_field=predicate_field or None,
+            subject_kind=subject_kind,
+            object_kind=object_kind,
+        ),
+    )
 
 
 async def import_activity_rows(board_id: str, body):
@@ -828,8 +1032,11 @@ async def board_of_session() -> str:
     if len(boards) == 1:
         return boards.pop()
     if not boards:
-        raise HTTPException(409, "No open board for this board token: ask the analyst to open the board in the browser "
-                                 "(plug icon → Connect an agent shows the current token)")
+        raise HTTPException(
+            409,
+            "No open board for this board token: ask the analyst to open the board in the browser "
+            "(plug icon → Connect an agent shows the current token)",
+        )
     raise HTTPException(422, "This board token is connected to several boards; pass board_id")
 
 
@@ -869,7 +1076,7 @@ async def receive_message(websocket: WebSocket):
             if length > MAX_FRAME_HEADER or 8 + length > len(data):
                 return None
             try:
-                header = json.loads(data[8:8 + length])
+                header = json.loads(data[8 : 8 + length])
             except ValueError:
                 return None
             return (header, data) if isinstance(header, dict) else None
@@ -937,8 +1144,7 @@ async def board_socket(websocket: WebSocket, board_id: str):
     async with rooms_lock:
         room = rooms.setdefault(board_id, {})
         previous = room.get(actor)
-        peers = [{"id": peer_id, "name": peer.name} for peer_id, peer in room.items()
-                 if peer_id != actor]
+        peers = [{"id": peer_id, "name": peer.name} for peer_id, peer in room.items() if peer_id != actor]
         own = room[actor] = start_peer(Peer(websocket=websocket, name=name, session_token=session_token))
     if previous:
         # 4001: replaced by a connection with the same identity. The browser does not reconnect on it (two tabs with
@@ -980,15 +1186,32 @@ async def board_socket(websocket: WebSocket, board_id: str):
                 actions = message.get("actions")
                 if isinstance(actions, list) and len(actions) <= 1000:
                     target = message.get("target")
-                    await send_to_room(board_id, {"type": "actions", "from": actor, "actions": actions, "deferRender": message.get("deferRender") is True,
-                                                  **({"syncDone": True} if message.get("syncDone") is True else {})},
-                                       exclude=actor, target=target if isinstance(target, str) else None)
+                    await send_to_room(
+                        board_id,
+                        {
+                            "type": "actions",
+                            "from": actor,
+                            "actions": actions,
+                            "deferRender": message.get("deferRender") is True,
+                            **({"syncDone": True} if message.get("syncDone") is True else {}),
+                        },
+                        exclude=actor,
+                        target=target if isinstance(target, str) else None,
+                    )
             elif kind == "sync-request":
                 # A summary of what the requester holds lets peers answer with only what is missing.
                 target, summary = message.get("target"), message.get("summary")
-                await send_to_room(board_id, {"type": "sync-request", "from": actor, **({"summary": summary} if isinstance(summary, dict) else {}),
-                                              **({"reply": True} if message.get("reply") is True else {})},
-                                   exclude=actor, target=target if isinstance(target, str) else None)
+                await send_to_room(
+                    board_id,
+                    {
+                        "type": "sync-request",
+                        "from": actor,
+                        **({"summary": summary} if isinstance(summary, dict) else {}),
+                        **({"reply": True} if message.get("reply") is True else {}),
+                    },
+                    exclude=actor,
+                    target=target if isinstance(target, str) else None,
+                )
             elif kind == "profile":
                 updated = str(message.get("name", "")).strip()[:40]
                 if updated:
@@ -1005,8 +1228,15 @@ async def board_socket(websocket: WebSocket, board_id: str):
                 request_id = message["requestId"]
                 entry = pending.get(request_id)
                 index, total, data = message.get("index"), message.get("total"), message.get("data")
-                if not entry or entry[0] is not websocket or entry[1].done() or not isinstance(data, str) or \
-                        not isinstance(index, int) or not isinstance(total, int) or not 0 <= index < total <= MAX_RESULT_PARTS:
+                if (
+                    not entry
+                    or entry[0] is not websocket
+                    or entry[1].done()
+                    or not isinstance(data, str)
+                    or not isinstance(index, int)
+                    or not isinstance(total, int)
+                    or not 0 <= index < total <= MAX_RESULT_PARTS
+                ):
                     continue
                 buffer = result_parts.setdefault(request_id, [])
                 if index != len(buffer):
@@ -1044,6 +1274,7 @@ async def board_socket(websocket: WebSocket, board_id: str):
 
 
 from app.extensions import register_extensions
+
 register_extensions(app, mcp, globals())
 
 app.mount("/mcp", mcp_app)
@@ -1064,5 +1295,6 @@ if WEB_DIR.is_dir():
 def set_mcp_tool_profile(profile: str) -> str:
     """Switch the visible MCP tools at runtime (tests, embedding); FACTGRAPH_MCP_TOOLS sets the default."""
     from app.tool_profiles import set_tool_profile
+
     names = globals()["MCP_TOOL_NAMES"]
     return set_tool_profile(mcp, profile, names["agent"], names["full"])

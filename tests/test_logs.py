@@ -1,5 +1,6 @@
 """Server logs: no board IDs (they are the boards' access keys), the client's real IP behind a trusted proxy, and no
 traceback when a browser leaves before saying hello (a reload, or many tabs reconnecting after a restart)."""
+
 import asyncio
 import json
 import os
@@ -25,9 +26,25 @@ class ServerLogTest(unittest.IsolatedAsyncioTestCase):
         handle, cls.log = tempfile.mkstemp(suffix=".log")
         # As in the Docker image: INFO logs, no access log, proxies trusted only on loopback and link-local addresses.
         env = {**os.environ, "FORWARDED_ALLOW_IPS": "127.0.0.1,::1,169.254.0.0/16"}
-        cls.process = subprocess.Popen([sys.executable, "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", str(cls.port),
-                                        "--log-level", "info", "--no-access-log"], cwd=Path(__file__).resolve().parents[1],
-                                       stdout=handle, stderr=subprocess.STDOUT, env=env)
+        cls.process = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "uvicorn",
+                "app.main:app",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                str(cls.port),
+                "--log-level",
+                "info",
+                "--no-access-log",
+            ],
+            cwd=Path(__file__).resolve().parents[1],
+            stdout=handle,
+            stderr=subprocess.STDOUT,
+            env=env,
+        )
         os.close(handle)
         for _ in range(100):
             try:

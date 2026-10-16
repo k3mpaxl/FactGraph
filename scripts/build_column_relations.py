@@ -3,6 +3,9 @@
 Usage:
     python scripts/build_column_relations.py                      # download https://xdrinternals.com/data/column-relations.json
     python scripts/build_column_relations.py column-relations.json   # or a saved copy
+    python scripts/build_column_relations.py --check [source]        # only report what changed upstream; exit 1 if anything did
+
+The weekly workflow "Relationship catalog" runs --check, so a change on xdrinternals.com shows up as a failed run.
 
 The catalog (MIT License, Copyright (c) 2025 Fabian & Nathan, https://github.com/MSCloudInternals/XDRInternals) says
 which columns join Defender XDR and Sentinel tables: token and session IDs, user, device, app and resource IDs. Kept
@@ -15,6 +18,7 @@ to tie evidence rows together ("Linked by ID").
 from __future__ import annotations
 
 import json
+import os
 import sys
 import urllib.request
 from datetime import date
@@ -46,8 +50,11 @@ def browser_columns(out: dict) -> str:
             + "".join(f"  {json.dumps(family)}: {json.dumps(value, ensure_ascii=False)},\n" for family, value in columns.items()) + "}\n")
 
 
-def main(location: str) -> None:
-    catalog = load(location)
+TARGET = Path(__file__).resolve().parents[1] / "app" / "data" / "column_relations.json"
+SCRIPT = TARGET.parents[2] / "web" / "src" / "joinColumns.ts"
+
+
+def build(catalog: dict, generated: str) -> dict:
     relations = []
     for item in catalog["relations"]:
         relation = {"id": item["id"], "title": item["title"], "family": item["family"],
@@ -60,16 +67,49 @@ def main(location: str) -> None:
         if sources:
             relation["sources"] = sources
         relations.append(relation)
-    out = {"generated": date.today().isoformat(), "source": "https://xdrinternals.com/relationships/", "license": LICENSE,
-           "families": {f["id"]: f["label"] for f in catalog["families"]},
-           "relations": sorted(relations, key=lambda r: (r["family"], r["id"]))}
-    target = Path(__file__).resolve().parents[1] / "app" / "data" / "column_relations.json"
-    target.write_text(json.dumps(out, indent=1, sort_keys=True, ensure_ascii=False) + "\n", encoding="utf-8")
-    print(f"{len(relations)} relations in {len(out['families'])} families → {target}")
-    script = target.parents[2] / "web" / "src" / "joinColumns.ts"
-    script.write_text(browser_columns(out), encoding="utf-8")
-    print(f"key columns for the browser → {script}")
+    return {"generated": generated, "source": "https://xdrinternals.com/relationships/", "license": LICENSE,
+            "families": {f["id"]: f["label"] for f in catalog["families"]},
+            "relations": sorted(relations, key=lambda r: (r["family"], r["id"]))}
+
+
+def changes(old: dict, new: dict) -> list[str]:
+    """What differs between two built catalogs, one line each (the build date aside)."""
+    before, after = {r["id"]: r for r in old.get("relations", [])}, {r["id"]: r for r in new["relations"]}
+    lines = [f"added: {i} ({after[i]['from']['table']}.{after[i]['from']['column']} → {after[i]['to']['table']}.{after[i]['to']['column']})"
+             for i in sorted(after.keys() - before.keys())]
+    lines += [f"removed: {i}" for i in sorted(before.keys() - after.keys())]
+    for i in sorted(before.keys() & after.keys()):
+        fields = sorted(k for k in before[i].keys() | after[i].keys() if before[i].get(k) != after[i].get(k))
+        if fields:
+            lines.append(f"changed: {i} ({', '.join(fields)})")
+    if old.get("families") != new["families"]:
+        lines.append("changed: the kinds of key (families)")
+    return lines
+
+
+def main(location: str, check: bool = False) -> int:
+    old = json.loads(TARGET.read_text(encoding="utf-8")) if TARGET.exists() else {}
+    new = build(load(location), old.get("generated", ""))
+    found = changes(old, new)
+    if check:
+        report = (f"{len(found)} change(s) in the relationship catalog since {old.get('generated', 'never')}; "
+                  "run scripts/build_column_relations.py and review the diff:\n" + "\n".join(f"- {line}" for line in found)
+                  if found else f"The relationship catalog is unchanged ({len(new['relations'])} relations).")
+        print(report)
+        if summary := os.environ.get("GITHUB_STEP_SUMMARY"):
+            with open(summary, "a", encoding="utf-8") as handle:
+                handle.write(report + "\n")
+        return 1 if found else 0
+    # The date only moves when the content does, so running the script again changes nothing.
+    if found or not new["generated"]:
+        new["generated"] = date.today().isoformat()
+    TARGET.write_text(json.dumps(new, indent=1, sort_keys=True, ensure_ascii=False) + "\n", encoding="utf-8")
+    print(f"{len(new['relations'])} relations in {len(new['families'])} families → {TARGET}" + (f" ({len(found)} changes)" if found else " (unchanged)"))
+    SCRIPT.write_text(browser_columns(new), encoding="utf-8")
+    print(f"key columns for the browser → {SCRIPT}")
+    return 0
 
 
 if __name__ == "__main__":
-    main(sys.argv[1] if len(sys.argv) > 1 else SOURCE)
+    arguments = [a for a in sys.argv[1:] if a != "--check"]
+    sys.exit(main(arguments[0] if arguments else SOURCE, check="--check" in sys.argv[1:]))

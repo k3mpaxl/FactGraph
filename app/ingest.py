@@ -341,6 +341,24 @@ def normalize_identifier(scheme: str, namespace: str, raw: str) -> str:
     return value
 
 
+def row_key(note: str) -> str:
+    """The key of an original row: a 64-bit hash of its evidence note, the same as rowKey in web/src/rowKey.ts (cyrb53's
+    mixing over UTF-16 code units, both halves). A row already on the board is recognised by it whatever entities a newer
+    mapping sees in it, so changing a mapping never duplicates evidence on a repeated import."""
+    m = 0xFFFFFFFF
+    h1, h2 = 0xDEADBEEF, 0x41C6CE57
+    data = note.encode("utf-16-le")
+    for i in range(0, len(data), 2):
+        ch = data[i] | data[i + 1] << 8
+        h1 = ((h1 ^ ch) * 2654435761) & m
+        h2 = ((h2 ^ ch) * 1597334677) & m
+    h1 = ((h1 ^ (h1 >> 16)) * 2246822507) & m
+    h1 ^= ((h2 ^ (h2 >> 13)) * 3266489909) & m
+    h2 = ((h2 ^ (h2 >> 16)) * 2246822507) & m
+    h2 ^= ((h1 ^ (h1 >> 13)) * 3266489909) & m
+    return f"{h2:08x}{h1:08x}"
+
+
 def identifier_key(kind: str, scheme: str, namespace: str, normalized: str) -> tuple[str, str, str, str]:
     return ("" if scheme in GLOBAL_SCHEMES else kind.casefold(), scheme, namespace, normalized)
 
@@ -350,7 +368,8 @@ def table_rows_to_actions(board_id: str, rows: list[dict], mapping, *, title: st
                           existing_identifiers: dict[tuple[str, str, str, str], str] | None = None,
                           known_identifiers: set[tuple[str, str, str, str]] | None = None,
                           existing_facts: set[str] | None = None,
-                          existing_sources: set[str] | None = None) -> tuple[list[dict], dict]:
+                          existing_sources: set[str] | None = None,
+                          existing_rows: set[str] | None = None) -> tuple[list[dict], dict]:
     """Rows of a recognised Defender XDR / Sentinel table become activities with role-tagged participants.
 
     Entities are found by their identifiers first (DeviceId, AccountObjectId, SHA-256 …), then by type and name, so a
@@ -380,13 +399,19 @@ def table_rows_to_actions(board_id: str, rows: list[dict], mapping, *, title: st
     created: set[str] = set()
     touched: set[str] = set()
     activities: set[str] = set()
-    evidence = skipped = identifiers_added = enriched = not_on_board = 0
+    evidence = skipped = identifiers_added = enriched = not_on_board = on_board = 0
+    known_rows = existing_rows or set()
     times: list[str] = []
     for row_number, row in enumerate(rows, 1):
         source_id = row_sources[row_number - 1]
         participants: list[dict] = []
         labels: list[str] = []
         anchored = False
+        # The note holds the row with JSON columns as objects (readable in the evidence reader) and without empty columns.
+        row_text = json.dumps(structured(row), sort_keys=True, ensure_ascii=False, default=str)
+        # A row already on the board (by its key, whatever entities this mapping sees in it) adds no evidence again: its
+        # entities that are on the board only get the IDs this mapping reads, nothing else is created.
+        known = row_key(row_text) in known_rows
         for part in participants_of(mapping, row):
             # Inventory: nothing of a row is used unless an entity it describes is on the board (those parts come first).
             if mapping.inventory and part["create"] and not anchored:
@@ -406,7 +431,7 @@ def table_rows_to_actions(board_id: str, rows: list[dict], mapping, *, title: st
                 # Files and processes are never joined by their name alone (two .env files on two devices are two files).
                 named = by_name.get((kind.casefold(), name.casefold())) if part.get("by_name", True) else None
                 entity_id = next((c for c in [*weak, named] if c and not contradicts(c)), None)
-            if not part["create"]:
+            if not part["create"] or known:
                 if not entity_id or (entity_id not in existing_ids and entity_id not in created):
                     continue
                 anchored = True
@@ -443,6 +468,9 @@ def table_rows_to_actions(board_id: str, rows: list[dict], mapping, *, title: st
                 participants.append({"entity_id": entity_id, "role": role})
                 labels.append(f"{role} {name}")
         operation = operation_of(mapping, row)
+        if known:
+            on_board += 1
+            continue
         if mapping.inventory and not anchored:
             not_on_board += 1
             continue
@@ -460,8 +488,6 @@ def table_rows_to_actions(board_id: str, rows: list[dict], mapping, *, title: st
                 drafts.append(action("fact.add", {"id": activity_id, "predicate": operation, "participants": participants,
                     "valid_from": None, "valid_to": None, "created_at": now},
                     action_id=_stable(board_id, "activity-action", activity_id), author="Import"))
-        # The note holds the row with JSON columns as objects (readable in the evidence reader) and without empty columns.
-        row_text = json.dumps(structured(row), sort_keys=True, ensure_ascii=False, default=str)
         assertion_id = _stable(board_id, "assertion", source_id, activity_id, row_text)
         # An export can repeat a row verbatim; it is one piece of evidence.
         if assertion_id in seen_evidence:
@@ -479,6 +505,7 @@ def table_rows_to_actions(board_id: str, rows: list[dict], mapping, *, title: st
         evidence += 1
     return drafts, {"rows": len(rows), "skipped": skipped, "entities": len(touched), "new_entities": len(created),
                     **({"enriched": enriched, "not_on_board": not_on_board} if mapping.inventory else {}),
+                    **({"already_on_board": on_board} if on_board else {}),
                     "relations": len(activities), "evidence": evidence, "identifiers": identifiers_added, "source_id": row_sources[0], "source_parts": len(set(row_sources)), "duplicates": duplicates,
                     "table": mapping.table, "product": mapping.product,
                     # For the preview: which column gives the event time (read as UTC) and how many rows have none.

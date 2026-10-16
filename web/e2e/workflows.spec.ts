@@ -1067,8 +1067,12 @@ test('linked by ID: an activity leads to the process launch it ran in and to wha
   await call('POST','/imports/table',{title:'DeviceProcessEvents',rows:[{...device,Timestamp:'2026-09-28T10:00:00Z',ActionType:'ProcessCreated',FileName:'powershell.exe',
     FolderPath:'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',ProcessCommandLine:'powershell -enc SQBFAFgA',InitiatingProcessFileName:'winword.exe',
     ProcessUniqueId:'200',InitiatingProcessUniqueId:'100',ReportId:'1'}]})
-  await call('POST','/imports/table',{title:'DeviceNetworkEvents',rows:[{...device,Timestamp:'2026-09-28T10:00:05Z',ActionType:'ConnectionSuccess',RemoteIP:'203.0.113.7',
-    RemotePort:'443',InitiatingProcessFileName:'powershell.exe',InitiatingProcessUniqueId:'200',ReportId:'2'}]})
+  const connection={...device,Timestamp:'2026-09-28T10:00:05Z',ActionType:'ConnectionSuccess',RemoteIP:'203.0.113.7',
+    RemotePort:'443',InitiatingProcessFileName:'powershell.exe',InitiatingProcessUniqueId:'200',ReportId:'2'}
+  await call('POST','/imports/table',{title:'DeviceNetworkEvents',rows:[connection]})
+  // The browser names the rows it holds: the same row again (another export, another title) adds nothing.
+  const again=await call('POST','/imports/table',{title:'Network, second export',rows:[connection]})
+  expect([again.already_on_board,again.evidence]).toEqual([1,0])
   await page.locator('.activity-node',{hasText:'connection success'}).click()
   const linked=page.locator('.linked-list')
   await expect(linked.getByText('Process launched by')).toBeVisible()

@@ -390,7 +390,8 @@ async def import_mapped(board_id: str, rows: list[dict], mapping, *, title: str,
     try:
         drafts, summary = table_rows_to_actions(board_id, rows, mapping, title=title, query=query,
             existing_entities=entities, existing_identifiers=by_identifier, known_identifiers=owned,
-            existing_facts={item["id"] for item in index["facts"]}, existing_sources={item["id"] for item in index["sources"]})
+            existing_facts={item["id"] for item in index["facts"]}, existing_sources={item["id"] for item in index["sources"]},
+            existing_rows=set(index.get("rows", [])))
     except (ValueError, KeyError) as error:
         raise HTTPException(422, str(error)) from error
     summary["detection"] = detection

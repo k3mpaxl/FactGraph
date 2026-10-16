@@ -4,6 +4,13 @@ const { project } = require(path + '/board.js')
 const { sessionId, processKeys, messageId, keysOf, linkedActivities, keyLabel } = require(path + '/correlation.js')
 const { JOIN_COLUMNS } = require(path + '/joinColumns.js')
 
+// Row keys: the same values as row_key in app/ingest.py (tests/test_relations.py checks them there), over UTF-16 code units.
+{
+  const { rowKey } = require(path + '/rowKey.js')
+  const reference = { '': '488bdcb81aee8d83', '{"ReportId": "18842"}': '7c4ea6c59c353090', 'Größe 😀 ü': 'c697395edc13c23e', ['a'.repeat(1000)]: '4a3c0002518a359e' }
+  for (const [text, key] of Object.entries(reference)) assert.equal(rowKey(text), key, text.slice(0, 20))
+}
+
 const SID = '6F1C2D3E-4A5B-4C6D-8E9F-0A1B2C3D4E5F'
 // The Entra session ID: lower case, from sign-in and Graph rows (they carry a token ID) and Microsoft 365 / Cloud App
 // context; a bare SessionId of another product and Windows SIDs are not taken for it.

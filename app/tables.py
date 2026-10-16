@@ -423,7 +423,9 @@ MAPPINGS: tuple[Mapping, ...] = (
         Part("actor", "User", ("AccountDisplayName", "AccountId"), (Ident("AccountObjectId", namespace="entra-object-id"),)),
         Part("source", "IP", ("IPAddress",), (Ident("IPAddress", "ip"),)),
         Part("target", "Service", ("Application",), (Ident("ApplicationId", namespace="mdca-app-id"),)),
-        Part("target", "Other", ("ObjectName",))),
+        Part("target", "Other", ("ObjectName",)),
+        # The OAuth app that acted (an Entra app ID): the same app as in the sign-in logs and OAuthAppInfo.
+        Part("tool", "Service", ("OAuthAppId",), (Ident("OAuthAppId", namespace="entra-app-id"),))),
         locator=("ReportId",)),
     Mapping("UrlClickEvents", "Defender XDR", ("Url", "ActionType", "AccountUpn", "NetworkMessageId"), (
         Part("actor", "User", ("AccountUpn",), (Ident("AccountUpn", "email"),), lower=True),

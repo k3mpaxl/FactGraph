@@ -11,7 +11,10 @@ from fastmcp import Client
 
 from app.main import app, mcp
 from app.relations import catalog, find_joins
-from app.tables import MAPPINGS, participants_of
+from dataclasses import replace
+
+from app.ingest import identifier_key, row_key, table_rows_to_actions
+from app.tables import MAPPINGS, Ident, Part, participants_of
 from tests.test_tables import NETWORK, SIGNIN, run
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -20,12 +23,11 @@ LINKED = "aad-managed-identity-sign-in-logs-aad-graph-activity-logs-sign-in-acti
 # Catalog families that are entities in FactGraph, and the identifier namespace an import gives their ID columns.
 NAMESPACES = {"entra-user": "entra-object-id", "defender-device": "mde-device-id", "entra-device": "entra-device-id",
               "oauth-client": "entra-app-id", "service-principal": "entra-object-id"}
-# Joins the catalog knows that imports deliberately do not make: each would add a participant (and change the activity
-# key of rows already imported) or put a user's object ID on an email address entity.
+# Joins the catalog knows that imports deliberately do not make: an email address is no user entity (the object ID would
+# join the two), and the sign-in logs' ServicePrincipalId is not the signed-in user.
 NOT_LINKED = {
     ("AuditLogs", "TargetResources.[].id"),  # the first target is linked (TargetResources.0.id)
     ("CloudAppEvents", "RawEventData.Target"),
-    ("CloudAppEvents", "OAuthAppId"),
     ("EmailEvents", "SenderObjectId"),
     ("EmailEvents", "RecipientObjectId"),
     ("SigninLogs", "ServicePrincipalId"),
@@ -178,6 +180,42 @@ class ProcessStartKey(unittest.TestCase):
         # The browser drops actions it knows (the IDs are stable): nothing new may come from the repeat.
         known = {d["payload"]["id"] for d in first}
         self.assertFalse([d for d in again if d["type"] in ("entity.add", "fact.add", "assertion.add") and d["payload"]["id"] not in known])
+
+
+class RowKeys(unittest.TestCase):
+    """A row already on the board adds no evidence again, also when a newer mapping sees other entities in it."""
+    # The same values as rowKey in web/src/rowKey.ts (web/tests/correlation.cjs checks them there).
+    REFERENCE = {"": "488bdcb81aee8d83", '{"ReportId": "18842"}': "7c4ea6c59c353090", "Größe 😀 ü": "c697395edc13c23e", "a" * 1000: "4a3c0002518a359e"}
+
+    def test_same_key_as_the_browser(self):
+        for text, key in self.REFERENCE.items():
+            self.assertEqual(row_key(text), key, text[:20])
+
+    def test_a_changed_mapping_does_not_duplicate_rows_already_on_the_board(self):
+        board, index = str(uuid4()), {"entities": [], "facts": [], "sources": []}
+        _, drafts, _ = run(board, [dict(r) for r in NETWORK], index)
+        rows = {row_key(d["payload"]["note"]) for d in drafts if d["type"] == "assertion.add"}
+        mapping = next(m for m in MAPPINGS if m.table == "DeviceNetworkEvents")
+        # A newer mapping: the remote port as a participant of its own, and an ID for the device it reads now.
+        newer = replace(mapping, parts=mapping.parts + (Part("other", "Port", ("RemotePort",)),
+                                                         Part("source", "Device", ("DeviceName",), (Ident("LocalIP", "ip"),), lower=True)))
+        by_name = {(e["kind"].casefold(), e["name"].casefold()): e["id"] for e in index["entities"]}
+        by_identifier, owned = {}, set()
+        for e in index["entities"]:
+            for i in e["identifiers"]:
+                key = identifier_key(e["kind"], i["scheme"], i["namespace"], i["normalized_value"])
+                by_identifier.setdefault(key, e["id"]); owned.add((e["id"], *key[1:]))
+        common = dict(title="DeviceNetworkEvents", existing_entities=by_name, existing_identifiers=by_identifier, known_identifiers=owned,
+                      existing_facts={f["id"] for f in index["facts"]}, existing_sources={s["id"] for s in index["sources"]})
+        drafts, summary = table_rows_to_actions(board, [dict(r) for r in NETWORK], newer, existing_rows=rows, **common)
+        self.assertEqual(summary["already_on_board"], 1)
+        self.assertFalse([d for d in drafts if d["type"] in ("entity.add", "fact.add", "assertion.add")], "nothing new: no port entity, no activity, no evidence")
+        device = next(e["id"] for e in index["entities"] if e["kind"] == "Device")
+        self.assertIn((device, "10.0.0.5"), {(d["payload"]["entity_id"], d["payload"]["raw_value"]) for d in drafts if d["type"] == "identifier.add"},
+                      "the entity on the board gets the ID the newer mapping reads")
+        # Without the board's rows (an older browser) the newer mapping makes a second activity, as before.
+        drafts, _ = table_rows_to_actions(board, [dict(r) for r in NETWORK], newer, **common)
+        self.assertTrue([d for d in drafts if d["type"] == "fact.add"])
 
 
 class Interfaces(unittest.TestCase):

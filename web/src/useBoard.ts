@@ -1,3 +1,4 @@
+import { rowKey } from './rowKey'
 import { impactReport } from './hunting'
 import { analyzeImpact, exportMarks } from './impact'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -398,6 +399,8 @@ export function useBoard(boardId: string, listener?: ChangeListener) {
                     ({ id, subject_id, predicate, object_id, valid_from, valid_to, activity: !!participants?.length,
                       ...(participants?.length ? { participants_key: participantKey(participants) } : {}) })),
                   sources: snapshot.sources.map(({ id }) => ({ id })),
+                  // Keys of the original rows already on the board (retracted ones too): a repeated import skips them.
+                  rows: [...new Set(snapshot.facts.flatMap(f => f.assertions.filter(a => a.note?.startsWith('{')).map(a => rowKey(a.note))))],
                 } })
               } else if (message.operation === 'apply' && Array.isArray(message.drafts) &&
                          message.drafts.length <= 200 && message.drafts.every(isDraft)) {

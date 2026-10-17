@@ -5,8 +5,17 @@ import type { GraphData } from './types'
  * crosses the WebSocket. Lists shorten long texts (source excerpts, evidence notes); a single record comes complete.
  */
 export const COLLECTIONS: Record<string, keyof GraphData | 'evidence' | 'activities'> = {
-  entities: 'entities', relations: 'facts', facts: 'facts', sources: 'sources', evidence: 'evidence', activities: 'activities',
-  types: 'entity_types', entity_types: 'entity_types', groups: 'groups', perspectives: 'views', views: 'views',
+  entities: 'entities',
+  relations: 'facts',
+  facts: 'facts',
+  sources: 'sources',
+  evidence: 'evidence',
+  activities: 'activities',
+  types: 'entity_types',
+  entity_types: 'entity_types',
+  groups: 'groups',
+  perspectives: 'views',
+  views: 'views',
 }
 export const LIST_TEXT = 2_000
 const TEXT_FIELDS = ['excerpt', 'note', 'observation', 'query', 'interpretation', 'description', 'review_note']
@@ -36,11 +45,19 @@ export function shorten(item: Item): Item {
   return out
 }
 
-export function queryRecords(data: GraphData, options: { collection: string; q?: string; offset?: number; limit?: number; id?: string; entity_id?: string }) {
+export function queryRecords(
+  data: GraphData,
+  options: { collection: string; q?: string; offset?: number; limit?: number; id?: string; entity_id?: string },
+) {
   let all = records(data, options.collection)
   // Activities (and relationships) of one entity, in any role.
-  if (options.entity_id) all = all.filter(item => item.subject_id === options.entity_id || item.object_id === options.entity_id ||
-    (Array.isArray(item.participants) && (item.participants as { entity_id: string }[]).some(p => p.entity_id === options.entity_id)))
+  if (options.entity_id)
+    all = all.filter(
+      item =>
+        item.subject_id === options.entity_id ||
+        item.object_id === options.entity_id ||
+        (Array.isArray(item.participants) && (item.participants as { entity_id: string }[]).some(p => p.entity_id === options.entity_id)),
+    )
   if (options.id !== undefined) {
     const record = all.find(item => item.id === options.id)
     return { record: record ?? null }
@@ -63,7 +80,8 @@ export function messageParts(requestId: string, payload: Record<string, unknown>
   if (text.length <= size) return [text]
   const total = Math.ceil(text.length / size)
   return Array.from({ length: total }, (_, index) =>
-    JSON.stringify({ type: 'api-result-part', requestId, index, total, data: text.slice(index * size, (index + 1) * size) }))
+    JSON.stringify({ type: 'api-result-part', requestId, index, total, data: text.slice(index * size, (index + 1) * size) }),
+  )
 }
 
 /** Uvicorn closes a connection on a message above 16 MiB; an action alone above this (with room for the envelope) cannot be sent. */
@@ -83,7 +101,8 @@ export const SEND_BACKLOG = 1_000_000
  * its timers once a second or even once a minute, which would leave another tab waiting for its sync answer for minutes.
  */
 export async function drained(socket: WebSocket, limit = SEND_BACKLOG) {
-  while (socket.readyState === WebSocket.OPEN && socket.bufferedAmount > limit && !hidden()) await new Promise(resolve => setTimeout(resolve, 50))
+  while (socket.readyState === WebSocket.OPEN && socket.bufferedAmount > limit && !hidden())
+    await new Promise(resolve => setTimeout(resolve, 50))
 }
 const hidden = () => typeof document !== 'undefined' && document.hidden
 
@@ -107,8 +126,15 @@ export function actionChunks<T>(items: T[], maxCount = 100, maxChars = 4_000_000
     const text = JSON.stringify(item)
     const length = text.length
     // UTF-8 takes at most three bytes per UTF-16 unit, so only long texts need the exact count.
-    if (length * 3 > limit && new TextEncoder().encode(text).length > limit) { tooLarge?.push(item); continue }
-    if (current.length && (current.length >= maxCount || size + length > maxChars)) { chunks.push(current); current = []; size = 0 }
+    if (length * 3 > limit && new TextEncoder().encode(text).length > limit) {
+      tooLarge?.push(item)
+      continue
+    }
+    if (current.length && (current.length >= maxCount || size + length > maxChars)) {
+      chunks.push(current)
+      current = []
+      size = 0
+    }
     current.push(item)
     size += length
   }
@@ -139,5 +165,9 @@ export async function unpackFrame(data: ArrayBuffer): Promise<Record<string, unk
   const headLength = new DataView(data).getUint32(4)
   if (8 + headLength > bytes.length) return null
   const stream = new Blob([bytes.subarray(8 + headLength)]).stream().pipeThrough(new DecompressionStream('gzip'))
-  try { return JSON.parse(await new Response(stream).text()) as Record<string, unknown> } catch { return null }
+  try {
+    return JSON.parse(await new Response(stream).text()) as Record<string, unknown>
+  } catch {
+    return null
+  }
 }

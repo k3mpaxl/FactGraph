@@ -1,0 +1,9 @@
+# Formatting only (the app's dependencies are in requirements.txt / requirements.lock).
+[tool.ruff]
+line-length = 140
+target-version = "py311"
+extend-exclude = ["web"]
+
+[tool.ruff.format]
+# The code mixes quote styles by file; keep them rather than rewrite every string.
+quote-style = "preserve"

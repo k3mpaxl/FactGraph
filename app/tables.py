@@ -6,6 +6,7 @@ mapping says which columns are the actor, the device, the remote IP, the file �
 (DeviceId, AccountObjectId, SHA256 …), so the same device or user from different exports ends up on one entity.
 Unknown tables get a mapping from column-name heuristics that the analyst confirms in the import dialog.
 """
+
 from __future__ import annotations
 
 import json
@@ -31,6 +32,7 @@ def schemas() -> dict:
 
 # ---------------------------------------------------------------------------------------------- values
 
+
 def clean_column(name: str) -> str:
     """Export headers carry decorations: a BOM, quotes, Log Analytics' " [UTC]" on datetime columns."""
     name = str(name).replace("﻿", "").strip().strip('"').strip()
@@ -41,12 +43,23 @@ def clean_rows(rows: list[Row]) -> list[Row]:
     # Times in local time would be read as UTC and shifted by the exporter's offset without anyone noticing.
     local = sorted({str(k).strip().strip('"') for row in rows[:1] for k in row if re.search(r"\[Local\]\s*$", str(k).strip().strip('"'))})
     if local:
-        raise ValueError(f"{', '.join(local)}: the export shows local time. Export again with UTC times (the Log Analytics default) so events are not shifted.")
+        raise ValueError(
+            f"{', '.join(local)}: the export shows local time. Export again with UTC times (the Log Analytics default) so events are not shifted."
+        )
     return [{clean_column(k): v for k, v in row.items()} for row in rows]
 
 
-TIME_FORMATS = ("%m/%d/%Y, %I:%M:%S.%f %p", "%m/%d/%Y, %I:%M:%S %p", "%m/%d/%Y %I:%M:%S %p", "%m/%d/%Y %H:%M:%S",
-                "%b %d, %Y %I:%M:%S %p", "%b %d, %Y %H:%M:%S", "%d.%m.%Y %H:%M:%S", "%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S")
+TIME_FORMATS = (
+    "%m/%d/%Y, %I:%M:%S.%f %p",
+    "%m/%d/%Y, %I:%M:%S %p",
+    "%m/%d/%Y %I:%M:%S %p",
+    "%m/%d/%Y %H:%M:%S",
+    "%b %d, %Y %I:%M:%S %p",
+    "%b %d, %Y %H:%M:%S",
+    "%d.%m.%Y %H:%M:%S",
+    "%Y-%m-%d %H:%M:%S.%f",
+    "%Y-%m-%d %H:%M:%S",
+)
 
 
 def parse_time(value) -> str | None:
@@ -154,6 +167,7 @@ def phrase(value: str) -> str:
 
 # --------------------------------------------------------------------------------------------- mapping
 
+
 @dataclass(frozen=True)
 class Ident:
     field: str
@@ -164,6 +178,7 @@ class Ident:
 @dataclass(frozen=True)
 class Part:
     """One participant: its role, entity type, the column(s) holding its name, and identifying columns."""
+
     role: str
     kind: str
     fields: tuple[str, ...]
@@ -192,8 +207,11 @@ def full_path(folder: str, name: str) -> str:
     if not folder or not name:
         return folder
     sep = "/" if "/" in folder and "\\" not in folder else "\\"
-    return folder if folder.replace("/", "\\").lower().rstrip("\\").endswith("\\" + name.lower()) or folder.lower() == name.lower() \
+    return (
+        folder
+        if folder.replace("/", "\\").lower().rstrip("\\").endswith("\\" + name.lower()) or folder.lower() == name.lower()
         else folder.rstrip("\\/") + sep + name
+    )
 
 
 @dataclass(frozen=True)
@@ -220,8 +238,14 @@ def url_kind(value: str) -> str:
 
 def resource_kind(value: str) -> str:
     v = value.lower()
-    for needle, kind in (("/vaults/", "Key Vault"), ("/virtualmachines/", "Virtual Machine"), ("/storageaccounts/", "Storage Account"),
-                         ("/managedclusters/", "AKS Cluster"), ("/sites/", "App Service"), ("/subscriptions/", "Azure Resource")):
+    for needle, kind in (
+        ("/vaults/", "Key Vault"),
+        ("/virtualmachines/", "Virtual Machine"),
+        ("/storageaccounts/", "Storage Account"),
+        ("/managedclusters/", "AKS Cluster"),
+        ("/sites/", "App Service"),
+        ("/subscriptions/", "Azure Resource"),
+    ):
         if needle in v:
             return kind
     return "Azure Resource"
@@ -234,6 +258,7 @@ def resource_name(row: Row, g: Callable, fields=("_ResourceId", "ResourceId", "R
 
 def account(*upn: str, domain: str = "", name: str = "") -> Callable[[Row, Callable], str]:
     """UPN if present, else DOMAIN\\name."""
+
     def build(row: Row, g: Callable) -> str:
         for f in upn:
             if text(g(f)):
@@ -241,19 +266,25 @@ def account(*upn: str, domain: str = "", name: str = "") -> Callable[[Row, Calla
         n = text(g(name)) if name else ""
         d = text(g(domain)) if domain else ""
         return f"{d}\\{n}" if d and n and "\\" not in n else n
+
     return build
 
 
 def file_name(name_field: str, folder_field: str) -> Callable[[Row, Callable], str]:
     def build(row: Row, g: Callable) -> str:
         return text(g(name_field)) or text(g(folder_field)).replace("/", "\\").rstrip("\\").split("\\")[-1]
+
     return build
 
 
 DEVICE_IDS = (Ident("DeviceId", namespace="mde-device-id"), Ident("AadDeviceId", namespace="entra-device-id"))
 # Defender XDR renamed AadDeviceId to EntraIdDeviceId (EntraIdSignInEvents has only the new name, the beta table both).
 ENTRA_DEVICE_IDS = (Ident("EntraIdDeviceId", namespace="entra-device-id"), Ident("AadDeviceId", namespace="entra-device-id"))
-HASHES = lambda prefix="": (Ident(f"{prefix}SHA256", namespace="sha256"), Ident(f"{prefix}SHA1", namespace="sha1"), Ident(f"{prefix}MD5", namespace="md5"))  # noqa: E731
+HASHES = lambda prefix="": (
+    Ident(f"{prefix}SHA256", namespace="sha256"),
+    Ident(f"{prefix}SHA1", namespace="sha1"),
+    Ident(f"{prefix}MD5", namespace="md5"),
+)  # noqa: E731
 
 
 def device(role="source", fields=("DeviceName",), ids=DEVICE_IDS) -> Part:
@@ -261,13 +292,28 @@ def device(role="source", fields=("DeviceName",), ids=DEVICE_IDS) -> Part:
 
 
 def initiating_account(role="actor") -> Part:
-    return Part(role, "User", ("InitiatingProcessAccountUpn",), (Ident("InitiatingProcessAccountObjectId", namespace="entra-object-id"),
-                Ident("InitiatingProcessAccountSid", namespace="windows-sid"), Ident("InitiatingProcessAccountUpn", "email")),
-                name=account("InitiatingProcessAccountUpn", domain="InitiatingProcessAccountDomain", name="InitiatingProcessAccountName"))
+    return Part(
+        role,
+        "User",
+        ("InitiatingProcessAccountUpn",),
+        (
+            Ident("InitiatingProcessAccountObjectId", namespace="entra-object-id"),
+            Ident("InitiatingProcessAccountSid", namespace="windows-sid"),
+            Ident("InitiatingProcessAccountUpn", "email"),
+        ),
+        name=account("InitiatingProcessAccountUpn", domain="InitiatingProcessAccountDomain", name="InitiatingProcessAccountName"),
+    )
 
 
 def initiating_process(role="via") -> Part:
-    return Part(role, "Process", ("InitiatingProcessFileName",), HASHES("InitiatingProcess"), path=("InitiatingProcessFolderPath",), start=("InitiatingProcessUniqueId",))
+    return Part(
+        role,
+        "Process",
+        ("InitiatingProcessFileName",),
+        HASHES("InitiatingProcess"),
+        path=("InitiatingProcessFolderPath",),
+        start=("InitiatingProcessUniqueId",),
+    )
 
 
 def sign_in(row: Row, g: Callable, result="ResultType", error="ErrorCode") -> str:
@@ -280,7 +326,9 @@ OBJECT_CLAIM = "Claims[http://schemas.microsoft.com/identity/claims/objectidenti
 
 def place(row: Row, g: Callable) -> str:
     """City and state from LocationDetails (Entra sign-ins) or City/State (Defender XDR)."""
-    return ", ".join(v for v in (text(g("LocationDetails.city")) or text(g("City")), text(g("LocationDetails.state")) or text(g("State"))) if v)
+    return ", ".join(
+        v for v in (text(g("LocationDetails.city")) or text(g("City")), text(g("LocationDetails.state")) or text(g("State"))) if v
+    )
 
 
 def arm_phrase(value: str) -> str:
@@ -321,8 +369,14 @@ def gitlab_operation(row: Row, g: Callable) -> str:
     return event.replace("_", " ")
 
 
-SIGN_IN_DETAILS = (("location", place), ("ASN", "AutonomousSystemNumber"), ("named network", "NetworkLocationDetails.0.networkNames.0"),
-                   ("conditional access", "ConditionalAccessStatus"), ("user agent", "UserAgent"), ("session", "UniqueTokenIdentifier"))
+SIGN_IN_DETAILS = (
+    ("location", place),
+    ("ASN", "AutonomousSystemNumber"),
+    ("named network", "NetworkLocationDetails.0.networkNames.0"),
+    ("conditional access", "ConditionalAccessStatus"),
+    ("user agent", "UserAgent"),
+    ("session", "UniqueTokenIdentifier"),
+)
 
 
 def location(fields=("LocationDetails.countryOrRegion", "Location", "Country")) -> Part:
@@ -332,289 +386,844 @@ def location(fields=("LocationDetails.countryOrRegion", "Location", "Country")) 
 
 MAPPINGS: tuple[Mapping, ...] = (
     # ---------------------------------------------------------------- Defender XDR (and the same tables in Sentinel)
-    Mapping("DeviceProcessEvents", "Defender XDR", ("DeviceName", "FileName", "ProcessCommandLine", "InitiatingProcessFileName"), (
-        device(), initiating_account(), initiating_process(),
-        Part("target", "Process", ("FileName",), HASHES(), path=("FolderPath",), start=("ProcessUniqueId",)),
-        Part("identity", "User", ("AccountUpn",), (Ident("AccountObjectId", namespace="entra-object-id"), Ident("AccountSid", namespace="windows-sid"),
-             Ident("AccountUpn", "email")), name=account("AccountUpn", domain="AccountDomain", name="AccountName")))),
-    Mapping("DeviceNetworkEvents", "Defender XDR", ("DeviceName", "RemoteIP", "RemotePort", "InitiatingProcessFileName"), (
-        device(), initiating_account(), initiating_process(),
-        Part("target", "IP", ("RemoteIP",), (Ident("RemoteIP", "ip"),)),
-        Part("target", "Domain", ("RemoteUrl",), kind_of=url_kind))),
-    Mapping("DeviceFileEvents", "Defender XDR", ("DeviceName", "FileName", "FolderPath", "InitiatingProcessFileName"), (
-        device(), initiating_account(), initiating_process(),
-        Part("target", "File", ("FileName",), HASHES(), name=file_name("FileName", "FolderPath"), path=("FolderPath",)),
-        Part("source", "Domain", ("FileOriginUrl",), kind_of=url_kind),
-        Part("source", "IP", ("FileOriginIP", "RequestSourceIP"), (Ident("FileOriginIP", "ip"),)))),
-    Mapping("DeviceLogonEvents", "Defender XDR", ("DeviceName", "LogonType", "AccountName"), (
-        device("target"),
-        Part("actor", "User", ("AccountName",), (Ident("AccountSid", namespace="windows-sid"),), name=account(domain="AccountDomain", name="AccountName")),
-        Part("source", "IP", ("RemoteIP",), (Ident("RemoteIP", "ip"),)),
-        Part("source", "Device", ("RemoteDeviceName",), (Ident("RemoteDeviceName", "fqdn"),), lower=True)),
-        operation=lambda r, g: f"{phrase(g('ActionType'))} ({text(g('LogonType'))})" if text(g("LogonType")) else phrase(g("ActionType"))),
-    Mapping("DeviceRegistryEvents", "Defender XDR", ("DeviceName", "RegistryKey", "InitiatingProcessFileName"), (
-        device(), initiating_account(), initiating_process(),
-        Part("target", "Registry Key", ("RegistryKey",)))),
-    Mapping("DeviceImageLoadEvents", "Defender XDR", ("DeviceName", "FileName", "FolderPath", "InitiatingProcessFileName", "InitiatingProcessId"), (
-        device(), initiating_account(), initiating_process(),
-        Part("target", "File", ("FileName",), HASHES(), name=file_name("FileName", "FolderPath"), path=("FolderPath",)))),
-    Mapping("DeviceEvents", "Defender XDR", ("DeviceName", "ActionType", "InitiatingProcessFileName", "RemoteUrl", "FileName"), (
-        device(), initiating_account(), initiating_process(),
-        Part("target", "File", ("FileName",), HASHES(), name=file_name("FileName", "FolderPath"), path=("FolderPath",)),
-        Part("target", "IP", ("RemoteIP",), (Ident("RemoteIP", "ip"),)),
-        Part("target", "Domain", ("RemoteUrl",), kind_of=url_kind),
-        Part("target", "Registry Key", ("RegistryKey",)))),
-    Mapping("IdentityLogonEvents", "Defender XDR", ("AccountUpn", "LogonType", "Protocol", "Application"), (
-        Part("actor", "User", ("AccountUpn",), (Ident("AccountObjectId", namespace="entra-object-id"), Ident("AccountSid", namespace="windows-sid"),
-             Ident("AccountUpn", "email")), name=account("AccountUpn", domain="AccountDomain", name="AccountName")),
-        Part("source", "IP", ("IPAddress",), (Ident("IPAddress", "ip"),)),
-        device("source", ("DeviceName",), ()),
-        device("target", ("DestinationDeviceName", "TargetDeviceName"), ()),
-        Part("target", "Service", ("Application",))),
-        locator=("ReportId",)),
-    Mapping("IdentityDirectoryEvents", "Defender XDR", ("AccountUpn", "TargetAccountUpn", "ActionType", "Application"), (
-        Part("actor", "User", ("AccountUpn",), (Ident("AccountObjectId", namespace="entra-object-id"), Ident("AccountUpn", "email")),
-             name=account("AccountUpn", domain="AccountDomain", name="AccountName")),
-        Part("target", "User", ("TargetAccountUpn", "TargetAccountDisplayName"), (Ident("TargetAccountUpn", "email"),), lower=True),
-        device("source", ("DeviceName",), ()),
-        Part("source", "IP", ("IPAddress",), (Ident("IPAddress", "ip"),)),
-        device("target", ("TargetDeviceName",), ())),
-        locator=("ReportId",)),
-    Mapping("IdentityQueryEvents", "Defender XDR", ("QueryType", "QueryTarget", "DestinationDeviceName"), (
-        Part("actor", "User", ("AccountUpn",), (Ident("AccountObjectId", namespace="entra-object-id"),), name=account("AccountUpn", domain="AccountDomain", name="AccountName")),
-        device("source", ("DeviceName",), ()),
-        Part("source", "IP", ("IPAddress",), (Ident("IPAddress", "ip"),)),
-        device("target", ("DestinationDeviceName",), ()),
-        Part("target", "Other", ("QueryTarget",))),
-        operation=lambda r, g: f"{phrase(g('ActionType'))} {text(g('QueryType'))}".strip(), locator=("ReportId",)),
-    Mapping("EntraIdSignInEvents", "Defender XDR", ("AccountUpn", "Application", "ErrorCode", "LogonType"), (
-        Part("actor", "User", ("AccountUpn",), (Ident("AccountObjectId", namespace="entra-object-id"), Ident("AccountUpn", "email")), lower=True),
-        Part("source", "IP", ("IPAddress",), (Ident("IPAddress", "ip"),)),
-        location(("Country",)),
-        Part("target", "Service", ("Application",), (Ident("ApplicationId", namespace="entra-app-id"),)),
-        device("via", ("DeviceName",), ENTRA_DEVICE_IDS)),
-        operation=lambda r, g: sign_in(r, g, "ErrorCode"), locator=("ReportId", "RequestId", "CorrelationId"),
-        details=(("location", place), ("user agent", "UserAgent"))),
-    Mapping("AADSignInEventsBeta", "Defender XDR", ("AccountUpn", "Application", "ErrorCode", "LogonType"), (
-        Part("actor", "User", ("AccountUpn",), (Ident("AccountObjectId", namespace="entra-object-id"), Ident("AccountUpn", "email")), lower=True),
-        Part("source", "IP", ("IPAddress",), (Ident("IPAddress", "ip"),)),
-        location(("Country",)),
-        Part("target", "Service", ("Application",), (Ident("ApplicationId", namespace="entra-app-id"),)),
-        device("via", ("DeviceName",), ENTRA_DEVICE_IDS)),
-        operation=lambda r, g: sign_in(r, g, "ErrorCode"), locator=("ReportId", "RequestId", "CorrelationId"),
-        details=(("location", place), ("user agent", "UserAgent"))),
-    Mapping("EntraIdSpnSignInEvents", "Defender XDR", ("ServicePrincipalName", "ServicePrincipalId", "ErrorCode"), (
-        Part("identity", "Service Principal", ("ServicePrincipalName",), (Ident("ServicePrincipalId", namespace="entra-object-id"),
-             Ident("ApplicationId", namespace="entra-app-id"))),
-        Part("source", "IP", ("IPAddress",), (Ident("IPAddress", "ip"),)),
-        location(("Country",)),
-        Part("target", "Service", ("ResourceDisplayName", "Application"), (Ident("ResourceId", namespace="entra-app-id"),))),
-        operation=lambda r, g: sign_in(r, g, "ErrorCode"), locator=("ReportId", "RequestId", "CorrelationId"),
-        details=(("location", place),)),
-    Mapping("AADSpnSignInEventsBeta", "Defender XDR", ("ServicePrincipalName", "ServicePrincipalId", "ErrorCode"), (
-        Part("identity", "Service Principal", ("ServicePrincipalName",), (Ident("ServicePrincipalId", namespace="entra-object-id"),
-             Ident("ApplicationId", namespace="entra-app-id"))),
-        Part("source", "IP", ("IPAddress",), (Ident("IPAddress", "ip"),)),
-        location(("Country",)),
-        Part("target", "Service", ("ResourceDisplayName", "Application"), (Ident("ResourceId", namespace="entra-app-id"),))),
-        operation=lambda r, g: sign_in(r, g, "ErrorCode"), locator=("ReportId", "RequestId", "CorrelationId"),
-        details=(("location", place),)),
-    Mapping("CloudAppEvents", "Defender XDR", ("Application", "ActionType", "AccountObjectId", "ObjectName"), (
-        Part("actor", "User", ("AccountDisplayName", "AccountId"), (Ident("AccountObjectId", namespace="entra-object-id"),)),
-        Part("source", "IP", ("IPAddress",), (Ident("IPAddress", "ip"),)),
-        Part("target", "Service", ("Application",), (Ident("ApplicationId", namespace="mdca-app-id"),)),
-        Part("target", "Other", ("ObjectName",))),
-        locator=("ReportId",)),
-    Mapping("UrlClickEvents", "Defender XDR", ("Url", "ActionType", "AccountUpn", "NetworkMessageId"), (
-        Part("actor", "User", ("AccountUpn",), (Ident("AccountUpn", "email"),), lower=True),
-        Part("source", "IP", ("IPAddress",), (Ident("IPAddress", "ip"),)),
-        Part("target", "URL", ("Url",), kind_of=url_kind)),
-        locator=("ReportId", "NetworkMessageId")),
-    Mapping("EmailEvents", "Defender XDR", ("SenderFromAddress", "RecipientEmailAddress", "NetworkMessageId", "Subject"), (
-        Part("actor", "Email Address", ("SenderFromAddress",), (Ident("SenderFromAddress", "email"),), lower=True),
-        Part("target", "Email Address", ("RecipientEmailAddress",), (Ident("RecipientEmailAddress", "email"),), lower=True),
-        Part("source", "IP", ("SenderIPv4", "SenderIPv6"), (Ident("SenderIPv4", "ip"),))),
+    Mapping(
+        "DeviceProcessEvents",
+        "Defender XDR",
+        ("DeviceName", "FileName", "ProcessCommandLine", "InitiatingProcessFileName"),
+        (
+            device(),
+            initiating_account(),
+            initiating_process(),
+            Part("target", "Process", ("FileName",), HASHES(), path=("FolderPath",), start=("ProcessUniqueId",)),
+            Part(
+                "identity",
+                "User",
+                ("AccountUpn",),
+                (
+                    Ident("AccountObjectId", namespace="entra-object-id"),
+                    Ident("AccountSid", namespace="windows-sid"),
+                    Ident("AccountUpn", "email"),
+                ),
+                name=account("AccountUpn", domain="AccountDomain", name="AccountName"),
+            ),
+        ),
+    ),
+    Mapping(
+        "DeviceNetworkEvents",
+        "Defender XDR",
+        ("DeviceName", "RemoteIP", "RemotePort", "InitiatingProcessFileName"),
+        (
+            device(),
+            initiating_account(),
+            initiating_process(),
+            Part("target", "IP", ("RemoteIP",), (Ident("RemoteIP", "ip"),)),
+            Part("target", "Domain", ("RemoteUrl",), kind_of=url_kind),
+        ),
+    ),
+    Mapping(
+        "DeviceFileEvents",
+        "Defender XDR",
+        ("DeviceName", "FileName", "FolderPath", "InitiatingProcessFileName"),
+        (
+            device(),
+            initiating_account(),
+            initiating_process(),
+            Part("target", "File", ("FileName",), HASHES(), name=file_name("FileName", "FolderPath"), path=("FolderPath",)),
+            Part("source", "Domain", ("FileOriginUrl",), kind_of=url_kind),
+            Part("source", "IP", ("FileOriginIP", "RequestSourceIP"), (Ident("FileOriginIP", "ip"),)),
+        ),
+    ),
+    Mapping(
+        "DeviceLogonEvents",
+        "Defender XDR",
+        ("DeviceName", "LogonType", "AccountName"),
+        (
+            device("target"),
+            Part(
+                "actor",
+                "User",
+                ("AccountName",),
+                (Ident("AccountSid", namespace="windows-sid"),),
+                name=account(domain="AccountDomain", name="AccountName"),
+            ),
+            Part("source", "IP", ("RemoteIP",), (Ident("RemoteIP", "ip"),)),
+            Part("source", "Device", ("RemoteDeviceName",), (Ident("RemoteDeviceName", "fqdn"),), lower=True),
+        ),
+        operation=lambda r, g: f"{phrase(g('ActionType'))} ({text(g('LogonType'))})" if text(g("LogonType")) else phrase(g("ActionType")),
+    ),
+    Mapping(
+        "DeviceRegistryEvents",
+        "Defender XDR",
+        ("DeviceName", "RegistryKey", "InitiatingProcessFileName"),
+        (device(), initiating_account(), initiating_process(), Part("target", "Registry Key", ("RegistryKey",))),
+    ),
+    Mapping(
+        "DeviceImageLoadEvents",
+        "Defender XDR",
+        ("DeviceName", "FileName", "FolderPath", "InitiatingProcessFileName", "InitiatingProcessId"),
+        (
+            device(),
+            initiating_account(),
+            initiating_process(),
+            Part("target", "File", ("FileName",), HASHES(), name=file_name("FileName", "FolderPath"), path=("FolderPath",)),
+        ),
+    ),
+    Mapping(
+        "DeviceEvents",
+        "Defender XDR",
+        ("DeviceName", "ActionType", "InitiatingProcessFileName", "RemoteUrl", "FileName"),
+        (
+            device(),
+            initiating_account(),
+            initiating_process(),
+            Part("target", "File", ("FileName",), HASHES(), name=file_name("FileName", "FolderPath"), path=("FolderPath",)),
+            Part("target", "IP", ("RemoteIP",), (Ident("RemoteIP", "ip"),)),
+            Part("target", "Domain", ("RemoteUrl",), kind_of=url_kind),
+            Part("target", "Registry Key", ("RegistryKey",)),
+        ),
+    ),
+    Mapping(
+        "IdentityLogonEvents",
+        "Defender XDR",
+        ("AccountUpn", "LogonType", "Protocol", "Application"),
+        (
+            Part(
+                "actor",
+                "User",
+                ("AccountUpn",),
+                (
+                    Ident("AccountObjectId", namespace="entra-object-id"),
+                    Ident("AccountSid", namespace="windows-sid"),
+                    Ident("AccountUpn", "email"),
+                ),
+                name=account("AccountUpn", domain="AccountDomain", name="AccountName"),
+            ),
+            Part("source", "IP", ("IPAddress",), (Ident("IPAddress", "ip"),)),
+            device("source", ("DeviceName",), ()),
+            device("target", ("DestinationDeviceName", "TargetDeviceName"), ()),
+            Part("target", "Service", ("Application",)),
+        ),
+        locator=("ReportId",),
+    ),
+    Mapping(
+        "IdentityDirectoryEvents",
+        "Defender XDR",
+        ("AccountUpn", "TargetAccountUpn", "ActionType", "Application"),
+        (
+            Part(
+                "actor",
+                "User",
+                ("AccountUpn",),
+                (Ident("AccountObjectId", namespace="entra-object-id"), Ident("AccountUpn", "email")),
+                name=account("AccountUpn", domain="AccountDomain", name="AccountName"),
+            ),
+            Part("target", "User", ("TargetAccountUpn", "TargetAccountDisplayName"), (Ident("TargetAccountUpn", "email"),), lower=True),
+            device("source", ("DeviceName",), ()),
+            Part("source", "IP", ("IPAddress",), (Ident("IPAddress", "ip"),)),
+            device("target", ("TargetDeviceName",), ()),
+        ),
+        locator=("ReportId",),
+    ),
+    Mapping(
+        "IdentityQueryEvents",
+        "Defender XDR",
+        ("QueryType", "QueryTarget", "DestinationDeviceName"),
+        (
+            Part(
+                "actor",
+                "User",
+                ("AccountUpn",),
+                (Ident("AccountObjectId", namespace="entra-object-id"),),
+                name=account("AccountUpn", domain="AccountDomain", name="AccountName"),
+            ),
+            device("source", ("DeviceName",), ()),
+            Part("source", "IP", ("IPAddress",), (Ident("IPAddress", "ip"),)),
+            device("target", ("DestinationDeviceName",), ()),
+            Part("target", "Other", ("QueryTarget",)),
+        ),
+        operation=lambda r, g: f"{phrase(g('ActionType'))} {text(g('QueryType'))}".strip(),
+        locator=("ReportId",),
+    ),
+    Mapping(
+        "EntraIdSignInEvents",
+        "Defender XDR",
+        ("AccountUpn", "Application", "ErrorCode", "LogonType"),
+        (
+            Part(
+                "actor",
+                "User",
+                ("AccountUpn",),
+                (Ident("AccountObjectId", namespace="entra-object-id"), Ident("AccountUpn", "email")),
+                lower=True,
+            ),
+            Part("source", "IP", ("IPAddress",), (Ident("IPAddress", "ip"),)),
+            location(("Country",)),
+            Part("target", "Service", ("Application",), (Ident("ApplicationId", namespace="entra-app-id"),)),
+            device("via", ("DeviceName",), ENTRA_DEVICE_IDS),
+        ),
+        operation=lambda r, g: sign_in(r, g, "ErrorCode"),
+        locator=("ReportId", "RequestId", "CorrelationId"),
+        details=(("location", place), ("user agent", "UserAgent")),
+    ),
+    Mapping(
+        "AADSignInEventsBeta",
+        "Defender XDR",
+        ("AccountUpn", "Application", "ErrorCode", "LogonType"),
+        (
+            Part(
+                "actor",
+                "User",
+                ("AccountUpn",),
+                (Ident("AccountObjectId", namespace="entra-object-id"), Ident("AccountUpn", "email")),
+                lower=True,
+            ),
+            Part("source", "IP", ("IPAddress",), (Ident("IPAddress", "ip"),)),
+            location(("Country",)),
+            Part("target", "Service", ("Application",), (Ident("ApplicationId", namespace="entra-app-id"),)),
+            device("via", ("DeviceName",), ENTRA_DEVICE_IDS),
+        ),
+        operation=lambda r, g: sign_in(r, g, "ErrorCode"),
+        locator=("ReportId", "RequestId", "CorrelationId"),
+        details=(("location", place), ("user agent", "UserAgent")),
+    ),
+    Mapping(
+        "EntraIdSpnSignInEvents",
+        "Defender XDR",
+        ("ServicePrincipalName", "ServicePrincipalId", "ErrorCode"),
+        (
+            Part(
+                "identity",
+                "Service Principal",
+                ("ServicePrincipalName",),
+                (Ident("ServicePrincipalId", namespace="entra-object-id"), Ident("ApplicationId", namespace="entra-app-id")),
+            ),
+            Part("source", "IP", ("IPAddress",), (Ident("IPAddress", "ip"),)),
+            location(("Country",)),
+            Part("target", "Service", ("ResourceDisplayName", "Application"), (Ident("ResourceId", namespace="entra-app-id"),)),
+        ),
+        operation=lambda r, g: sign_in(r, g, "ErrorCode"),
+        locator=("ReportId", "RequestId", "CorrelationId"),
+        details=(("location", place),),
+    ),
+    Mapping(
+        "AADSpnSignInEventsBeta",
+        "Defender XDR",
+        ("ServicePrincipalName", "ServicePrincipalId", "ErrorCode"),
+        (
+            Part(
+                "identity",
+                "Service Principal",
+                ("ServicePrincipalName",),
+                (Ident("ServicePrincipalId", namespace="entra-object-id"), Ident("ApplicationId", namespace="entra-app-id")),
+            ),
+            Part("source", "IP", ("IPAddress",), (Ident("IPAddress", "ip"),)),
+            location(("Country",)),
+            Part("target", "Service", ("ResourceDisplayName", "Application"), (Ident("ResourceId", namespace="entra-app-id"),)),
+        ),
+        operation=lambda r, g: sign_in(r, g, "ErrorCode"),
+        locator=("ReportId", "RequestId", "CorrelationId"),
+        details=(("location", place),),
+    ),
+    Mapping(
+        "CloudAppEvents",
+        "Defender XDR",
+        ("Application", "ActionType", "AccountObjectId", "ObjectName"),
+        (
+            Part("actor", "User", ("AccountDisplayName", "AccountId"), (Ident("AccountObjectId", namespace="entra-object-id"),)),
+            Part("source", "IP", ("IPAddress",), (Ident("IPAddress", "ip"),)),
+            Part("target", "Service", ("Application",), (Ident("ApplicationId", namespace="mdca-app-id"),)),
+            Part("target", "Other", ("ObjectName",)),
+            # The OAuth app that acted (an Entra app ID): the same app as in the sign-in logs and OAuthAppInfo.
+            Part("tool", "Service", ("OAuthAppId",), (Ident("OAuthAppId", namespace="entra-app-id"),)),
+        ),
+        locator=("ReportId",),
+    ),
+    Mapping(
+        "UrlClickEvents",
+        "Defender XDR",
+        ("Url", "ActionType", "AccountUpn", "NetworkMessageId"),
+        (
+            Part("actor", "User", ("AccountUpn",), (Ident("AccountUpn", "email"),), lower=True),
+            Part("source", "IP", ("IPAddress",), (Ident("IPAddress", "ip"),)),
+            Part("target", "URL", ("Url",), kind_of=url_kind),
+        ),
+        locator=("ReportId", "NetworkMessageId"),
+    ),
+    Mapping(
+        "EmailEvents",
+        "Defender XDR",
+        ("SenderFromAddress", "RecipientEmailAddress", "NetworkMessageId", "Subject"),
+        (
+            Part("actor", "Email Address", ("SenderFromAddress",), (Ident("SenderFromAddress", "email"),), lower=True),
+            Part("target", "Email Address", ("RecipientEmailAddress",), (Ident("RecipientEmailAddress", "email"),), lower=True),
+            Part("source", "IP", ("SenderIPv4", "SenderIPv6"), (Ident("SenderIPv4", "ip"),)),
+        ),
         operation=lambda r, g: f"sent email ({text(g('DeliveryAction')).lower()})" if text(g("DeliveryAction")) else "sent email",
-        locator=("NetworkMessageId", "ReportId")),
-    Mapping("EmailUrlInfo", "Defender XDR", ("NetworkMessageId", "Url", "UrlDomain", "UrlLocation"), (
-        Part("source", "Email Message", ("NetworkMessageId",)),
-        Part("target", "URL", ("Url",), kind_of=url_kind)),
-        operation="contains URL", locator=("NetworkMessageId", "ReportId")),
-    Mapping("EmailAttachmentInfo", "Defender XDR", ("NetworkMessageId", "FileName", "SHA256", "SenderFromAddress"), (
-        Part("actor", "Email Address", ("SenderFromAddress",), (Ident("SenderFromAddress", "email"),), lower=True),
-        Part("target", "Email Address", ("RecipientEmailAddress",), (Ident("RecipientEmailAddress", "email"),), lower=True),
-        Part("tool", "File", ("FileName",), (Ident("SHA256", namespace="sha256"),))),
-        operation="sent attachment", locator=("NetworkMessageId", "ReportId")),
-    Mapping("AlertEvidence", "Defender XDR", ("AlertId", "EntityType", "EvidenceRole", "Title"), (
-        Part("other", "Alert", ("Title",), (Ident("AlertId", namespace="defender-alert-id"),)),
-        Part("target", "Device", ("DeviceName",), (Ident("DeviceId", namespace="mde-device-id"),), lower=True),
-        Part("target", "User", ("AccountUpn", "AccountName"), (Ident("AccountObjectId", namespace="entra-object-id"), Ident("AccountUpn", "email")), lower=True),
-        Part("target", "IP", ("RemoteIP",), (Ident("RemoteIP", "ip"),)),
-        Part("target", "Domain", ("RemoteUrl",), kind_of=url_kind),
-        Part("target", "File", ("FileName",), HASHES(), path=("FolderPath",)),
-        Part("target", "Email Address", ("EmailSubject",))),
-        operation=lambda r, g: f"alert evidence ({text(g('EvidenceRole')).lower() or 'related'})", locator=("AlertId", "ReportId")),
-
+        locator=("NetworkMessageId", "ReportId"),
+    ),
+    Mapping(
+        "EmailUrlInfo",
+        "Defender XDR",
+        ("NetworkMessageId", "Url", "UrlDomain", "UrlLocation"),
+        (Part("source", "Email Message", ("NetworkMessageId",)), Part("target", "URL", ("Url",), kind_of=url_kind)),
+        operation="contains URL",
+        locator=("NetworkMessageId", "ReportId"),
+    ),
+    Mapping(
+        "EmailAttachmentInfo",
+        "Defender XDR",
+        ("NetworkMessageId", "FileName", "SHA256", "SenderFromAddress"),
+        (
+            Part("actor", "Email Address", ("SenderFromAddress",), (Ident("SenderFromAddress", "email"),), lower=True),
+            Part("target", "Email Address", ("RecipientEmailAddress",), (Ident("RecipientEmailAddress", "email"),), lower=True),
+            Part("tool", "File", ("FileName",), (Ident("SHA256", namespace="sha256"),)),
+        ),
+        operation="sent attachment",
+        locator=("NetworkMessageId", "ReportId"),
+    ),
+    Mapping(
+        "AlertEvidence",
+        "Defender XDR",
+        ("AlertId", "EntityType", "EvidenceRole", "Title"),
+        (
+            Part("other", "Alert", ("Title",), (Ident("AlertId", namespace="defender-alert-id"),)),
+            Part("target", "Device", ("DeviceName",), (Ident("DeviceId", namespace="mde-device-id"),), lower=True),
+            Part(
+                "target",
+                "User",
+                ("AccountUpn", "AccountName"),
+                (Ident("AccountObjectId", namespace="entra-object-id"), Ident("AccountUpn", "email")),
+                lower=True,
+            ),
+            Part("target", "IP", ("RemoteIP",), (Ident("RemoteIP", "ip"),)),
+            Part("target", "Domain", ("RemoteUrl",), kind_of=url_kind),
+            Part("target", "File", ("FileName",), HASHES(), path=("FolderPath",)),
+            Part("target", "Email Address", ("EmailSubject",)),
+        ),
+        operation=lambda r, g: f"alert evidence ({text(g('EvidenceRole')).lower() or 'related'})",
+        locator=("AlertId", "ReportId"),
+    ),
     # Inventory: what a device, user or app is, for entities already on the board. A DeviceInfo row with a public IP
     # says where the device was online (the egress a baseline needs); the others only add IDs and names.
-    Mapping("DeviceInfo", "Defender XDR", ("DeviceId", "DeviceName", "OSPlatform", "PublicIP"), (
-        Part("actor", "Device", ("DeviceName",), DEVICE_IDS + (Ident("DeviceName", "fqdn"),), lower=True, create=False),
-        Part("source", "IP", ("PublicIP",), (Ident("PublicIP", "ip"),))),
-        operation="reported from public IP", locator=("ReportId", "DeviceId"), inventory=True,
-        details=(("OS", "OSPlatform"), ("join type", "JoinType"), ("device group", "MachineGroup"), ("exposure", "ExposureLevel"))),
-    Mapping("IdentityInfo", "Defender XDR", ("AccountObjectId", "AccountUpn", "OnPremSid"), (
-        Part("identity", "User", ("AccountUpn", "AccountDisplayName"), (Ident("AccountObjectId", namespace="entra-object-id"), Ident("AccountUpn", "email"),
-             Ident("OnPremSid", namespace="windows-sid")), lower=True, create=False),),
-        operation="identity inventory", locator=("ReportId", "AccountObjectId"), inventory=True),
+    Mapping(
+        "DeviceInfo",
+        "Defender XDR",
+        ("DeviceId", "DeviceName", "OSPlatform", "PublicIP"),
+        (
+            Part("actor", "Device", ("DeviceName",), DEVICE_IDS + (Ident("DeviceName", "fqdn"),), lower=True, create=False),
+            Part("source", "IP", ("PublicIP",), (Ident("PublicIP", "ip"),)),
+        ),
+        operation="reported from public IP",
+        locator=("ReportId", "DeviceId"),
+        inventory=True,
+        details=(("OS", "OSPlatform"), ("join type", "JoinType"), ("device group", "MachineGroup"), ("exposure", "ExposureLevel")),
+    ),
+    Mapping(
+        "IdentityInfo",
+        "Defender XDR",
+        ("AccountObjectId", "AccountUpn", "OnPremSid"),
+        (
+            Part(
+                "identity",
+                "User",
+                ("AccountUpn", "AccountDisplayName"),
+                (
+                    Ident("AccountObjectId", namespace="entra-object-id"),
+                    Ident("AccountUpn", "email"),
+                    Ident("OnPremSid", namespace="windows-sid"),
+                ),
+                lower=True,
+                create=False,
+            ),
+        ),
+        operation="identity inventory",
+        locator=("ReportId", "AccountObjectId"),
+        inventory=True,
+    ),
     # Sentinel UEBA's IdentityInfo spells the columns differently.
-    Mapping("IdentityInfo (UEBA)", "Sentinel", ("AccountObjectId", "AccountUPN", "AccountSID"), (
-        Part("identity", "User", ("AccountUPN", "AccountDisplayName"), (Ident("AccountObjectId", namespace="entra-object-id"), Ident("AccountUPN", "email"),
-             Ident("AccountSID", namespace="windows-sid")), lower=True, create=False),),
-        operation="identity inventory", time=("TimeGenerated",), locator=("AccountObjectId",), inventory=True),
+    Mapping(
+        "IdentityInfo (UEBA)",
+        "Sentinel",
+        ("AccountObjectId", "AccountUPN", "AccountSID"),
+        (
+            Part(
+                "identity",
+                "User",
+                ("AccountUPN", "AccountDisplayName"),
+                (
+                    Ident("AccountObjectId", namespace="entra-object-id"),
+                    Ident("AccountUPN", "email"),
+                    Ident("AccountSID", namespace="windows-sid"),
+                ),
+                lower=True,
+                create=False,
+            ),
+        ),
+        operation="identity inventory",
+        time=("TimeGenerated",),
+        locator=("AccountObjectId",),
+        inventory=True,
+    ),
     # An app as service principal (sign-ins of the app itself) and as the application users sign in to: one app, so the
     # row links the two when both are on the board.
-    Mapping("OAuthAppInfo", "Defender XDR", ("OAuthAppId", "ServicePrincipalId", "AppName"), (
-        Part("identity", "Service Principal", ("AppName",), (Ident("ServicePrincipalId", namespace="entra-object-id"), Ident("OAuthAppId", namespace="entra-app-id")), create=False),
-        Part("target", "Service", ("AppName",), (Ident("OAuthAppId", namespace="entra-app-id"),), create=False)),
-        operation="service principal of", locator=("ReportId", "OAuthAppId"), inventory=True,
-        details=(("privilege", "PrivilegeLevel"), ("status", "AppStatus"), ("publisher verified", "VerifiedPublisher"), ("consented users", "ConsentedUsersCount"))),
-
+    Mapping(
+        "OAuthAppInfo",
+        "Defender XDR",
+        ("OAuthAppId", "ServicePrincipalId", "AppName"),
+        (
+            Part(
+                "identity",
+                "Service Principal",
+                ("AppName",),
+                (Ident("ServicePrincipalId", namespace="entra-object-id"), Ident("OAuthAppId", namespace="entra-app-id")),
+                create=False,
+            ),
+            Part("target", "Service", ("AppName",), (Ident("OAuthAppId", namespace="entra-app-id"),), create=False),
+        ),
+        operation="service principal of",
+        locator=("ReportId", "OAuthAppId"),
+        inventory=True,
+        details=(
+            ("privilege", "PrivilegeLevel"),
+            ("status", "AppStatus"),
+            ("publisher verified", "VerifiedPublisher"),
+            ("consented users", "ConsentedUsersCount"),
+        ),
+    ),
     # -------------------------------------------------------------------------------------------- Sentinel
-    Mapping("SigninLogs", "Sentinel", ("UserPrincipalName", "AppDisplayName", "ResultType", "IPAddress", "ConditionalAccessStatus"), (
-        Part("actor", "User", ("UserPrincipalName",), (Ident("UserId", namespace="entra-object-id"), Ident("UserPrincipalName", "email")), lower=True),
-        Part("source", "IP", ("IPAddress",), (Ident("IPAddress", "ip"),)),
-        location(),
-        Part("target", "Service", ("AppDisplayName",), (Ident("AppId", namespace="entra-app-id"),)),
-        Part("via", "Device", ("DeviceDetail.displayName",), (Ident("DeviceDetail.deviceId", namespace="entra-device-id"),), lower=True)),
-        operation=sign_in, time=("TimeGenerated", "CreatedDateTime"), locator=("CorrelationId", "Id"), details=SIGN_IN_DETAILS),
-    Mapping("AADNonInteractiveUserSignInLogs", "Sentinel", ("UserPrincipalName", "AppDisplayName", "ResultType", "IPAddress", "IsInteractive"), (
-        Part("actor", "User", ("UserPrincipalName",), (Ident("UserId", namespace="entra-object-id"), Ident("UserPrincipalName", "email")), lower=True),
-        Part("source", "IP", ("IPAddress",), (Ident("IPAddress", "ip"),)),
-        location(),
-        Part("target", "Service", ("AppDisplayName",), (Ident("AppId", namespace="entra-app-id"),)),
-        Part("via", "Device", ("DeviceDetail.displayName",), (Ident("DeviceDetail.deviceId", namespace="entra-device-id"),), lower=True)),
-        operation=lambda r, g: sign_in(r, g).replace("signed in", "signed in (non-interactive)"), time=("TimeGenerated", "CreatedDateTime"),
-        locator=("CorrelationId", "Id"), details=SIGN_IN_DETAILS),
+    Mapping(
+        "SigninLogs",
+        "Sentinel",
+        ("UserPrincipalName", "AppDisplayName", "ResultType", "IPAddress", "ConditionalAccessStatus"),
+        (
+            Part(
+                "actor",
+                "User",
+                ("UserPrincipalName",),
+                (Ident("UserId", namespace="entra-object-id"), Ident("UserPrincipalName", "email")),
+                lower=True,
+            ),
+            Part("source", "IP", ("IPAddress",), (Ident("IPAddress", "ip"),)),
+            location(),
+            Part("target", "Service", ("AppDisplayName",), (Ident("AppId", namespace="entra-app-id"),)),
+            Part(
+                "via", "Device", ("DeviceDetail.displayName",), (Ident("DeviceDetail.deviceId", namespace="entra-device-id"),), lower=True
+            ),
+        ),
+        operation=sign_in,
+        time=("TimeGenerated", "CreatedDateTime"),
+        locator=("CorrelationId", "Id"),
+        details=SIGN_IN_DETAILS,
+    ),
+    Mapping(
+        "AADNonInteractiveUserSignInLogs",
+        "Sentinel",
+        ("UserPrincipalName", "AppDisplayName", "ResultType", "IPAddress", "IsInteractive"),
+        (
+            Part(
+                "actor",
+                "User",
+                ("UserPrincipalName",),
+                (Ident("UserId", namespace="entra-object-id"), Ident("UserPrincipalName", "email")),
+                lower=True,
+            ),
+            Part("source", "IP", ("IPAddress",), (Ident("IPAddress", "ip"),)),
+            location(),
+            Part("target", "Service", ("AppDisplayName",), (Ident("AppId", namespace="entra-app-id"),)),
+            Part(
+                "via", "Device", ("DeviceDetail.displayName",), (Ident("DeviceDetail.deviceId", namespace="entra-device-id"),), lower=True
+            ),
+        ),
+        operation=lambda r, g: sign_in(r, g).replace("signed in", "signed in (non-interactive)"),
+        time=("TimeGenerated", "CreatedDateTime"),
+        locator=("CorrelationId", "Id"),
+        details=SIGN_IN_DETAILS,
+    ),
     # Service principal sign-ins: name, object ID and app ID are one service principal; the credential (secret or
     # certificate) it used is its own entity, so a newly added and then used credential stands out.
-    Mapping("AADServicePrincipalSignInLogs", "Sentinel", ("ServicePrincipalName", "ServicePrincipalId", "ResourceDisplayName", "ResultType"), (
-        Part("identity", "Service Principal", ("ServicePrincipalName",), (Ident("ServicePrincipalId", namespace="entra-object-id"), Ident("AppId", namespace="entra-app-id"))),
-        Part("tool", "Credential", ("ServicePrincipalCredentialKeyId", "ServicePrincipalCredentialThumbprint"),
-             (Ident("ServicePrincipalCredentialKeyId", namespace="entra-credential-key-id"), Ident("ServicePrincipalCredentialThumbprint", namespace="certificate-thumbprint")),
-             name=credential_name),
-        Part("source", "IP", ("IPAddress",), (Ident("IPAddress", "ip"),)),
-        location(),
-        Part("target", "Service", ("ResourceDisplayName",), (Ident("ResourceIdentity", namespace="entra-app-id"), Ident("ResourceServicePrincipalId", namespace="entra-object-id")))),
-        operation=sign_in, time=("TimeGenerated", "CreatedDateTime"), locator=("CorrelationId", "Id"),
-        details=(("location", place), ("ASN", "AutonomousSystemNumber"), ("named network", "NetworkLocationDetails.0.networkNames.0"),
-                 ("credential", "ClientCredentialType"), ("user agent", "UserAgent"), ("session", "UniqueTokenIdentifier"))),
-    Mapping("AuditLogs", "Sentinel", ("OperationName", "InitiatedBy", "TargetResources", "Category"), (
-        Part("actor", "User", ("InitiatedBy.user.userPrincipalName",), (Ident("InitiatedBy.user.id", namespace="entra-object-id"),
-             Ident("InitiatedBy.user.userPrincipalName", "email")), lower=True),
-        Part("identity", "Service Principal", ("InitiatedBy.app.displayName",), (Ident("InitiatedBy.app.servicePrincipalId", namespace="entra-object-id"),
-             Ident("InitiatedBy.app.appId", namespace="entra-app-id"))),
-        Part("source", "IP", ("InitiatedBy.user.ipAddress",), (Ident("InitiatedBy.user.ipAddress", "ip"),)),
-        Part("target", "User", ("TargetResources.0.userPrincipalName", "TargetResources.0.displayName"), (Ident("TargetResources.0.id", namespace="entra-object-id"),))),
-        operation=lambda r, g: text(g("OperationName")), time=("TimeGenerated", "ActivityDateTime"), locator=("CorrelationId", "Id")),
+    Mapping(
+        "AADServicePrincipalSignInLogs",
+        "Sentinel",
+        ("ServicePrincipalName", "ServicePrincipalId", "ResourceDisplayName", "ResultType"),
+        (
+            Part(
+                "identity",
+                "Service Principal",
+                ("ServicePrincipalName",),
+                (Ident("ServicePrincipalId", namespace="entra-object-id"), Ident("AppId", namespace="entra-app-id")),
+            ),
+            Part(
+                "tool",
+                "Credential",
+                ("ServicePrincipalCredentialKeyId", "ServicePrincipalCredentialThumbprint"),
+                (
+                    Ident("ServicePrincipalCredentialKeyId", namespace="entra-credential-key-id"),
+                    Ident("ServicePrincipalCredentialThumbprint", namespace="certificate-thumbprint"),
+                ),
+                name=credential_name,
+            ),
+            Part("source", "IP", ("IPAddress",), (Ident("IPAddress", "ip"),)),
+            location(),
+            Part(
+                "target",
+                "Service",
+                ("ResourceDisplayName",),
+                (Ident("ResourceIdentity", namespace="entra-app-id"), Ident("ResourceServicePrincipalId", namespace="entra-object-id")),
+            ),
+        ),
+        operation=sign_in,
+        time=("TimeGenerated", "CreatedDateTime"),
+        locator=("CorrelationId", "Id"),
+        details=(
+            ("location", place),
+            ("ASN", "AutonomousSystemNumber"),
+            ("named network", "NetworkLocationDetails.0.networkNames.0"),
+            ("credential", "ClientCredentialType"),
+            ("user agent", "UserAgent"),
+            ("session", "UniqueTokenIdentifier"),
+        ),
+    ),
+    Mapping(
+        "AuditLogs",
+        "Sentinel",
+        ("OperationName", "InitiatedBy", "TargetResources", "Category"),
+        (
+            Part(
+                "actor",
+                "User",
+                ("InitiatedBy.user.userPrincipalName",),
+                (Ident("InitiatedBy.user.id", namespace="entra-object-id"), Ident("InitiatedBy.user.userPrincipalName", "email")),
+                lower=True,
+            ),
+            Part(
+                "identity",
+                "Service Principal",
+                ("InitiatedBy.app.displayName",),
+                (
+                    Ident("InitiatedBy.app.servicePrincipalId", namespace="entra-object-id"),
+                    Ident("InitiatedBy.app.appId", namespace="entra-app-id"),
+                ),
+            ),
+            Part("source", "IP", ("InitiatedBy.user.ipAddress",), (Ident("InitiatedBy.user.ipAddress", "ip"),)),
+            Part(
+                "target",
+                "User",
+                ("TargetResources.0.userPrincipalName", "TargetResources.0.displayName"),
+                (Ident("TargetResources.0.id", namespace="entra-object-id"),),
+            ),
+        ),
+        operation=lambda r, g: text(g("OperationName")),
+        time=("TimeGenerated", "ActivityDateTime"),
+        locator=("CorrelationId", "Id"),
+    ),
     # Azure Resource Manager operations. The caller is a UPN for users and the object ID for service principals; the
     # token claims add the app ID (service principal) or object ID (user), so both join the sign-in logs.
-    Mapping("AzureActivity", "Sentinel", ("Caller", "OperationNameValue", "ResourceGroup", "CallerIpAddress"), (
-        Part("actor", "User", ("Caller",), (Ident("Caller", "email"), Ident(OBJECT_CLAIM, namespace="entra-object-id")), lower=True,
-             name=lambda r, g: text(g("Caller")) if "@" in text(g("Caller")) else ""),
-        Part("identity", "Service Principal", ("Caller", "Properties.caller"), (Ident("Caller", namespace="entra-object-id"), Ident("Properties.caller", namespace="entra-object-id"),
-                                                    Ident("Claims.appid", namespace="entra-app-id"), Ident("Claims_d.appid", namespace="entra-app-id")),
-             name=lambda r, g: text(g("Caller")) if "@" not in text(g("Caller")) else ""),
-        Part("source", "IP", ("CallerIpAddress", "HTTPRequest.clientIpAddress"), (Ident("CallerIpAddress", "ip"),)),
-        Part("target", "Azure Resource", ("_ResourceId",), (Ident("_ResourceId", "resource_id"), Ident("ResourceId", "resource_id")),
-             name=resource_name, kind_of=resource_kind)),
-        operation=arm_operation, locator=("CorrelationId", "EventDataId"),
-        details=(("status", "ActivityStatusValue"), ("role", "Authorization.evidence.role"), ("error", "Properties.statusMessage.error.code"),
-                 ("policy", "Properties.policies.0.policyDefinitionDisplayName"), ("session", "Claims.uti"))),
-    Mapping("AzureDiagnostics (Key Vault)", "Sentinel", ("OperationName", "CallerIPAddress", "ResourceProvider", "identity_claim_appid_g"), (
-        Part("actor", "User", ("identity_claim_http_schemas_xmlsoap_org_ws_2005_05_identity_claims_upn_s", "identity_claim_upn_s"),
-             (Ident("identity_claim_http_schemas_microsoft_com_identity_claims_objectidentifier_g", namespace="entra-object-id"),), lower=True),
-        Part("identity", "Service Principal", ("identity_claim_appid_g",), (Ident("identity_claim_appid_g", namespace="entra-app-id"),)),
-        Part("source", "IP", ("CallerIPAddress",), (Ident("CallerIPAddress", "ip"),)),
-        Part("target", "Key Vault", ("Resource",), (Ident("ResourceId", "resource_id"),), lower=True)),
-        operation=lambda r, g: text(g("OperationName")), locator=("CorrelationId", "requestUri_s")),
-    Mapping("SecurityEvent", "Sentinel", ("EventID", "Computer", "Activity", "Account"), (
-        Part("actor", "User", ("TargetAccount", "Account"), (Ident("TargetUserSid", namespace="windows-sid"),),
-             name=lambda r, g: text(g("TargetAccount")) if text(g("EventID")) in ("4624", "4625") and text(g("TargetAccount")) else text(g("Account"))),
-        device("target", ("Computer",), ()),
-        Part("source", "IP", ("IpAddress",), (Ident("IpAddress", "ip"),)),
-        device("source", ("WorkstationName",), ()),
-        Part("via", "Process", ("NewProcessName", "Process"), name=lambda r, g: (text(g("NewProcessName")) or text(g("Process"))).replace("/", "\\").split("\\")[-1],
-             path=("NewProcessName",), scope=("Computer",))),
-        operation=lambda r, g: text(g("Activity")), locator=("EventRecordId", "EventOriginId")),
-    Mapping("CommonSecurityLog", "Sentinel", ("DeviceVendor", "DeviceProduct", "SourceIP", "DestinationIP"), (
-        Part("actor", "User", ("SourceUserName",), lower=True),
-        Part("source", "IP", ("SourceIP",), (Ident("SourceIP", "ip"),)),
-        Part("target", "IP", ("DestinationIP",), (Ident("DestinationIP", "ip"),)),
-        Part("target", "Domain", ("DestinationHostName", "RequestURL"), kind_of=url_kind),
-        Part("via", "System", ("DeviceProduct",),
-             name=lambda r, g: " ".join(v for v in (text(g("DeviceVendor")), text(g("DeviceProduct"))) if v))),
-        operation=lambda r, g: text(g("DeviceAction")) or text(g("Activity")) or "connection", locator=("DeviceEventClassID", "ExtID")),
-    Mapping("OfficeActivity", "Sentinel", ("Operation", "UserId", "OfficeWorkload", "ClientIP"), (
-        Part("actor", "User", ("UserId",), (Ident("UserId", "email"),), lower=True),
-        Part("source", "IP", ("ClientIP", "Client_IPAddress"), (Ident("ClientIP", "ip"),),
-             name=lambda r, g: re.sub(r"^\[?([^\]]+?)\]?(?::\d+)?$", r"\1", text(g("ClientIP")) or text(g("Client_IPAddress")))),
-        Part("target", "Other", ("OfficeObjectId", "ObjectId", "Site_Url"))),
-        operation=lambda r, g: text(g("Operation")), locator=("OfficeId", "Id")),
+    Mapping(
+        "AzureActivity",
+        "Sentinel",
+        ("Caller", "OperationNameValue", "ResourceGroup", "CallerIpAddress"),
+        (
+            Part(
+                "actor",
+                "User",
+                ("Caller",),
+                (Ident("Caller", "email"), Ident(OBJECT_CLAIM, namespace="entra-object-id")),
+                lower=True,
+                name=lambda r, g: text(g("Caller")) if "@" in text(g("Caller")) else "",
+            ),
+            Part(
+                "identity",
+                "Service Principal",
+                ("Caller", "Properties.caller"),
+                (
+                    Ident("Caller", namespace="entra-object-id"),
+                    Ident("Properties.caller", namespace="entra-object-id"),
+                    Ident("Claims.appid", namespace="entra-app-id"),
+                    Ident("Claims_d.appid", namespace="entra-app-id"),
+                ),
+                name=lambda r, g: text(g("Caller")) if "@" not in text(g("Caller")) else "",
+            ),
+            Part("source", "IP", ("CallerIpAddress", "HTTPRequest.clientIpAddress"), (Ident("CallerIpAddress", "ip"),)),
+            Part(
+                "target",
+                "Azure Resource",
+                ("_ResourceId",),
+                (Ident("_ResourceId", "resource_id"), Ident("ResourceId", "resource_id")),
+                name=resource_name,
+                kind_of=resource_kind,
+            ),
+        ),
+        operation=arm_operation,
+        locator=("CorrelationId", "EventDataId"),
+        details=(
+            ("status", "ActivityStatusValue"),
+            ("role", "Authorization.evidence.role"),
+            ("error", "Properties.statusMessage.error.code"),
+            ("policy", "Properties.policies.0.policyDefinitionDisplayName"),
+            ("session", "Claims.uti"),
+        ),
+    ),
+    Mapping(
+        "AzureDiagnostics (Key Vault)",
+        "Sentinel",
+        ("OperationName", "CallerIPAddress", "ResourceProvider", "identity_claim_appid_g"),
+        (
+            Part(
+                "actor",
+                "User",
+                ("identity_claim_http_schemas_xmlsoap_org_ws_2005_05_identity_claims_upn_s", "identity_claim_upn_s"),
+                (Ident("identity_claim_http_schemas_microsoft_com_identity_claims_objectidentifier_g", namespace="entra-object-id"),),
+                lower=True,
+            ),
+            Part(
+                "identity", "Service Principal", ("identity_claim_appid_g",), (Ident("identity_claim_appid_g", namespace="entra-app-id"),)
+            ),
+            Part("source", "IP", ("CallerIPAddress",), (Ident("CallerIPAddress", "ip"),)),
+            Part("target", "Key Vault", ("Resource",), (Ident("ResourceId", "resource_id"),), lower=True),
+        ),
+        operation=lambda r, g: text(g("OperationName")),
+        locator=("CorrelationId", "requestUri_s"),
+    ),
+    Mapping(
+        "SecurityEvent",
+        "Sentinel",
+        ("EventID", "Computer", "Activity", "Account"),
+        (
+            Part(
+                "actor",
+                "User",
+                ("TargetAccount", "Account"),
+                (Ident("TargetUserSid", namespace="windows-sid"),),
+                name=lambda r, g: (
+                    text(g("TargetAccount")) if text(g("EventID")) in ("4624", "4625") and text(g("TargetAccount")) else text(g("Account"))
+                ),
+            ),
+            device("target", ("Computer",), ()),
+            Part("source", "IP", ("IpAddress",), (Ident("IpAddress", "ip"),)),
+            device("source", ("WorkstationName",), ()),
+            Part(
+                "via",
+                "Process",
+                ("NewProcessName", "Process"),
+                name=lambda r, g: (text(g("NewProcessName")) or text(g("Process"))).replace("/", "\\").split("\\")[-1],
+                path=("NewProcessName",),
+                scope=("Computer",),
+            ),
+        ),
+        operation=lambda r, g: text(g("Activity")),
+        locator=("EventRecordId", "EventOriginId"),
+    ),
+    Mapping(
+        "CommonSecurityLog",
+        "Sentinel",
+        ("DeviceVendor", "DeviceProduct", "SourceIP", "DestinationIP"),
+        (
+            Part("actor", "User", ("SourceUserName",), lower=True),
+            Part("source", "IP", ("SourceIP",), (Ident("SourceIP", "ip"),)),
+            Part("target", "IP", ("DestinationIP",), (Ident("DestinationIP", "ip"),)),
+            Part("target", "Domain", ("DestinationHostName", "RequestURL"), kind_of=url_kind),
+            Part(
+                "via",
+                "System",
+                ("DeviceProduct",),
+                name=lambda r, g: " ".join(v for v in (text(g("DeviceVendor")), text(g("DeviceProduct"))) if v),
+            ),
+        ),
+        operation=lambda r, g: text(g("DeviceAction")) or text(g("Activity")) or "connection",
+        locator=("DeviceEventClassID", "ExtID"),
+    ),
+    Mapping(
+        "OfficeActivity",
+        "Sentinel",
+        ("Operation", "UserId", "OfficeWorkload", "ClientIP"),
+        (
+            Part("actor", "User", ("UserId",), (Ident("UserId", "email"),), lower=True),
+            Part(
+                "source",
+                "IP",
+                ("ClientIP", "Client_IPAddress"),
+                (Ident("ClientIP", "ip"),),
+                name=lambda r, g: re.sub(r"^\[?([^\]]+?)\]?(?::\d+)?$", r"\1", text(g("ClientIP")) or text(g("Client_IPAddress"))),
+            ),
+            Part("target", "Other", ("OfficeObjectId", "ObjectId", "Site_Url")),
+        ),
+        operation=lambda r, g: text(g("Operation")),
+        locator=("OfficeId", "Id"),
+    ),
     # Output of FactGraph's "Prove the rotation" KQL (AuditLogs: secrets and certificates added to or removed from app
     # registrations and service principals, one row per key). Removed keys join the credentials seen in sign-ins by key ID.
-    Mapping("Entra credential changes", "Entra ID", ("CredentialChange", "KeyId", "ApplicationObjectId"), (
-        Part("actor", "User", ("Actor",), (Ident("Actor", "email"), Ident("ActorId", namespace="entra-object-id")), lower=True,
-             name=lambda r, g: text(g("Actor")) if "@" in text(g("Actor")) else ""),
-        Part("actor", "Service Principal", ("Actor",), (Ident("ActorId", namespace="entra-object-id"),),
-             name=lambda r, g: text(g("Actor")) if "@" not in text(g("Actor")) else ""),
-        Part("source", "IP", ("ActorIp",), (Ident("ActorIp", "ip"),)),
-        Part("target", "Credential", ("KeyId",), (Ident("KeyId", namespace="entra-credential-key-id"),), name=key_name),
-        Part("target", "Service Principal", ("Application",), (Ident("ApplicationObjectId", namespace="entra-application-object-id"),))),
-        operation=lambda r, g: f"credential {text(g('CredentialChange')).lower() or 'changed'}" + ("" if text(g("Result")).lower() in ("", "success") else " (failed)"),
-        time=("TimeGenerated",), locator=("CorrelationId", "KeyId"), details=(("key name", "KeyName"), ("operation", "OperationName"))),
+    Mapping(
+        "Entra credential changes",
+        "Entra ID",
+        ("CredentialChange", "KeyId", "ApplicationObjectId"),
+        (
+            Part(
+                "actor",
+                "User",
+                ("Actor",),
+                (Ident("Actor", "email"), Ident("ActorId", namespace="entra-object-id")),
+                lower=True,
+                name=lambda r, g: text(g("Actor")) if "@" in text(g("Actor")) else "",
+            ),
+            Part(
+                "actor",
+                "Service Principal",
+                ("Actor",),
+                (Ident("ActorId", namespace="entra-object-id"),),
+                name=lambda r, g: text(g("Actor")) if "@" not in text(g("Actor")) else "",
+            ),
+            Part("source", "IP", ("ActorIp",), (Ident("ActorIp", "ip"),)),
+            Part("target", "Credential", ("KeyId",), (Ident("KeyId", namespace="entra-credential-key-id"),), name=key_name),
+            Part("target", "Service Principal", ("Application",), (Ident("ApplicationObjectId", namespace="entra-application-object-id"),)),
+        ),
+        operation=lambda r, g: (
+            f"credential {text(g('CredentialChange')).lower() or 'changed'}"
+            + ("" if text(g("Result")).lower() in ("", "success") else " (failed)")
+        ),
+        time=("TimeGenerated",),
+        locator=("CorrelationId", "KeyId"),
+        details=(("key name", "KeyName"), ("operation", "OperationName")),
+    ),
     # GitLab audit events (standard GitLab audit event format, e.g. a Sentinel custom table such as GitLabAuditLogs_CL).
-    Mapping("GitLab audit events", "GitLab", ("author_id", "author_name", "entity_path", "entity_type", "target_type", "details"), (
-        Part("actor", "User", ("author_name", "details.author_name"), (Ident("author_id", namespace="gitlab-user-id"),)),
-        Part("source", "IP", ("ip_address", "details.ip_address"), (Ident("ip_address", "ip"),)),
-        Part("target", "Repository", ("entity_path",), (Ident("entity_id", namespace="gitlab-project-id"),),
-             name=lambda r, g: text(g("entity_path")) if text(g("entity_type")) == "Project" else ""),
-        Part("target", "User", ("entity_path",), (Ident("entity_id", namespace="gitlab-user-id"),),
-             name=lambda r, g: text(g("entity_path")) if text(g("entity_type")) == "User" else ""),
-        Part("target", "File", ("details.file_path",), path=("details.file_path",), scope=("entity_path",)),
-        Part("tool", "Credential", ("details.pat_name",), (Ident("details.pat_id", namespace="gitlab-access-token-id"),),
-             name=lambda r, g: f"access token {text(g('details.pat_name'))}" if text(g("details.pat_name")) else ""),
-        Part("tool", "Credential", ("details.custom_message.gl_key_id",), (Ident("details.custom_message.gl_key_id", namespace="gitlab-ssh-key-id"),),
-             name=lambda r, g: f"SSH key {text(g('details.custom_message.gl_key_id'))}" if text(g("details.custom_message.gl_key_id")) else "")),
-        operation=gitlab_operation, time=("created_at", "TimeGenerated"), locator=("id",),
-        details=(("ref", "details.ref"), ("user agent", "details.user_agent"),
-                 ("message", lambda r, g: text(g("details.custom_message"))))),
+    Mapping(
+        "GitLab audit events",
+        "GitLab",
+        ("author_id", "author_name", "entity_path", "entity_type", "target_type", "details"),
+        (
+            Part("actor", "User", ("author_name", "details.author_name"), (Ident("author_id", namespace="gitlab-user-id"),)),
+            Part("source", "IP", ("ip_address", "details.ip_address"), (Ident("ip_address", "ip"),)),
+            Part(
+                "target",
+                "Repository",
+                ("entity_path",),
+                (Ident("entity_id", namespace="gitlab-project-id"),),
+                name=lambda r, g: text(g("entity_path")) if text(g("entity_type")) == "Project" else "",
+            ),
+            Part(
+                "target",
+                "User",
+                ("entity_path",),
+                (Ident("entity_id", namespace="gitlab-user-id"),),
+                name=lambda r, g: text(g("entity_path")) if text(g("entity_type")) == "User" else "",
+            ),
+            Part("target", "File", ("details.file_path",), path=("details.file_path",), scope=("entity_path",)),
+            Part(
+                "tool",
+                "Credential",
+                ("details.pat_name",),
+                (Ident("details.pat_id", namespace="gitlab-access-token-id"),),
+                name=lambda r, g: f"access token {text(g('details.pat_name'))}" if text(g("details.pat_name")) else "",
+            ),
+            Part(
+                "tool",
+                "Credential",
+                ("details.custom_message.gl_key_id",),
+                (Ident("details.custom_message.gl_key_id", namespace="gitlab-ssh-key-id"),),
+                name=lambda r, g: (
+                    f"SSH key {text(g('details.custom_message.gl_key_id'))}" if text(g("details.custom_message.gl_key_id")) else ""
+                ),
+            ),
+        ),
+        operation=gitlab_operation,
+        time=("created_at", "TimeGenerated"),
+        locator=("id",),
+        details=(("ref", "details.ref"), ("user agent", "details.user_agent"), ("message", lambda r, g: text(g("details.custom_message")))),
+    ),
 )
 
 # ASIM (normalised Sentinel parsers, e.g. _Im_Authentication): the same fields for every source.
-ASIM = Mapping("ASIM", "Sentinel ASIM", ("EventType", "EventSchema"), (
-    Part("actor", "User", ("ActorUsername",), (Ident("ActorUserId", namespace="asim-user-id"),), lower=True),
-    Part("source", "IP", ("SrcIpAddr",), (Ident("SrcIpAddr", "ip"),)),
-    Part("source", "Device", ("SrcHostname", "SrcDvcHostname"), (Ident("SrcDvcId", namespace="asim-device-id"),), lower=True),
-    Part("target", "User", ("TargetUsername",), (Ident("TargetUserId", namespace="asim-user-id"),), lower=True),
-    Part("target", "IP", ("DstIpAddr",), (Ident("DstIpAddr", "ip"),)),
-    Part("target", "Device", ("DstHostname", "TargetHostname", "DvcHostname"), (Ident("DstDvcId", namespace="asim-device-id"),), lower=True),
-    Part("target", "Service", ("TargetAppName",), (Ident("TargetAppId", namespace="asim-app-id"),)),
-    Part("target", "Domain", ("Url", "DnsQuery"), kind_of=url_kind),
-    Part("target", "Process", ("TargetProcessName",), (Ident("TargetProcessSHA256", namespace="sha256"),), path=("TargetProcessName",),
-         name=lambda r, g: text(g("TargetProcessName")).replace("/", "\\").split("\\")[-1]),
-    Part("target", "File", ("TargetFileName", "TargetFilePath"), (Ident("TargetFileSHA256", namespace="sha256"),), path=("TargetFilePath",)),
-    Part("via", "Process", ("ActingProcessName",), name=lambda r, g: text(g("ActingProcessName")).replace("/", "\\").split("\\")[-1], path=("ActingProcessName",))),
-    operation=lambda r, g: " ".join(v for v in (phrase(g("EventType")), f"({text(g('EventResult')).lower()})" if text(g("EventResult")) else "") if v),
-    time=("TimeGenerated", "EventStartTime"), end=("EventEndTime",), locator=("EventUid", "EventOriginalUid"))
+ASIM = Mapping(
+    "ASIM",
+    "Sentinel ASIM",
+    ("EventType", "EventSchema"),
+    (
+        Part("actor", "User", ("ActorUsername",), (Ident("ActorUserId", namespace="asim-user-id"),), lower=True),
+        Part("source", "IP", ("SrcIpAddr",), (Ident("SrcIpAddr", "ip"),)),
+        Part("source", "Device", ("SrcHostname", "SrcDvcHostname"), (Ident("SrcDvcId", namespace="asim-device-id"),), lower=True),
+        Part("target", "User", ("TargetUsername",), (Ident("TargetUserId", namespace="asim-user-id"),), lower=True),
+        Part("target", "IP", ("DstIpAddr",), (Ident("DstIpAddr", "ip"),)),
+        Part(
+            "target",
+            "Device",
+            ("DstHostname", "TargetHostname", "DvcHostname"),
+            (Ident("DstDvcId", namespace="asim-device-id"),),
+            lower=True,
+        ),
+        Part("target", "Service", ("TargetAppName",), (Ident("TargetAppId", namespace="asim-app-id"),)),
+        Part("target", "Domain", ("Url", "DnsQuery"), kind_of=url_kind),
+        Part(
+            "target",
+            "Process",
+            ("TargetProcessName",),
+            (Ident("TargetProcessSHA256", namespace="sha256"),),
+            path=("TargetProcessName",),
+            name=lambda r, g: text(g("TargetProcessName")).replace("/", "\\").split("\\")[-1],
+        ),
+        Part(
+            "target",
+            "File",
+            ("TargetFileName", "TargetFilePath"),
+            (Ident("TargetFileSHA256", namespace="sha256"),),
+            path=("TargetFilePath",),
+        ),
+        Part(
+            "via",
+            "Process",
+            ("ActingProcessName",),
+            name=lambda r, g: text(g("ActingProcessName")).replace("/", "\\").split("\\")[-1],
+            path=("ActingProcessName",),
+        ),
+    ),
+    operation=lambda r, g: " ".join(
+        v for v in (phrase(g("EventType")), f"({text(g('EventResult')).lower()})" if text(g("EventResult")) else "") if v
+    ),
+    time=("TimeGenerated", "EventStartTime"),
+    end=("EventEndTime",),
+    locator=("EventUid", "EventOriginalUid"),
+)
 
 # --------------------------------------------------------------------------------------------- heuristic
 
 HEURISTIC: tuple[tuple[str, str, tuple[str, ...], str], ...] = (
     # role, kind, candidate columns (first present wins), identifier scheme/namespace
-    ("actor", "User", ("AccountUpn", "UserPrincipalName", "InitiatingProcessAccountUpn", "ActorUsername", "Caller", "UserId", "SourceUserName",
-                       "SubjectUserName", "AccountName", "User", "Username", "user"), "email"),
-    ("source", "IP", ("IPAddress", "ClientIP", "CallerIpAddress", "CallerIPAddress", "SourceIP", "SrcIpAddr", "IpAddress", "LocalIP", "SenderIPv4",
-                      "src_ip", "source_ip", "ClientIPAddress"), "ip"),
+    (
+        "actor",
+        "User",
+        (
+            "AccountUpn",
+            "UserPrincipalName",
+            "InitiatingProcessAccountUpn",
+            "ActorUsername",
+            "Caller",
+            "UserId",
+            "SourceUserName",
+            "SubjectUserName",
+            "AccountName",
+            "User",
+            "Username",
+            "user",
+        ),
+        "email",
+    ),
+    (
+        "source",
+        "IP",
+        (
+            "IPAddress",
+            "ClientIP",
+            "CallerIpAddress",
+            "CallerIPAddress",
+            "SourceIP",
+            "SrcIpAddr",
+            "IpAddress",
+            "LocalIP",
+            "SenderIPv4",
+            "src_ip",
+            "source_ip",
+            "ClientIPAddress",
+        ),
+        "ip",
+    ),
     ("source", "Device", ("DeviceName", "Computer", "HostName", "Hostname", "SrcHostname", "WorkstationName", "host"), "fqdn"),
     ("target", "IP", ("RemoteIP", "DestinationIP", "DstIpAddr", "dest_ip", "destination_ip"), "ip"),
     ("target", "Device", ("TargetDeviceName", "DestinationDeviceName", "DstHostname", "RemoteDeviceName"), "fqdn"),
@@ -623,9 +1232,41 @@ HEURISTIC: tuple[tuple[str, str, tuple[str, ...], str], ...] = (
     ("target", "Service", ("Application", "AppDisplayName", "TargetAppName", "ResourceDisplayName"), ""),
     ("target", "File", ("FileName", "TargetFileName", "FilePath", "FolderPath"), ""),
 )
-OPERATION_FIELDS = ("ActionType", "OperationName", "Operation", "OperationNameValue", "Activity", "EventType", "QueryType", "DeviceAction", "action")
-TIME_FIELDS = ("Timestamp", "TimeGenerated", "CreatedDateTime", "EventStartTime", "TimeCreated", "StartTime", "timestamp", "time", "event_time")
-LOCATOR_FIELDS = ("ReportId", "CorrelationId", "EventRecordId", "EventId", "EventID", "RecordId", "Id", "id", "NetworkMessageId", "AlertId", "RequestId")
+OPERATION_FIELDS = (
+    "ActionType",
+    "OperationName",
+    "Operation",
+    "OperationNameValue",
+    "Activity",
+    "EventType",
+    "QueryType",
+    "DeviceAction",
+    "action",
+)
+TIME_FIELDS = (
+    "Timestamp",
+    "TimeGenerated",
+    "CreatedDateTime",
+    "EventStartTime",
+    "TimeCreated",
+    "StartTime",
+    "timestamp",
+    "time",
+    "event_time",
+)
+LOCATOR_FIELDS = (
+    "ReportId",
+    "CorrelationId",
+    "EventRecordId",
+    "EventId",
+    "EventID",
+    "RecordId",
+    "Id",
+    "id",
+    "NetworkMessageId",
+    "AlertId",
+    "RequestId",
+)
 
 
 def heuristic(columns: set[str], table: str = "", product: str = "") -> Mapping | None:
@@ -639,19 +1280,34 @@ def heuristic(columns: set[str], table: str = "", product: str = "") -> Mapping 
         ids = (Ident(column, scheme),) if scheme in ("ip", "email", "fqdn", "resource_id") else ()
         if kind == "File":
             ids += tuple(Ident(h, namespace=h.lower()) for h in ("SHA256", "SHA1", "MD5") if h in columns)
-        parts.append(Part(role, kind, (column,), ids, lower=kind in ("User", "Device"),
-                          path=tuple(c for c in ("FolderPath", "FilePath", "TargetFilePath") if c in columns) if kind == "File" else (),
-                          kind_of=url_kind if kind == "URL" else resource_kind if kind == "Azure Resource" else None,
-                          name=resource_name if kind == "Azure Resource" else None))
+        parts.append(
+            Part(
+                role,
+                kind,
+                (column,),
+                ids,
+                lower=kind in ("User", "Device"),
+                path=tuple(c for c in ("FolderPath", "FilePath", "TargetFilePath") if c in columns) if kind == "File" else (),
+                kind_of=url_kind if kind == "URL" else resource_kind if kind == "Azure Resource" else None,
+                name=resource_name if kind == "Azure Resource" else None,
+            )
+        )
     if len(parts) < 2:
         return None
     operation = next((c for c in OPERATION_FIELDS if c in columns), None)
-    return Mapping(table or "Unknown table", product or "", (), tuple(parts),
-                   operation=(lambda r, g, c=operation: phrase(g(c)) or "observed") if operation else "observed",
-                   time=tuple(c for c in TIME_FIELDS if c in columns), locator=tuple(c for c in LOCATOR_FIELDS if c in columns)[:2])
+    return Mapping(
+        table or "Unknown table",
+        product or "",
+        (),
+        tuple(parts),
+        operation=(lambda r, g, c=operation: phrase(g(c)) or "observed") if operation else "observed",
+        time=tuple(c for c in TIME_FIELDS if c in columns),
+        locator=tuple(c for c in LOCATOR_FIELDS if c in columns)[:2],
+    )
 
 
 # --------------------------------------------------------------------------------------------- detection
+
 
 @dataclass
 class Detection:
@@ -665,12 +1321,22 @@ class Detection:
     candidates: list[str] = field(default_factory=list)
 
     def summary(self) -> dict:
-        return {"table": self.table, "product": self.product, "confident": self.confident, "known_columns": self.known_columns,
-                "total_columns": self.total_columns, "doc": self.doc, "candidates": self.candidates,
-                "roles": [{"field": p.fields[0], "role": p.role, "kind": p.kind,
-                           "identifiers": [i.field for i in p.ids if i.field != p.fields[0]]} for p in (self.mapping.parts if self.mapping else ())],
-                "operation": self.mapping.operation if self.mapping and isinstance(self.mapping.operation, str) else
-                             ("derived from the row" if self.mapping else None)}
+        return {
+            "table": self.table,
+            "product": self.product,
+            "confident": self.confident,
+            "known_columns": self.known_columns,
+            "total_columns": self.total_columns,
+            "doc": self.doc,
+            "candidates": self.candidates,
+            "roles": [
+                {"field": p.fields[0], "role": p.role, "kind": p.kind, "identifiers": [i.field for i in p.ids if i.field != p.fields[0]]}
+                for p in (self.mapping.parts if self.mapping else ())
+            ],
+            "operation": self.mapping.operation
+            if self.mapping and isinstance(self.mapping.operation, str)
+            else ("derived from the row" if self.mapping else None),
+        }
 
 
 def detect(columns: set[str]) -> Detection:
@@ -693,28 +1359,38 @@ def detect(columns: set[str]) -> Detection:
         def fit(m: Mapping) -> tuple[float, int]:
             cols = set(tables.get(m.table, {}).get("columns", {})) or set(m.signature)
             return (len(columns & cols) / max(len(columns), 1), len(m.signature))
+
         mapping = max(curated, key=fit)
         cols = set(tables.get(mapping.table, {}).get("columns", {}))
         known = len(columns & cols) if cols else len(set(mapping.signature))
-        return Detection(mapping.table, mapping.product, mapping, True, known, len(columns), tables.get(mapping.table, {}).get("doc", ""), candidates)
+        return Detection(
+            mapping.table, mapping.product, mapping, True, known, len(columns), tables.get(mapping.table, {}).get("doc", ""), candidates
+        )
 
-    if {"EventType", "EventSchema"} <= columns or ("EventType" in columns and any(c in columns for c in ("SrcIpAddr", "DstIpAddr", "TargetUsername", "ActorUsername"))):
+    if {"EventType", "EventSchema"} <= columns or (
+        "EventType" in columns and any(c in columns for c in ("SrcIpAddr", "DstIpAddr", "TargetUsername", "ActorUsername"))
+    ):
         asim = data.get("asim", {})
         schema = max(asim.items(), key=lambda kv: len(columns & set(kv[1]["columns"])), default=(None, None))
         cols = set(data.get("asim_common", {})) | (set(schema[1]["columns"]) if schema[1] else set())
         name = f"ASIM {schema[0]}" if schema[0] else "ASIM"
-        return Detection(name, "Sentinel ASIM", ASIM, True, len(columns & cols), len(columns), schema[1]["doc"] if schema[1] else "", candidates)
+        return Detection(
+            name, "Sentinel ASIM", ASIM, True, len(columns & cols), len(columns), schema[1]["doc"] if schema[1] else "", candidates
+        )
 
     if best_schema and best_schema[0] >= 0.6 and best_schema[1] >= 5:
         name = best_schema[2]
         mapping = heuristic(columns, name, "Defender XDR")
-        return Detection(name, "Defender XDR", mapping, mapping is not None, best_schema[1], len(columns), tables[name].get("doc", ""), candidates)
+        return Detection(
+            name, "Defender XDR", mapping, mapping is not None, best_schema[1], len(columns), tables[name].get("doc", ""), candidates
+        )
 
     mapping = heuristic(columns)
     return Detection("Unknown table", "", mapping, False, 0, len(columns), "", candidates)
 
 
 # ---------------------------------------------------------------------------------------------- per row
+
 
 def participants_of(mapping: Mapping, row: Row) -> list[dict]:
     """Entities of one row: role, kind, name and identifiers ({scheme, namespace, raw})."""
@@ -752,7 +1428,9 @@ def participants_of(mapping: Mapping, row: Row) -> list[dict]:
             start, device_id = next((text(g(c)) for c in part.start if text(g(c))), ""), text(g("DeviceId")).lower()
             if start and start != "0" and device_id:
                 identifiers.append({"scheme": "process-start-key", "namespace": "", "raw": f"{device_id}|{start}"})
-        out.append({"role": part.role, "kind": kind, "name": name, "identifiers": identifiers, "by_name": not scoped, "create": part.create})
+        out.append(
+            {"role": part.role, "kind": kind, "name": name, "identifiers": identifiers, "by_name": not scoped, "create": part.create}
+        )
     return out
 
 

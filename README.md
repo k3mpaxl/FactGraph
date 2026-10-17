@@ -141,7 +141,7 @@ Notes:
 
 - **Exactly one instance.** The relay keeps the list of connected browsers in memory; with several instances, analysts on different instances would not see each other. Do not scale out.
 - **Web sockets must be on**, otherwise the board stays offline. **Always On** prevents the app from idling and dropping connections.
-- Prefer a pinned version (`k3mpaxl/factgraph:0.6.0`) over `latest` during an incident, so a restart never changes the version.
+- Prefer a pinned version (`k3mpaxl/factgraph:0.6.1`) over `latest` during an incident, so a restart never changes the version.
 - App Service **HTTP logging** is off by default. If you enable it, it records request URLs, which contain board IDs.
 - **WebSocket limits per plan:** every open FactGraph tab holds one connection. App Service allows 5 per instance on **F1 (Free)**, 35 on Shared and 350 from **B1**; above the limit, browsers get HTTP 429 and stay offline. Use B1 or higher. Browsers send a heartbeat, and the server closes connections that stay silent (closed laptops, changed networks), so slots are freed without restarting the app.
 - **App Service Authentication** (Entra ID sign-in) can be put in front of the UI. Agents and scripts then also need an Entra token, and if the incident involves your own tenant, an identity provider you cannot trust is no protection. IP access restrictions are often the better choice there.
@@ -379,7 +379,7 @@ PATCH-style calls change only the fields they contain; an explicit `null` clears
 - **The board helps with the mapping:** FactGraph compares the values with the names and IDs of the entities already on the board. A column of GUIDs that are the Entra object IDs of users a Sentinel import brought in is suggested as those users (*on board: User · Entra object ID*); the preview shows them by name, and the import adds to them instead of creating new entities. Column names and what the values look like (IPs, e-mail addresses, URLs, host and file names, times) fill in the rest of the suggestion.
 - **Check, then import:** *Check import* runs every file without storing anything (rows, new and known entities, activities, evidence, the time column); *Import* runs them in the background, one after another, each with its own entry under the bell. Uploads appear as channel **Import** in the change log.
 
-Every row becomes its own evidence item with its timestamp and locator; the same operation with the same participants becomes one shared activity. Importing the same rows again creates no duplicates.
+Every row becomes its own evidence item with its timestamp and locator; the same operation with the same participants becomes one shared activity. Importing the same rows again creates no duplicates, also after an update that reads more from them: a row already on the board (recognised by a key of its original content) adds no evidence, and its entities on the board only get the IDs the newer version reads.
 
 **Agents and scripts:** `POST /imports/inspect` (multipart) returns the columns, sample values, matches on the board and a suggested format; `POST /imports/preview` shows what a format makes of a few rows; `GET /imports/formats` lists the formats saved in the analyst's browser (MCP `list_import_formats`); `POST /imports/table` with the rows as JSON (MCP `import_defender_rows`) and `POST /imports/file` take a `format`. The earlier endpoints `/imports/activity`, `/imports/kql` and `/imports/activities` (with `roles`) remain. All support `dry_run`.
 
@@ -419,7 +419,7 @@ The table schemas (names, columns, types; no description text) are generated fro
 
 ### Which columns join: the xdrinternals.com relationship catalog
 
-Which column of one table refers to the same token, session, user, device, app or resource as a column of another table comes from the [relationship catalog of xdrinternals.com](https://xdrinternals.com/relationships/) (MIT License, Copyright (c) 2025 Fabian & Nathan, see [app/data/column_relations.LICENSE](app/data/column_relations.LICENSE)). `python scripts/build_column_relations.py` writes `app/data/column_relations.json`: per join both ends (table, column, JSON path, time column), the kind of key, the guidance (for example: token IDs are case-sensitive, remove only trailing padding) and the KQL.
+Which column of one table refers to the same token, session, user, device, app or resource as a column of another table comes from the [relationship catalog of xdrinternals.com](https://xdrinternals.com/relationships/) (MIT License, Copyright (c) 2025 Fabian & Nathan, see [app/data/column_relations.LICENSE](app/data/column_relations.LICENSE)). `python scripts/build_column_relations.py` writes `app/data/column_relations.json` (and the key columns for the browser, `web/src/joinColumns.ts`); the weekly workflow **Relationship catalog** runs it with `--check` and fails, listing the added, removed and changed joins, when the catalog on xdrinternals.com has changed. For each join it keeps both ends (table, column, JSON path, time column), the kind of key, the guidance (for example: token IDs are case-sensitive, remove only trailing padding) and the KQL.
 
 - **Agents** ask `find_joins` (REST `GET /api/relations?table=AADGraphActivityLogs&column=SignInActivityId`) where a column of an evidence row leads, and get the other tables with the KQL; without arguments it lists the kinds of keys.
 - **Imports** link the entity IDs the catalog joins on (user and service principal object IDs, app IDs, Defender and Entra device IDs) as identifiers, so the same user or device from different tables is one entity. A test checks every such join against the table mappings.
@@ -468,7 +468,11 @@ npm test                                           # projection, review, converg
 npm run bench                                      # performance on a synthetic 12,000-action board; fails on large regressions
 npx playwright install chromium
 npm run test:e2e                                   # browser workflows against a real server
+npm run format                                     # Prettier (TypeScript, 140 columns); CI runs format:check
+cd .. && pip install --require-hashes -r requirements-dev.lock && ruff format app tests scripts   # Python, the same width
 ```
+
+The web interface is split by purpose: `App.tsx` (state, shortcuts, layout), `Inspector.tsx`, `Dialogs.tsx`, `Panels.tsx` (timeline, change log, explorer, command palette) and `ui.tsx` (shared building blocks).
 
 The browser tests run on temporary boards on port 18088 with a real MCP client. Among other things they cover analyst and agent review, offline sync with a concurrent merge in two browsers, activities, groups (including moving collapsed and expanded groups), layers, presence, export, mouse and trackpad navigation, the mobile layout, imports with preview and deduplication, and 10,000 imported evidence items.
 
@@ -484,8 +488,8 @@ cd web && npm run build && DOCS_SCREENSHOTS=1 npx playwright test e2e/docs-scree
 - **Publish Docker image** builds the image for `linux/amd64` and `linux/arm64` on a version tag (`v*.*.*`) or via **Run workflow**, and publishes it as `latest` and with the version number. It requires the repository secrets `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` (a Docker Hub access token with write permission).
 
 ```bash
-git tag v0.6.0
-git push origin v0.6.0
+git tag v0.6.1
+git push origin v0.6.1
 ```
 
 A manual multi-arch build is possible with `./deploy/publish-multiarch.sh` (`FACTGRAPH_IMAGE` and `FACTGRAPH_VERSION` override namespace and version).

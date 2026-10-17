@@ -9,7 +9,15 @@
  * Inertial trackpad scrolling keeps the pan classification for a short time so momentum never turns into zooming.
  */
 export type WheelKind = 'pinch' | 'pan' | 'zoom'
-export type WheelLike = { deltaX: number; deltaY: number; deltaMode: number; ctrlKey: boolean; shiftKey?: boolean; wheelDeltaY?: number; timeStamp?: number }
+export type WheelLike = {
+  deltaX: number
+  deltaY: number
+  deltaMode: number
+  ctrlKey: boolean
+  shiftKey?: boolean
+  wheelDeltaY?: number
+  timeStamp?: number
+}
 
 export function classifyWheel(event: WheelLike): WheelKind {
   if (event.ctrlKey) return 'pinch'
@@ -40,7 +48,13 @@ export function zoomFactor(event: WheelLike) {
 
 export type Viewport = { x: number; y: number; zoom: number }
 /** Zoom around a point (canvas-relative pixels) so the content under the cursor stays in place. */
-export function zoomAround(viewport: Viewport, point: { x: number; y: number }, factor: number, minZoom: number, maxZoom: number): Viewport {
+export function zoomAround(
+  viewport: Viewport,
+  point: { x: number; y: number },
+  factor: number,
+  minZoom: number,
+  maxZoom: number,
+): Viewport {
   const zoom = Math.min(maxZoom, Math.max(minZoom, viewport.zoom * factor))
   const ratio = zoom / viewport.zoom
   return { x: point.x - (point.x - viewport.x) * ratio, y: point.y - (point.y - viewport.y) * ratio, zoom }

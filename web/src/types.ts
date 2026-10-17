@@ -1,45 +1,94 @@
 export type Identifier = {
-  id: string; entity_id: string; scheme: string; namespace: string;
-  raw_value: string; normalized_value: string; confidence: number;
-  source_id: string | null; valid_from: string | null; valid_to: string | null;
+  id: string
+  entity_id: string
+  scheme: string
+  namespace: string
+  raw_value: string
+  normalized_value: string
+  confidence: number
+  source_id: string | null
+  valid_from: string | null
+  valid_to: string | null
 }
 export type Entity = {
-  id: string; name: string; kind: string; description: string;
-  created_at: string; identifiers: Identifier[];
-  color?: string;
-  position?: { x: number; y: number };
-  pinned?: boolean;
+  id: string
+  name: string
+  kind: string
+  description: string
+  created_at: string
+  identifiers: Identifier[]
+  color?: string
+  position?: { x: number; y: number }
+  pinned?: boolean
   /** Explicit layer override; otherwise the type's layer or an inferred one applies. */
-  layer?: string;
+  layer?: string
   /** Compromised (a stolen credential, an attacker's IP), optionally only from/until a time; drives the impact analysis. */
-  compromise?: { from?: string | null; to?: string | null; note?: string; by?: string; at?: string; via?: string; cleared?: boolean; level?: 'suspected' | 'confirmed' } | null;
+  compromise?: {
+    from?: string | null
+    to?: string | null
+    note?: string
+    by?: string
+    at?: string
+    via?: string
+    cleared?: boolean
+    level?: 'suspected' | 'confirmed'
+  } | null
   /** When the credential or the exposed secrets were last rotated; earlier than the attacker's last use means: again. */
-  rotated_at?: string | null;
+  rotated_at?: string | null
 }
 export type Source = {
-  id: string; title: string; uri: string; excerpt: string; created_at: string;
-  source_kind?: 'primary' | 'secondary' | 'unknown'; query?: string; revision?: string;
+  id: string
+  title: string
+  uri: string
+  excerpt: string
+  created_at: string
+  source_kind?: 'primary' | 'secondary' | 'unknown'
+  query?: string
+  revision?: string
 }
 export type Assertion = {
-  id: string; fact_id: string; stance: 'supports' | 'refutes';
-  confidence: number; source_id: string | null; note: string;
-  valid_from: string | null; valid_to: string | null; created_at: string; retracted_at: string | null;
-  review_status?: 'confirmed' | 'unconfirmed'; revision?: string;
-  locator?: string; observation?: string; interpretation?: string;
-  reviewed_by?: string | null; reviewed_at?: string | null; review_note?: string;
-  reviewed_revision?: string | null; reviewed_source_revision?: string | null;
+  id: string
+  fact_id: string
+  stance: 'supports' | 'refutes'
+  confidence: number
+  source_id: string | null
+  note: string
+  valid_from: string | null
+  valid_to: string | null
+  created_at: string
+  retracted_at: string | null
+  review_status?: 'confirmed' | 'unconfirmed'
+  revision?: string
+  locator?: string
+  observation?: string
+  interpretation?: string
+  reviewed_by?: string | null
+  reviewed_at?: string | null
+  review_note?: string
+  reviewed_revision?: string | null
+  reviewed_source_revision?: string | null
   /** Who added it and through which channel (UI, Import, REST, MCP). */
-  created_by?: string | null; created_via?: string | null;
+  created_by?: string | null
+  created_via?: string | null
   /** What the confirmation is: the import parsed the original row, an analyst checked it, or an agent said so (REST/MCP). */
-  review_kind?: 'import' | 'analyst' | 'agent' | null; reviewer_name?: string | null;
+  review_kind?: 'import' | 'analyst' | 'agent' | null
+  reviewer_name?: string | null
 }
 export type TruthState = 'supported' | 'disputed' | 'refuted' | 'unknown'
 export type Fact = {
-  id: string; subject_id: string; predicate: string; object_id: string;
-  valid_from: string | null; valid_to: string | null; created_at: string;
-  assertions: Assertion[]; truth_state: TruthState;
+  id: string
+  subject_id: string
+  predicate: string
+  object_id: string
+  valid_from: string | null
+  valid_to: string | null
+  created_at: string
+  assertions: Assertion[]
+  truth_state: TruthState
   /** Present for activities: one observed event with several role-tagged participants. */
-  participants?: Participant[]; technique?: string; position?: { x: number; y: number };
+  participants?: Participant[]
+  technique?: string
+  position?: { x: number; y: number }
 }
 export type Participant = { entity_id: string; role: string }
 export type EntityType = { id: string; name: string; color: string; icon: string; layer?: string }
@@ -48,9 +97,24 @@ export type GroupRule = { kinds?: string[]; match?: string; container_id?: strin
 /** Which likeness a generated group rests on ("Group all similar"): the same links, counterparts, shared links or network. */
 export type GroupBasis = 'links' | 'counterparts' | 'shared-links' | 'network'
 export type Group = {
-  id: string; name: string; members: string[]; excluded: string[]; rule: GroupRule | null;
-  collapsed: boolean; color?: string; position?: { x: number; y: number }; created_at: string; basis?: GroupBasis;
-  member_ids: string[];
+  id: string
+  name: string
+  members: string[]
+  excluded: string[]
+  rule: GroupRule | null
+  collapsed: boolean
+  color?: string
+  position?: { x: number; y: number }
+  created_at: string
+  basis?: GroupBasis
+  member_ids: string[]
 }
 export type Perspective = { id: string; name: string; layers: string[] | null; collapse_activities: boolean; show_lanes: boolean }
-export type GraphData = { entity_types?: EntityType[]; entities: Entity[]; facts: Fact[]; sources: Source[]; groups?: Group[]; views?: Perspective[] }
+export type GraphData = {
+  entity_types?: EntityType[]
+  entities: Entity[]
+  facts: Fact[]
+  sources: Source[]
+  groups?: Group[]
+  views?: Perspective[]
+}

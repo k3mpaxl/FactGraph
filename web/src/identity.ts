@@ -27,8 +27,16 @@ function open(): BroadcastChannel | null {
   // A closed tab never unmounts its board: it stops answering and lets the others count again.
   if (channel && typeof window !== 'undefined') {
     const changed = () => boards.forEach((_, board) => channel!.postMessage({ type: 'board-changed', board }))
-    window.addEventListener('pagehide', () => { leaving = true; changed() })
-    window.addEventListener('pageshow', event => { if (event.persisted) { leaving = false; changed() } })
+    window.addEventListener('pagehide', () => {
+      leaving = true
+      changed()
+    })
+    window.addEventListener('pageshow', event => {
+      if (event.persisted) {
+        leaving = false
+        changed()
+      }
+    })
   }
   return channel
 }
@@ -42,7 +50,11 @@ export function actorTaken(actor: string, wait = 150): Promise<boolean> {
       const message = event.data as { type?: string; actor?: string; to?: string }
       if (message?.type === 'taken' && message.actor === actor && message.to === instance) done(true)
     }
-    const done = (taken: boolean) => { bus.removeEventListener('message', listener); window.clearTimeout(timer); resolve(taken) }
+    const done = (taken: boolean) => {
+      bus.removeEventListener('message', listener)
+      window.clearTimeout(timer)
+      resolve(taken)
+    }
     const timer = window.setTimeout(() => done(false), wait)
     bus.addEventListener('message', listener)
     bus.postMessage({ type: 'probe', actor, instance })
@@ -50,8 +62,13 @@ export function actorTaken(actor: string, wait = 150): Promise<boolean> {
 }
 
 /** This tab uses the actor from now on: later duplicates are told so. */
-export function holdActor(actor: string) { open(); held.add(actor) }
-export function releaseActor(actor: string) { held.delete(actor) }
+export function holdActor(actor: string) {
+  open()
+  held.add(actor)
+}
+export function releaseActor(actor: string) {
+  held.delete(actor)
+}
 
 /** This tab shows the board: other tabs with it count this one. */
 export function holdBoard(boardId: string) {
@@ -60,7 +77,8 @@ export function holdBoard(boardId: string) {
 }
 export function releaseBoard(boardId: string) {
   const count = (boards.get(boardId) ?? 1) - 1
-  if (count > 0) boards.set(boardId, count); else boards.delete(boardId)
+  if (count > 0) boards.set(boardId, count)
+  else boards.delete(boardId)
   open()?.postMessage({ type: 'board-changed', board: boardId })
 }
 
@@ -79,7 +97,10 @@ export function otherTabs(boardId: string, wait = 200): Promise<number> {
     }
     bus.addEventListener('message', listener)
     bus.postMessage({ type: 'board-probe', board: boardId, instance })
-    window.setTimeout(() => { bus.removeEventListener('message', listener); resolve(seen.size) }, wait)
+    window.setTimeout(() => {
+      bus.removeEventListener('message', listener)
+      resolve(seen.size)
+    }, wait)
   })
 }
 
@@ -87,7 +108,9 @@ export function otherTabs(boardId: string, wait = 200): Promise<number> {
 export function onBoardTabs(listener: (boardId: string) => void) {
   open()
   boardListeners.add(listener)
-  return () => { boardListeners.delete(listener) }
+  return () => {
+    boardListeners.delete(listener)
+  }
 }
 
 const actorKey = (boardId: string) => `factgraph:actor:${boardId}`
@@ -99,14 +122,22 @@ export function storedIdentity(boardId: string): { actor: string; token: string 
   try {
     const actor = sessionStorage.getItem(actorKey(boardId)) || uuid()
     const token = sessionStorage.getItem(tokenKey(boardId)) || newToken()
-    sessionStorage.setItem(actorKey(boardId), actor); sessionStorage.setItem(tokenKey(boardId), token)
+    sessionStorage.setItem(actorKey(boardId), actor)
+    sessionStorage.setItem(tokenKey(boardId), token)
     return { actor, token }
-  } catch { return { actor: uuid(), token: newToken() } }
+  } catch {
+    return { actor: uuid(), token: newToken() }
+  }
 }
 
 /** A fresh actor and token for this tab (a duplicate, or a tab replaced by one). */
 export function freshIdentity(boardId: string): { actor: string; token: string } {
   const next = { actor: uuid(), token: newToken() }
-  try { sessionStorage.setItem(actorKey(boardId), next.actor); sessionStorage.setItem(tokenKey(boardId), next.token) } catch { /* private mode */ }
+  try {
+    sessionStorage.setItem(actorKey(boardId), next.actor)
+    sessionStorage.setItem(tokenKey(boardId), next.token)
+  } catch {
+    /* private mode */
+  }
   return next
 }

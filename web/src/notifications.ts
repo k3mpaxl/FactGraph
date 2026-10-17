@@ -8,13 +8,30 @@ import { agentText } from './provenance'
 export type NoticeKind = 'agent' | 'enricher' | 'colleague' | 'import' | 'export' | 'connection' | 'error'
 export type NoticeStatus = 'queued' | 'running' | 'done' | 'error' | 'info'
 export type NoticeTarget = { kind: 'entity' | 'fact' | 'review' | 'activity'; id?: string }
-export type Counts = { entities: number; relationships: number; evidence: number; reviewed: number; merged: number; deleted: number; other: number }
+export type Counts = {
+  entities: number
+  relationships: number
+  evidence: number
+  reviewed: number
+  merged: number
+  deleted: number
+  other: number
+}
 export type Notice = {
-  id: string; kind: NoticeKind; status: NoticeStatus; title: string
-  detail?: string; progress?: string; target?: NoticeTarget
+  id: string
+  kind: NoticeKind
+  status: NoticeStatus
+  title: string
+  detail?: string
+  progress?: string
+  target?: NoticeTarget
   /** Batches of remote changes this notice summarises; later chunks of a batch and further batches of the same author update it. */
-  batchIds?: string[]; counts?: Counts; author?: string
-  at: string; finished?: string; read?: boolean
+  batchIds?: string[]
+  counts?: Counts
+  author?: string
+  at: string
+  finished?: string
+  read?: boolean
   /** Colleague changes are listed but never raise the badge. */
   quiet?: boolean
 }
@@ -41,9 +58,13 @@ const plural = (n: number, one: string, many = `${one}s`) => `${n.toLocaleString
 
 export function describe(c: Counts) {
   const parts = [
-    c.entities && plural(c.entities, 'entity', 'entities'), c.relationships && plural(c.relationships, 'relationship'),
-    c.evidence && plural(c.evidence, 'new evidence item'), c.reviewed && plural(c.reviewed, 'review'),
-    c.merged && plural(c.merged, 'merge'), c.deleted && plural(c.deleted, 'deletion'), c.other && plural(c.other, 'other change'),
+    c.entities && plural(c.entities, 'entity', 'entities'),
+    c.relationships && plural(c.relationships, 'relationship'),
+    c.evidence && plural(c.evidence, 'new evidence item'),
+    c.reviewed && plural(c.reviewed, 'review'),
+    c.merged && plural(c.merged, 'merge'),
+    c.deleted && plural(c.deleted, 'deletion'),
+    c.other && plural(c.other, 'other change'),
   ].filter(Boolean)
   return parts.length ? parts.join(', ') : 'layout changes'
 }
@@ -78,14 +99,31 @@ export function targetOf(actions: BoardAction[], c: Counts): NoticeTarget {
 /** An agent works in many small calls: notices of the same author within this time are combined (and become unread again). */
 export const COMBINE_MS = 2 * 60_000
 
-export function noticesFor(batches: Map<string, BoardAction[]>, me: string, existing: Notice[], now = new Date().toISOString()): { updates: Notice[]; created: Notice[] } {
-  const updates: Notice[] = [], created: Notice[] = []
+export function noticesFor(
+  batches: Map<string, BoardAction[]>,
+  me: string,
+  existing: Notice[],
+  now = new Date().toISOString(),
+): { updates: Notice[]; created: Notice[] } {
+  const updates: Notice[] = [],
+    created: Notice[] = []
   const touched = new Map<string, Notice>()
   const merge = (notice: Notice, batchId: string, actions: BoardAction[]) => {
     const base = touched.get(notice.id) ?? notice
     const counts = count(actions, base.counts)
-    const next: Notice = { ...base, counts, detail: describe(counts), read: false, at: now, batchIds: [...new Set([...(base.batchIds ?? []), batchId])],
-      target: counts.evidence ? { kind: 'review' } : (base.batchIds?.length ?? 0) > 0 || base.target?.kind === 'activity' ? { kind: 'activity' } : base.target }
+    const next: Notice = {
+      ...base,
+      counts,
+      detail: describe(counts),
+      read: false,
+      at: now,
+      batchIds: [...new Set([...(base.batchIds ?? []), batchId])],
+      target: counts.evidence
+        ? { kind: 'review' }
+        : (base.batchIds?.length ?? 0) > 0 || base.target?.kind === 'activity'
+          ? { kind: 'activity' }
+          : base.target,
+    }
     touched.set(notice.id, next)
   }
   const fold = batches.size > 8
@@ -96,35 +134,67 @@ export function noticesFor(batches: Map<string, BoardAction[]>, me: string, exis
     if (!who) continue
     const pool = [...touched.values(), ...existing, ...created]
     const sameBatch = pool.find(n => n.batchIds?.includes(batchId))
-    if (sameBatch) { merge(sameBatch, batchId, actions); continue }
+    if (sameBatch) {
+      merge(sameBatch, batchId, actions)
+      continue
+    }
     // Read or not: looking at the panel while an agent works must not split its session.
-    const recent = pool.find(n => n.kind === who.kind && n.author === who.author && n.status === 'info' && n.batchIds?.length &&
-      Date.parse(now) - Date.parse(n.at) < COMBINE_MS)
-    if (recent) { merge(recent, batchId, actions); continue }
+    const recent = pool.find(
+      n =>
+        n.kind === who.kind &&
+        n.author === who.author &&
+        n.status === 'info' &&
+        n.batchIds?.length &&
+        Date.parse(now) - Date.parse(n.at) < COMBINE_MS,
+    )
+    if (recent) {
+      merge(recent, batchId, actions)
+      continue
+    }
     if (fold && (who.kind === 'colleague' || (who.kind === 'agent' && ++agents > 5))) {
       const key = who.kind
       const group = folded.get(key) ?? { kind: who.kind, actions: [], authors: new Set<string>() }
-      for (const item of actions) group.actions.push(item)  // a batch can hold tens of thousands of actions
+      for (const item of actions) group.actions.push(item) // a batch can hold tens of thousands of actions
       group.authors.add(who.author)
       folded.set(key, group)
       continue
     }
     const counts = count(actions)
-    if (counts.entities + counts.relationships + counts.evidence + counts.reviewed + counts.merged + counts.deleted + counts.other === 0) continue  // moves only
-    created.push({ id: `batch:${batchId}`, batchIds: [batchId], kind: who.kind, status: 'info', author: who.author, counts, quiet: who.kind === 'colleague',
+    if (counts.entities + counts.relationships + counts.evidence + counts.reviewed + counts.merged + counts.deleted + counts.other === 0)
+      continue // moves only
+    created.push({
+      id: `batch:${batchId}`,
+      batchIds: [batchId],
+      kind: who.kind,
+      status: 'info',
+      author: who.author,
+      counts,
+      quiet: who.kind === 'colleague',
       title: who.kind === 'enricher' ? 'Enricher sent intelligence' : `${who.author} changed the board`,
-      detail: describe(counts), target: targetOf(actions, counts), at: now })
+      detail: describe(counts),
+      target: targetOf(actions, counts),
+      at: now,
+    })
   }
   for (const [, group] of folded) {
     const counts = count(group.actions)
-    created.push({ id: `sync:${group.kind}:${now}`, kind: group.kind, status: 'info', counts, quiet: group.kind === 'colleague',
+    created.push({
+      id: `sync:${group.kind}:${now}`,
+      kind: group.kind,
+      status: 'info',
+      counts,
+      quiet: group.kind === 'colleague',
       title: `${group.kind === 'colleague' ? 'Colleagues' : 'More agent changes'} synced: ${[...group.authors].slice(0, 3).join(', ')}${group.authors.size > 3 ? ` +${group.authors.size - 3}` : ''}`,
-      detail: describe(counts), target: { kind: 'activity' }, at: now })
+      detail: describe(counts),
+      target: { kind: 'activity' },
+      at: now,
+    })
   }
   // Notices created in this round and merged again stay "created"; the others are updates of existing ones.
   for (const [id, notice] of touched) {
     const index = created.findIndex(n => n.id === id)
-    if (index >= 0) created[index] = notice; else updates.push(notice)
+    if (index >= 0) created[index] = notice
+    else updates.push(notice)
   }
   return { updates, created }
 }
@@ -139,14 +209,30 @@ export function loadNotices(boardId: string): Notice[] {
     if (!Array.isArray(parsed)) return []
     // Work that was running when the page went away did not finish here.
     // Notices kept from before the rename of GTIEnricher to Enricher.
-    return parsed.filter(n => n && typeof n.id === 'string' && typeof n.title === 'string').map(n => (n.kind as string) === 'gtienricher' ? { ...n, kind: 'enricher' as const } : n).map(n => isActive(n)
-      ? { ...n, status: 'error' as const, finished: n.finished ?? new Date().toISOString(), detail: 'Interrupted by a reload. Check the board before running it again.' }
-      : n)
-  } catch { return [] }
+    return parsed
+      .filter(n => n && typeof n.id === 'string' && typeof n.title === 'string')
+      .map(n => ((n.kind as string) === 'gtienricher' ? { ...n, kind: 'enricher' as const } : n))
+      .map(n =>
+        isActive(n)
+          ? {
+              ...n,
+              status: 'error' as const,
+              finished: n.finished ?? new Date().toISOString(),
+              detail: 'Interrupted by a reload. Check the board before running it again.',
+            }
+          : n,
+      )
+  } catch {
+    return []
+  }
 }
 
 export function saveNotices(boardId: string, notices: Notice[]) {
-  try { localStorage.setItem(key(boardId), JSON.stringify(notices.slice(0, MAX_KEPT))) } catch { /* private mode: this session only */ }
+  try {
+    localStorage.setItem(key(boardId), JSON.stringify(notices.slice(0, MAX_KEPT)))
+  } catch {
+    /* private mode: this session only */
+  }
 }
 
 /** At most `size` tasks at once (e.g. several log imports); the rest wait in order. */
@@ -156,11 +242,14 @@ export function createLimiter(size: number) {
   return async function run<T>(task: () => Promise<T>, onQueued?: () => void): Promise<T> {
     if (active >= size) {
       onQueued?.()
-      await new Promise<void>(resolve => waiting.push(resolve))  // the finishing task hands its slot over
+      await new Promise<void>(resolve => waiting.push(resolve)) // the finishing task hands its slot over
     } else active++
-    try { return await task() } finally {
+    try {
+      return await task()
+    } finally {
       const next = waiting.shift()
-      if (next) next(); else active--
+      if (next) next()
+      else active--
     }
   }
 }

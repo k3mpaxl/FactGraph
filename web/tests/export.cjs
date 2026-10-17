@@ -5,20 +5,46 @@ const { buildViewModel } = require(path + '/viewModel.js')
 const { buildGraphSvg, safeScale, escapeXml, mix } = require(path + '/exportGraph.js')
 
 let clock = 0
-const act = (type, payload) => ({ id: `a${++clock}`, clock, at: '2026-09-29T00:00:00.000Z', actor: 'x', author: 'x', boardId: 'b', type, payload })
+const act = (type, payload) => ({
+  id: `a${++clock}`,
+  clock,
+  at: '2026-09-29T00:00:00.000Z',
+  actor: 'x',
+  author: 'x',
+  boardId: 'b',
+  type,
+  payload,
+})
 const ops = [
   act('entity.add', { id: 'atk', name: 'APT <script>alert(1)</script> & "co"', kind: 'Threat Actor', x: 0, y: 0 }),
   act('entity.add', { id: 'ip', name: '203.0.113.7', kind: 'IP', x: 0, y: 200 }),
   act('entity.add', { id: 'kv', name: 'kv-prod', kind: 'Key Vault', x: 500, y: 100 }),
   act('entity.add', { id: 'far', name: 'far away', kind: 'Device', x: 5000, y: 5000 }),
   act('fact.add', { id: 'ctl', subject_id: 'atk', predicate: 'controls', object_id: 'ip' }),
-  act('fact.add', { id: 'ev', predicate: 'listed secrets', participants: [{ entity_id: 'atk', role: 'actor' }, { entity_id: 'ip', role: 'source' }, { entity_id: 'kv', role: 'target' }], technique: 'T1555' }),
+  act('fact.add', {
+    id: 'ev',
+    predicate: 'listed secrets',
+    participants: [
+      { entity_id: 'atk', role: 'actor' },
+      { entity_id: 'ip', role: 'source' },
+      { entity_id: 'kv', role: 'target' },
+    ],
+    technique: 'T1555',
+  }),
   act('assertion.add', { id: 'e', fact_id: 'ev', stance: 'supports', note: 'x', valid_from: '2026-09-28T10:42:00.000Z' }),
 ]
-for (let i = 0; i < 30; i++) { ops.push(act('entity.add', { id: `r${i}`, name: `repo-${i}`, kind: 'Repository', x: 900, y: i * 60 })); ops.push(act('fact.add', { id: `f${i}`, subject_id: 'ip', predicate: 'cloned', object_id: `r${i}` })) }
+for (let i = 0; i < 30; i++) {
+  ops.push(act('entity.add', { id: `r${i}`, name: `repo-${i}`, kind: 'Repository', x: 900, y: i * 60 }))
+  ops.push(act('fact.add', { id: `f${i}`, subject_id: 'ip', predicate: 'cloned', object_id: `r${i}` }))
+}
 ops.push(act('group.add', { id: 'g', name: 'Repos & forks', rule: { kinds: ['Repository'] }, collapsed: true }))
 const data = project('b', ops).data
-const view = buildViewModel(data.entities, data.facts, data.groups, { visibleLayers: null, collapseActivities: false, showLanes: true, entityTypes: [] })
+const view = buildViewModel(data.entities, data.facts, data.groups, {
+  visibleLayers: null,
+  collapseActivities: false,
+  showLanes: true,
+  entityTypes: [],
+})
 const base = { nodes: view.nodes, edges: view.edges, entityTypes: [], theme: 'light' }
 
 const full = buildGraphSvg({ ...base, title: 'Board <1>', subtitle: 'Layers: all', legend: true })
@@ -28,7 +54,10 @@ assert.ok(full.svg.includes('APT &lt;script&gt;'))
 assert.ok(full.svg.includes('Repos &amp; forks'), 'group label is escaped')
 assert.ok(!/&(?!amp;|lt;|gt;|quot;|apos;|#)/.test(full.svg), 'no raw ampersands')
 assert.ok(full.svg.includes('×30'), 'bundled edge count')
-assert.ok(full.svg.includes('LISTED') === false && full.svg.includes('listed secrets') && full.svg.includes('T1555'), 'activity label with technique')
+assert.ok(
+  full.svg.includes('LISTED') === false && full.svg.includes('listed secrets') && full.svg.includes('T1555'),
+  'activity label with technique',
+)
 assert.ok(full.svg.includes('ACTOR') && full.svg.includes('TARGET'), 'role labels on spokes')
 assert.ok(full.svg.includes('Supported 0') && full.svg.includes('Unknown 31'), 'legend counts bundled relationships')
 assert.ok(full.svg.includes('IDENTITY &amp; ACCESS'), 'layer lanes')
@@ -58,19 +87,56 @@ assert.equal(empty.nodeCount, 0)
 {
   const { analyzeImpact, exportMarks } = require(path + '/impact.js')
   clock = 0
-  const attack = [act('entity.add', { id: 'cred', name: 'stolen secret', kind: 'Credential', x: 0, y: 0 }), act('entity.add', { id: 'vault', name: 'kv-prod', kind: 'Key Vault', x: 400, y: 0 }),
-    act('entity.add', { id: 'calm', name: 'unrelated', kind: 'Device', x: 0, y: 300 }), act('entity.add', { id: 'other', name: 'other', kind: 'Device', x: 400, y: 300 }),
-    act('fact.add', { id: 'f', predicate: 'secret get', participants: [{ entity_id: 'cred', role: 'tool' }, { entity_id: 'vault', role: 'target' }] }),
+  const attack = [
+    act('entity.add', { id: 'cred', name: 'stolen secret', kind: 'Credential', x: 0, y: 0 }),
+    act('entity.add', { id: 'vault', name: 'kv-prod', kind: 'Key Vault', x: 400, y: 0 }),
+    act('entity.add', { id: 'calm', name: 'unrelated', kind: 'Device', x: 0, y: 300 }),
+    act('entity.add', { id: 'other', name: 'other', kind: 'Device', x: 400, y: 300 }),
+    act('fact.add', {
+      id: 'f',
+      predicate: 'secret get',
+      participants: [
+        { entity_id: 'cred', role: 'tool' },
+        { entity_id: 'vault', role: 'target' },
+      ],
+    }),
     act('assertion.add', { id: 'e', fact_id: 'f', stance: 'supports', note: 'row', valid_from: '2026-09-20T00:00:00.000Z' }),
     act('fact.add', { id: 'g', subject_id: 'calm', predicate: 'connects to', object_id: 'other' }),
-    act('entity.update', { id: 'cred', compromise: { from: '2026-09-15T00:00:00.000Z' } })]
+    act('entity.update', { id: 'cred', compromise: { from: '2026-09-15T00:00:00.000Z' } }),
+  ]
   const data = project('b', attack).data
-  const view = buildViewModel(data.entities, data.facts, data.groups, { visibleLayers: null, collapseActivities: false, showLanes: false, entityTypes: [] })
+  const view = buildViewModel(data.entities, data.facts, data.groups, {
+    visibleLayers: null,
+    collapseActivities: false,
+    showLanes: false,
+    entityTypes: [],
+  })
   const marks = exportMarks(analyzeImpact(data), data.groups)
   assert.deepEqual([...marks.badges.values()].map(b => b.label).sort(), ['Compromised', 'Secrets exposed'])
-  const svg = buildGraphSvg({ nodes: view.nodes, edges: view.edges, entityTypes: [], theme: 'light', measure: (t, s) => t.length * s * 0.55, impact: marks }).svg
-  assert.match(svg, />Compromised</); assert.match(svg, />Secrets exposed</)
-  assert.equal((svg.match(/marker-end="url\(#arrow-refuted\)"/g) ?? []).length, 2, 'both spokes of the attacker activity are red; the unrelated relation is not')
-  assert.ok(!buildGraphSvg({ nodes: view.nodes, edges: view.edges, entityTypes: [], theme: 'light', measure: (t, s) => t.length * s * 0.55 }).svg.includes('Compromised'), 'without impact: no markers')
+  const svg = buildGraphSvg({
+    nodes: view.nodes,
+    edges: view.edges,
+    entityTypes: [],
+    theme: 'light',
+    measure: (t, s) => t.length * s * 0.55,
+    impact: marks,
+  }).svg
+  assert.match(svg, />Compromised</)
+  assert.match(svg, />Secrets exposed</)
+  assert.equal(
+    (svg.match(/marker-end="url\(#arrow-refuted\)"/g) ?? []).length,
+    2,
+    'both spokes of the attacker activity are red; the unrelated relation is not',
+  )
+  assert.ok(
+    !buildGraphSvg({
+      nodes: view.nodes,
+      edges: view.edges,
+      entityTypes: [],
+      theme: 'light',
+      measure: (t, s) => t.length * s * 0.55,
+    }).svg.includes('Compromised'),
+    'without impact: no markers',
+  )
 }
 console.log('SVG export: escaping, bundled groups, activities, lanes, legend, area/selection, themes and PNG size limits passed')

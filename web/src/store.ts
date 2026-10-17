@@ -5,11 +5,11 @@ export type BoardMeta = { id: string; name: string; updatedAt: string }
 
 interface FactGraphDB extends DBSchema {
   actions: {
-    key: [string, string];
-    value: BoardAction;
-    indexes: { byBoard: string };
-  };
-  boards: { key: string; value: BoardMeta };
+    key: [string, string]
+    value: BoardAction
+    indexes: { byBoard: string }
+  }
+  boards: { key: string; value: BoardMeta }
 }
 
 const database = openDB<FactGraphDB>('factgraph-browser', 1, {
@@ -53,9 +53,22 @@ export async function deleteBoard(boardId: string) {
   const transaction = db.transaction(['actions', 'boards'], 'readwrite')
   const actions = transaction.objectStore('actions')
   let cursor = await actions.index('byBoard').openKeyCursor(IDBKeyRange.only(boardId))
-  while (cursor) { void actions.delete(cursor.primaryKey); cursor = await cursor.continue() }
+  while (cursor) {
+    void actions.delete(cursor.primaryKey)
+    cursor = await cursor.continue()
+  }
   await transaction.objectStore('boards').delete(boardId)
   await transaction.done
-  for (const key of [`factgraph:view:${boardId}`, `factgraph:notifications:${boardId}`]) try { localStorage.removeItem(key) } catch { /* private mode */ }
-  for (const key of [`factgraph:actor:${boardId}`, `factgraph:sessionToken:${boardId}`]) try { sessionStorage.removeItem(key) } catch { /* private mode */ }
+  for (const key of [`factgraph:view:${boardId}`, `factgraph:notifications:${boardId}`])
+    try {
+      localStorage.removeItem(key)
+    } catch {
+      /* private mode */
+    }
+  for (const key of [`factgraph:actor:${boardId}`, `factgraph:sessionToken:${boardId}`])
+    try {
+      sessionStorage.removeItem(key)
+    } catch {
+      /* private mode */
+    }
 }

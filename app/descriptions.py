@@ -1,4 +1,5 @@
 """Purpose texts shared by OpenAPI and MCP so REST and agent clients read identical guidance."""
+
 from __future__ import annotations
 
 import inspect
@@ -63,8 +64,11 @@ def purpose(route: APIRoute) -> str:
     if not doc and name.startswith(('list_', 'get_')):
         noun = name.split('_', 1)[1].replace('_', ' ')
         singular = {'entities': 'entity', 'evidence': 'evidence item'}.get(noun, noun.rstrip('s'))
-        doc = (f'List {noun} of the board with IDs. q filters by text; offset/limit paginate (limit ≤ 1000). Long texts are cut to 2,000 characters (<field>_truncated); read one record for the full text.' if name.startswith('list_')
-               else f'Read one {singular} of the board by its ID, with all stored fields. Returns 404 if it does not exist on this board.')
+        doc = (
+            f'List {noun} of the board with IDs. q filters by text; offset/limit paginate (limit ≤ 1000). Long texts are cut to 2,000 characters (<field>_truncated); read one record for the full text.'
+            if name.startswith('list_')
+            else f'Read one {singular} of the board by its ID, with all stored fields. Returns 404 if it does not exist on this board.'
+        )
     return doc
 
 
@@ -72,7 +76,9 @@ def tool_description(route: APIRoute) -> str:
     method = next(iter(route.methods))
     notes = [f'REST equivalent: {method} {route.path}.']
     if any(p.name == 'board_id' for p in route.dependant.path_params):
-        notes.append('The board must be open in a browser. With the board token in the X-FactGraph-Token header, leave board_id and board_token empty: the token names the board.')
+        notes.append(
+            'The board must be open in a browser. With the board token in the X-FactGraph-Token header, leave board_id and board_token empty: the token names the board.'
+        )
     if method == 'PATCH':
         notes.append('Omitted fields stay unchanged; explicit null clears nullable fields.')
     return f"{purpose(route)}\n\n{' '.join(notes)}"

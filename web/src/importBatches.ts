@@ -8,5 +8,7 @@ export const ownImportBatches = new Set<string>()
 
 /** Rows that arrive as a file import this tab did not start were sent by an agent (or a script): treat them as REST. */
 export function trustedDrafts(drafts: ActionDraft[]): ActionDraft[] {
-  return drafts.map(draft => draft.channel === 'Import' && !(draft.batch_id && ownImportBatches.has(draft.batch_id)) ? { ...draft, channel: 'REST' } : draft)
+  return drafts.map(draft =>
+    draft.channel === 'Import' && !(draft.batch_id && ownImportBatches.has(draft.batch_id)) ? { ...draft, channel: 'REST' } : draft,
+  )
 }

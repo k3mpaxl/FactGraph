@@ -6,7 +6,19 @@ export const ROW_FIELDS: [string, string[]][] = [
   ['Command line', ['ProcessCommandLine', 'CommandLine', 'InitiatingProcessCommandLine']],
   ['Parent process', ['InitiatingProcessFileName', 'ParentProcessName', 'InitiatingProcessParentFileName']],
   ['Device', ['DeviceName', 'Computer', 'HostName']],
-  ['Who', ['Caller', 'ServicePrincipalName', 'UserPrincipalName', 'author_name', 'Actor', 'AccountUpn', 'InitiatingProcessAccountUpn', 'AccountName']],
+  [
+    'Who',
+    [
+      'Caller',
+      'ServicePrincipalName',
+      'UserPrincipalName',
+      'author_name',
+      'Actor',
+      'AccountUpn',
+      'InitiatingProcessAccountUpn',
+      'AccountName',
+    ],
+  ],
   ['File', ['FileName', 'FolderPath', 'SHA256']],
   ['Remote', ['RemoteUrl', 'RemoteIP', 'DestinationIp']],
   ['On', ['_ResourceId', 'ResourceDisplayName', 'entity_path', 'Application', 'target_details']],
@@ -23,11 +35,17 @@ const rowCache = new WeakMap<Assertion, Record<string, unknown> | null>()
 export function rowOf(assertion: Assertion): Record<string, unknown> | null {
   if (rowCache.has(assertion)) return rowCache.get(assertion)!
   let row: Record<string, unknown> | null = null
-  if (assertion.note?.startsWith('{')) try { row = JSON.parse(assertion.note) } catch { row = null }
+  if (assertion.note?.startsWith('{'))
+    try {
+      row = JSON.parse(assertion.note)
+    } catch {
+      row = null
+    }
   rowCache.set(assertion, row)
   return row
 }
-const pick = (row: Record<string, unknown>, path: string) => path.split('.').reduce<unknown>((v, k) => v && typeof v === 'object' ? (v as Record<string, unknown>)[k] : undefined, row)
+const pick = (row: Record<string, unknown>, path: string) =>
+  path.split('.').reduce<unknown>((v, k) => (v && typeof v === 'object' ? (v as Record<string, unknown>)[k] : undefined), row)
 export function rowFields(assertion: Assertion): [string, string][] {
   const row = rowOf(assertion)
   if (!row) return []
@@ -38,7 +56,6 @@ export function rowFields(assertion: Assertion): [string, string][] {
   }
   return fields
 }
-
 
 /** The column of a row that holds a given time (which one the import used as the event time), if any. */
 export function timeSourceOf(row: Record<string, unknown> | null, iso: string | null): string | null {
@@ -56,7 +73,14 @@ export function timeSourceOf(row: Record<string, unknown> | null, iso: string | 
 /** The keys of a row in reading order: the fields an analyst looks at first, then the rest that has a value. */
 export function orderedKeys(row: Record<string, unknown>): string[] {
   const first: string[] = []
-  for (const [, paths] of ROW_FIELDS) for (const path of paths) { const key = path.split('.')[0]; if (key in row && !first.includes(key)) { first.push(key); break } }
+  for (const [, paths] of ROW_FIELDS)
+    for (const path of paths) {
+      const key = path.split('.')[0]
+      if (key in row && !first.includes(key)) {
+        first.push(key)
+        break
+      }
+    }
   const filled = (k: string) => row[k] !== undefined && row[k] !== null && row[k] !== ''
   return [...first.filter(filled), ...Object.keys(row).filter(k => !first.includes(k) && filled(k))]
 }

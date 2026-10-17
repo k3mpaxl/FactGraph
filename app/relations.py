@@ -5,6 +5,7 @@ Nathan) lists for token and session IDs, users, devices, apps, resources … the
 thing, with the guidance and KQL for the join. An agent or analyst looking at an evidence row asks: with this column,
 where else can I look?
 """
+
 from __future__ import annotations
 
 import json
@@ -42,8 +43,13 @@ def find_joins(table: str = "", column: str = "", family: str = "", limit: int =
         counts: dict[str, int] = {}
         for relation in data["relations"]:
             counts[relation["family"]] = counts.get(relation["family"], 0) + 1
-        return {**meta, "families": [{"family": key, "label": label, "relations": counts.get(key, 0)}
-                                     for key, label in sorted(data["families"].items(), key=lambda item: -counts.get(item[0], 0))]}
+        return {
+            **meta,
+            "families": [
+                {"family": key, "label": label, "relations": counts.get(key, 0)}
+                for key, label in sorted(data["families"].items(), key=lambda item: -counts.get(item[0], 0))
+            ],
+        }
     items = []
     for relation in data["relations"]:
         if family and relation["family"] != family:
@@ -51,10 +57,18 @@ def find_joins(table: str = "", column: str = "", family: str = "", limit: int =
         for here, there in (("from", "to"), ("to", "from")):
             if (table or column) and not end_matches(relation[here], table, column):
                 continue
-            items.append({"id": relation["id"], "title": relation["title"], "family": relation["family"],
-                          "key": data["families"].get(relation["family"], relation["family"]),
-                          "here": relation[here], "there": relation[there], "guidance": relation["guidance"],
-                          **({"kql": relation["kql"]} if relation.get("kql") else {}),
-                          **({"sources": relation["sources"]} if relation.get("sources") else {})})
+            items.append(
+                {
+                    "id": relation["id"],
+                    "title": relation["title"],
+                    "family": relation["family"],
+                    "key": data["families"].get(relation["family"], relation["family"]),
+                    "here": relation[here],
+                    "there": relation[there],
+                    "guidance": relation["guidance"],
+                    **({"kql": relation["kql"]} if relation.get("kql") else {}),
+                    **({"sources": relation["sources"]} if relation.get("sources") else {}),
+                }
+            )
             break
     return {**meta, "total": len(items), "items": items[:limit]}

@@ -1,0 +1,4 @@
+# Formatting-only and move-only commits; git blame skips them with:
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs
+# Split App.tsx, Prettier and Ruff
+ddb27f95e2c0f8c0e6303297efc9383fdd148714

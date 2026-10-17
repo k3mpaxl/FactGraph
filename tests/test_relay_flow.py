@@ -4,6 +4,7 @@ The relay forwards a browser's messages to the others. When it waited for a slow
 stopped reading the sender (uvicorn reads one message ahead), the sender's pong stayed unread, and uvicorn closed the
 healthy sender with "keepalive ping timeout": both reconnected and the sync of a large board started over and over.
 """
+
 import asyncio
 import json
 import os
@@ -29,10 +30,28 @@ class RelayFlowTest(unittest.IsolatedAsyncioTestCase):
             sock.bind(("127.0.0.1", 0))
             cls.port = sock.getsockname()[1]
         # Fast keepalive pings, so a stalled reader is noticed within seconds.
-        cls.process = subprocess.Popen([sys.executable, "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", str(cls.port),
-                                        "--log-level", "error", "--ws-ping-interval", "1", "--ws-ping-timeout", "4"],
-                                       cwd=Path(__file__).resolve().parents[1], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                       env={**os.environ})
+        cls.process = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "uvicorn",
+                "app.main:app",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                str(cls.port),
+                "--log-level",
+                "error",
+                "--ws-ping-interval",
+                "1",
+                "--ws-ping-timeout",
+                "4",
+            ],
+            cwd=Path(__file__).resolve().parents[1],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            env={**os.environ},
+        )
         for _ in range(100):
             try:
                 with urlopen(f"http://127.0.0.1:{cls.port}/api/health", timeout=0.1):
@@ -71,6 +90,7 @@ class RelayFlowTest(unittest.IsolatedAsyncioTestCase):
             async def drain(websocket):
                 async for _ in websocket:
                     pass
+
             reader, drainer = asyncio.create_task(read_fast()), asyncio.create_task(drain(sender))
             started = time.monotonic()
             try:

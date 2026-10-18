@@ -387,6 +387,45 @@ def location(fields=("LocationDetails.countryOrRegion", "Location", "Country")) 
     return Part("source", "Location", fields)
 
 
+# A path segment that names one object: a GUID, a long ID, a number or a user's address.
+GRAPH_ID = re.compile(r"/(?:[0-9a-fA-F]{8}-[0-9a-fA-F-]{27}|[^/@]+@[^/]+|[A-Za-z0-9+=_-]{20,}|\d+)(?=/|$)")
+
+
+def graph_operation(row: Row, g: Callable) -> str:
+    """ "GET /v1.0/users/{id}/messages": the request with object IDs replaced, so the same call on many objects is one
+    activity (its evidence keeps every original row). A non-2xx answer is named, so failed attempts stand apart."""
+    uri = text(g("RequestUri"))
+    path = re.sub(r"^[a-z]+://[^/]+", "", uri).split("?")[0] or uri
+    operation = f"{text(g('RequestMethod')).upper()} {GRAPH_ID.sub('/{id}', path)}".strip()
+    status = text(g("ResponseStatusCode"))
+    return operation + (f" (failed {status})" if status and not status.startswith("2") else "")
+
+
+def graph_parts(ip: str, resource: str) -> tuple[Part, ...]:
+    """Who called (a user, or a service principal for app-only calls), with which client app, from where, on what."""
+    return (
+        Part("identity", "User", ("UserId",), (Ident("UserId", namespace="entra-object-id"),)),
+        Part(
+            "identity",
+            "Service Principal",
+            ("ServicePrincipalId",),
+            (Ident("ServicePrincipalId", namespace="entra-object-id"), Ident("AppId", namespace="entra-app-id")),
+        ),
+        # The client app of a delegated call (an app-only call is the service principal itself).
+        Part(
+            "tool",
+            "Service",
+            ("AppId",),
+            (Ident("AppId", namespace="entra-app-id"),),
+            name=lambda r, g: "" if text(g("ServicePrincipalId")) else text(g("AppId")),
+        ),
+        Part("source", "IP", (ip,), (Ident(ip, "ip"),)),
+        # The calling device (its Entra device ID), when it is on the board already.
+        Part("via", "Device", ("DeviceId",), (Ident("DeviceId", namespace="entra-device-id"),), lower=True, create=False),
+        Part("target", "Service", ("RequestUri",), name=lambda r, g: resource),
+    )
+
+
 MAPPINGS: tuple[Mapping, ...] = (
     # ---------------------------------------------------------------- Defender XDR (and the same tables in Sentinel)
     Mapping(
@@ -706,6 +745,32 @@ MAPPINGS: tuple[Mapping, ...] = (
         operation=lambda r, g: f"alert evidence ({text(g('EvidenceRole')).lower() or 'related'})",
         locator=("AlertId", "ReportId"),
     ),
+    Mapping(
+        "GraphAPIAuditEvents",
+        "Defender XDR",
+        ("RequestMethod", "RequestUri", "ResponseStatusCode", "IpAddress", "UniqueTokenIdentifier"),
+        (
+            Part("identity", "User", ("AccountObjectId",), (Ident("AccountObjectId", namespace="entra-object-id"),)),
+            Part(
+                "identity",
+                "Service Principal",
+                ("ServicePrincipalId",),
+                (Ident("ServicePrincipalId", namespace="entra-object-id"), Ident("ApplicationId", namespace="entra-app-id")),
+            ),
+            Part(
+                "tool",
+                "Service",
+                ("ApplicationId",),
+                (Ident("ApplicationId", namespace="entra-app-id"),),
+                name=lambda r, g: "" if text(g("ServicePrincipalId")) else text(g("ApplicationId")),
+            ),
+            Part("source", "IP", ("IpAddress",), (Ident("IpAddress", "ip"),)),
+            Part("target", "Service", ("RequestUri",), name=lambda r, g: "Microsoft Graph"),
+        ),
+        operation=graph_operation,
+        locator=("ReportId", "RequestId"),
+        details=(("status", "ResponseStatusCode"), ("scopes", "Scopes")),
+    ),
     # Inventory: what a device, user or app is, for entities already on the board. A DeviceInfo row with a public IP
     # says where the device was online (the egress a baseline needs); the others only add IDs and names.
     Mapping(
@@ -901,6 +966,52 @@ MAPPINGS: tuple[Mapping, ...] = (
             ("user agent", "UserAgent"),
             ("session", "UniqueTokenIdentifier"),
         ),
+    ),
+    # Managed identities sign in like service principals; their own table says which identity and resource.
+    Mapping(
+        "AADManagedIdentitySignInLogs",
+        "Sentinel",
+        ("ServicePrincipalName", "ServicePrincipalId", "ResourceDisplayName", "ResultType", "ManagedServiceIdentity"),
+        (
+            Part(
+                "identity",
+                "Managed Identity",
+                ("ServicePrincipalName",),
+                (Ident("ServicePrincipalId", namespace="entra-object-id"), Ident("AppId", namespace="entra-app-id")),
+            ),
+            Part("source", "IP", ("IPAddress",), (Ident("IPAddress", "ip"),)),
+            Part(
+                "target",
+                "Service",
+                ("ResourceDisplayName",),
+                (Ident("ResourceIdentity", namespace="entra-app-id"), Ident("ResourceServicePrincipalId", namespace="entra-object-id")),
+            ),
+        ),
+        operation=sign_in,
+        time=("TimeGenerated", "CreatedDateTime"),
+        locator=("CorrelationId", "Id"),
+        details=(("credential", "ClientCredentialType"), ("session", "UniqueTokenIdentifier")),
+    ),
+    # Microsoft Graph and the legacy Azure AD Graph: what an identity read and changed in the directory, mail, files.
+    Mapping(
+        "MicrosoftGraphActivityLogs",
+        "Sentinel",
+        ("RequestMethod", "RequestUri", "ResponseStatusCode", "IPAddress", "SignInActivityId"),
+        graph_parts("IPAddress", "Microsoft Graph"),
+        operation=graph_operation,
+        time=("TimeGenerated",),
+        locator=("RequestId",),
+        details=(("status", "ResponseStatusCode"), ("user agent", "UserAgent"), ("scopes", "Scopes"), ("roles", "Roles")),
+    ),
+    Mapping(
+        "AADGraphActivityLogs",
+        "Sentinel",
+        ("RequestMethod", "RequestUri", "ResponseStatusCode", "CallerIpAddress", "SignInActivityId"),
+        graph_parts("CallerIpAddress", "Azure AD Graph"),
+        operation=graph_operation,
+        time=("TimeRequested", "TimeGenerated"),
+        locator=("RequestId",),
+        details=(("status", "ResponseStatusCode"), ("user agent", "UserAgent"), ("scopes", "Scopes")),
     ),
     Mapping(
         "AuditLogs",

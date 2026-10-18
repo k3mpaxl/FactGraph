@@ -27,7 +27,17 @@ export type Gap = {
   /** The built-in mapping that imports the result rows; without one the rows are kept as a source. */
   imports_as?: string
 }
-export type GapRule = 'identity-info' | 'device-info' | 'app-info' | 'process-launch' | 'hunt'
+export type GapRule =
+  | 'identity-info'
+  | 'device-info'
+  | 'app-info'
+  | 'process-launch'
+  | 'sp-signins'
+  | 'mi-signins'
+  | 'azure-activity'
+  | 'graph-activity'
+  | 'aad-graph-activity'
+  | 'hunt'
 export type AnsweredGap = { id: string; rule: string; entities: string[]; rows: number; note: string; source_id: string; at: string }
 export type GapReport = { gaps: Gap[]; answered: AnsweredGap[] }
 
@@ -82,12 +92,12 @@ function relevant(data: Pick<GraphData, 'entities' | 'facts'>, impact: Impact): 
 }
 
 /** UTC times of the evidence of these facts, for a query window that also finds what happened just before. */
-function windowOf(facts: Fact[]): string {
+function windowOf(facts: Fact[], daysBefore = 7): string {
   const times = facts.flatMap(f => f.assertions.map(a => a.valid_from).filter((t): t is string => !!t && !Number.isNaN(Date.parse(t))))
   if (!times.length) return 'let start = ago(30d);\nlet end = now();\n'
   times.sort()
   const day = 86_400_000
-  return `let start = datetime(${new Date(Date.parse(times[0]) - 7 * day).toISOString()});\nlet end = datetime(${new Date(Date.parse(times.at(-1)!) + day).toISOString()});\n`
+  return `let start = datetime(${new Date(Date.parse(times[0]) - daysBefore * day).toISOString()});\nlet end = datetime(${new Date(Date.parse(times.at(-1)!) + day).toISOString()});\n`
 }
 
 export function boardGaps(data: GraphData, impact: Impact = analyzeImpact(data)): GapReport {
@@ -228,10 +238,130 @@ export function boardGaps(data: GraphData, impact: Impact = analyzeImpact(data))
     )
   }
 
-  // The hunts the attack impact suggests for tables nothing was imported from yet.
+  // What the identities the attack touches did, per source the board has no rows from for them: their sign-ins, Azure
+  // control-plane operations and Graph calls, as original rows the built-in mappings import. Each identity counts as
+  // covered for a table once evidence from it touches the identity (so a dropped export closes the gap too), or once a
+  // gap for it was answered. Two weeks before the first evidence, for the baseline before the compromise.
+  const ends = (fact: Fact) => (fact.participants?.length ? fact.participants.map(p => p.entity_id) : [fact.subject_id, fact.object_id])
+  const tablesOf = new Map<string, Set<string>>()
+  const factsOf = new Map<string, Fact[]>()
+  for (const fact of data.facts) {
+    const tables = new Set(fact.assertions.map(a => /^([A-Za-z]\w+)/.exec(a.locator ?? '')?.[1]).filter((t): t is string => !!t))
+    for (const id of ends(fact)) {
+      if (!scope.has(id)) continue
+      const set = tablesOf.get(id) ?? new Set<string>()
+      for (const table of tables) set.add(table)
+      tablesOf.set(id, set)
+      factsOf.set(id, [...(factsOf.get(id) ?? []), fact])
+    }
+  }
+  const lacks = (rule: GapRule, tables: string[], pattern: RegExp, usable: (e: Entity) => boolean) =>
+    candidates(pattern, rule, e => usable(e) && !tables.some(t => tablesOf.get(e.id)?.has(t)))
+  const level = (entities: Entity[], quiet: Gap['priority'] = 'medium'): Gap['priority'] =>
+    entities.some(e => marked(e.id)) ? 'high' : impact.seeds.length ? quiet : 'low'
+  const activity = (
+    rule: GapRule,
+    entities: Entity[],
+    gap: Pick<Gap, 'question' | 'why' | 'tables' | 'imports_as'> & {
+      filter: string
+      table: string
+      time?: string
+      quiet?: Gap['priority']
+    },
+  ) => {
+    if (!entities.length || !gap.filter) return
+    const facts = [...new Set(entities.flatMap(e => factsOf.get(e.id) ?? []))]
+    add(
+      {
+        rule,
+        priority: level(entities, gap.quiet),
+        question: gap.question,
+        why: gap.why,
+        entities: entities.map(e => e.id),
+        tables: gap.tables,
+        platform: 'sentinel',
+        imports_as: gap.imports_as,
+        query: `${windowOf(facts, 14)}${gap.table}\n| where ${gap.time ?? 'TimeGenerated'} between (start .. end)\n| where ${gap.filter}\n| order by ${gap.time ?? 'TimeGenerated'} asc\n| take 20000`,
+      },
+      entities.map(e => e.id),
+    )
+  }
+  const hasIds = (e: Entity) => ids(e, 'entra-object-id').length > 0 || ids(e, 'entra-app-id').length > 0
+  const filterBy = (pairs: [string, string[]][]) =>
+    pairs
+      .filter(([, values]) => values.length)
+      .map(([column, values]) => `${column} in~ (${list([...new Set(values)].slice(0, MAX_VALUES))})`)
+      .join(' or ')
+  const principals = lacks('sp-signins', ['AADServicePrincipalSignInLogs', 'EntraIdSpnSignInEvents'], /service principal/i, hasIds)
+  activity('sp-signins', principals, {
+    question: `How did ${principals.length === 1 ? 'this service principal' : `these ${principals.length} service principals`} sign in: from where, with which credential, to what?`,
+    why: 'Every sign-in with its IP, credential (key ID or certificate) and resource: an IP or key nobody knows is the next pivot, a key added during the attack is a backdoor.',
+    tables: ['AADServicePrincipalSignInLogs'],
+    imports_as: 'AADServicePrincipalSignInLogs',
+    table: 'AADServicePrincipalSignInLogs',
+    filter: filterBy([
+      ['ServicePrincipalId', principals.flatMap(e => ids(e, 'entra-object-id'))],
+      ['AppId', principals.flatMap(e => ids(e, 'entra-app-id'))],
+    ]),
+  })
+  const managed = lacks('mi-signins', ['AADManagedIdentitySignInLogs'], /managed identity/i, hasIds)
+  activity('mi-signins', managed, {
+    question: `Which tokens did ${managed.length === 1 ? 'this managed identity' : `these ${managed.length} managed identities`} get, for which resources?`,
+    why: 'A managed identity used from where it does not run (another IP, another resource) means its token or its host was taken over.',
+    tables: ['AADManagedIdentitySignInLogs'],
+    imports_as: 'AADManagedIdentitySignInLogs',
+    table: 'AADManagedIdentitySignInLogs',
+    filter: filterBy([
+      ['ServicePrincipalId', managed.flatMap(e => ids(e, 'entra-object-id'))],
+      ['AppId', managed.flatMap(e => ids(e, 'entra-app-id'))],
+    ]),
+  })
+  const upnOf = (e: Entity) => e.identifiers.filter(i => i.scheme === 'email').map(i => i.normalized_value)
+  const identity = /\buser\b|account|person|service principal|managed identity/i
+  const callers = lacks('azure-activity', ['AzureActivity'], identity, e => ids(e, 'entra-object-id').length > 0 || upnOf(e).length > 0)
+  activity('azure-activity', callers, {
+    question: `What did ${callers.length === 1 ? 'this identity' : `these ${callers.length} identities`} do in Azure?`,
+    why: 'Control-plane operations (Caller is the UPN of a user, the object ID of a service principal): listKeys and listCredentials expose secrets, role assignments and new credentials are persistence, deletes are impact.',
+    tables: ['AzureActivity'],
+    imports_as: 'AzureActivity',
+    table: 'AzureActivity',
+    filter: filterBy([['Caller', [...callers.flatMap(e => ids(e, 'entra-object-id')), ...callers.flatMap(upnOf)]]]),
+  })
+  const graphFilter = (entities: Entity[]) =>
+    filterBy([
+      ['UserId', entities.filter(e => !/service principal|managed identity/i.test(e.kind)).flatMap(e => ids(e, 'entra-object-id'))],
+      [
+        'ServicePrincipalId',
+        entities.filter(e => /service principal|managed identity/i.test(e.kind)).flatMap(e => ids(e, 'entra-object-id')),
+      ],
+      ['AppId', entities.filter(e => /service principal|managed identity/i.test(e.kind)).flatMap(e => ids(e, 'entra-app-id'))],
+    ])
+  const graphCallers = lacks('graph-activity', ['MicrosoftGraphActivityLogs', 'GraphAPIAuditEvents'], identity, hasIds)
+  activity('graph-activity', graphCallers, {
+    question: `What did ${graphCallers.length === 1 ? 'this identity' : `these ${graphCallers.length} identities`} read and change through Microsoft Graph?`,
+    why: 'Directory, mail, files and app registrations through Graph never show in AzureActivity: enumeration (users, groups, service principals), mailbox reads and new app credentials. Calls are grouped by request with IDs replaced; failed ones stand apart.',
+    tables: ['MicrosoftGraphActivityLogs'],
+    imports_as: 'MicrosoftGraphActivityLogs',
+    table: 'MicrosoftGraphActivityLogs',
+    filter: graphFilter(graphCallers),
+  })
+  const legacy = lacks('aad-graph-activity', ['AADGraphActivityLogs'], identity, hasIds)
+  activity('aad-graph-activity', legacy, {
+    question: `Did ${legacy.length === 1 ? 'this identity' : `these ${legacy.length} identities`} use the legacy Azure AD Graph?`,
+    why: 'Attack tools (AADInternals, ROADrecon) still enumerate the directory through Azure AD Graph, which few defenders watch.',
+    tables: ['AADGraphActivityLogs'],
+    imports_as: 'AADGraphActivityLogs',
+    table: 'AADGraphActivityLogs',
+    filter: graphFilter(legacy),
+    quiet: 'low',
+  })
+
+  // The hunts the attack impact suggests for tables nothing was imported from yet (not those the identity gaps above
+  // ask with original rows).
+  const asRows = new Set(['sp-signins', 'sp-azure', 'sp-graph'])
   const urgentHunts = new Set(['session-replay', 'signin-session', 'ip-everywhere', 'credential-usage'])
   for (const hunt of huntingQueries(data, impact)) {
-    if (hunt.imported) continue
+    if (hunt.imported || asRows.has(hunt.id)) continue
     const id = `hunt:${hunt.id}:${hash([hunt.query])}`
     if (isCovered('hunt', id)) continue
     gaps.push({

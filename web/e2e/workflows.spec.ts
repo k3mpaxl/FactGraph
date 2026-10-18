@@ -1632,9 +1632,16 @@ test('agents: get_gaps names what is missing with KQL, submit_gap_rows imports t
     gap_id: answer.next_gap.id,
     body: { rows: [], note: 'first-party app, not in OAuthAppInfo' },
   })
-  expect([empty.rows, empty.remaining]).toEqual([0, 0])
+  expect([empty.rows, empty.remaining]).toEqual([0, 3])
+  // Left: what the user did in Azure and Graph, as original rows (low: nothing is marked compromised yet).
   const after = await call('GET', '/gaps')
-  expect([after.total, after.answered]).toEqual([0, 2])
+  expect([after.total, after.answered]).toEqual([3, 2])
+  expect(after.gaps.map((g: any) => [g.rule, g.priority]).sort()).toEqual([
+    ['aad-graph-activity', 'low'],
+    ['azure-activity', 'low'],
+    ['graph-activity', 'low'],
+  ])
+  expect(after.gaps.find((g: any) => g.rule === 'azure-activity').query).toContain(`Caller in~ (dynamic(["${oid}", "j.doe@corp.example"]))`)
   const board = await graph()
   expect(board.entities.find((e: any) => e.id === user).name).toBe('j.doe@corp.example')
   const holds = board.facts.find((f: any) => f.predicate === 'holds roles')

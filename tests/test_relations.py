@@ -321,6 +321,62 @@ class ProcessStartKey(unittest.TestCase):
         self.assertFalse([d for d in again if d["type"] in ("entity.add", "fact.add", "assertion.add") and d["payload"]["id"] not in known])
 
 
+class GraphActivity(unittest.TestCase):
+    """Microsoft Graph, Azure AD Graph and Defender's Graph audit rows: who called what, grouped by request."""
+
+    def test_calls_on_many_objects_are_one_activity_per_request(self):
+        board, index = str(uuid4()), {"entities": [], "facts": [], "sources": []}
+        run(board, [dict(r) for r in SIGNIN], index)  # j.doe, object ID 11111111-…
+        base = {
+            "TimeGenerated": "2026-09-28T10:00:00Z",
+            "RequestMethod": "GET",
+            "ResponseStatusCode": "200",
+            "IPAddress": "203.0.113.7",
+            "SignInActivityId": "tokenAAAA1111bbbb",
+            "UserId": "11111111-2222-3333-4444-555555555555",
+            "AppId": "d3590ed6-52b3-4102-aeff-aad2292ab01c",
+            "ServicePrincipalId": "",
+        }
+        rows = [
+            {**base, "RequestId": f"r{i}", "RequestUri": f"https://graph.microsoft.com/v1.0/users/{user}/messages?$top=50"}
+            for i, user in enumerate(["a@corp.example", "b@corp.example", "0b7f0c1e-1111-4222-8333-444444444444"])
+        ] + [
+            {
+                **base,
+                "RequestId": "r9",
+                "RequestUri": "https://graph.microsoft.com/v1.0/applications",
+                "RequestMethod": "POST",
+                "ResponseStatusCode": "403",
+            }
+        ]
+        detection, drafts, summary = run(board, rows, index)
+        self.assertEqual(detection.table, "MicrosoftGraphActivityLogs")
+        operations = sorted(d["payload"]["predicate"] for d in drafts if d["type"] == "fact.add")
+        self.assertEqual(operations, ["GET /v1.0/users/{id}/messages", "POST /v1.0/applications (failed 403)"])
+        self.assertEqual(summary["evidence"], 4)
+        user = next(e["id"] for e in index["entities"] if e["kind"] == "User")
+        read = next(d["payload"] for d in drafts if d["type"] == "fact.add" and d["payload"]["predicate"].startswith("GET"))
+        names = {e["id"]: e["name"] for e in index["entities"]}
+        self.assertIn({"entity_id": user, "role": "identity"}, read["participants"], "the user from the sign-in logs, by object ID")
+        self.assertEqual(
+            sorted(names[p["entity_id"]] for p in read["participants"] if p["role"] in ("target", "source")),
+            ["203.0.113.7", "Microsoft Graph"],
+        )
+
+    def test_tables_are_told_apart(self):
+        from app.tables import detect
+
+        graph = {"RequestMethod", "RequestUri", "ResponseStatusCode", "SignInActivityId"}
+        self.assertEqual(detect(graph | {"IPAddress", "UserId"}).table, "MicrosoftGraphActivityLogs")
+        self.assertEqual(detect(graph | {"CallerIpAddress", "UserId"}).table, "AADGraphActivityLogs")
+        self.assertEqual(
+            detect({"RequestMethod", "RequestUri", "ResponseStatusCode", "IpAddress", "UniqueTokenIdentifier"}).table, "GraphAPIAuditEvents"
+        )
+        sp = {"ServicePrincipalName", "ServicePrincipalId", "ResourceDisplayName", "ResultType"}
+        self.assertEqual(detect(sp | {"ManagedServiceIdentity"}).table, "AADManagedIdentitySignInLogs")
+        self.assertEqual(detect(sp).table, "AADServicePrincipalSignInLogs")
+
+
 class RowKeys(unittest.TestCase):
     """A row already on the board adds no evidence again, also when a newer mapping sees other entities in it."""
 

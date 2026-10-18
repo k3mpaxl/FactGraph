@@ -94,6 +94,60 @@ const data = project('b', ops).data
   assert.equal(gaps[0].priority, 'high')
   assert.ok(!gaps.some(g => g.entities.includes('quiet')), 'only what the attack touches')
 
+  // What the identities did, as original rows: sign-ins of the service principal, Azure operations and Graph calls of
+  // the user and the service principal, two weeks before the first evidence; the summarising hunts for them are left out.
+  const signins = byRule['sp-signins']
+  assert.deepEqual([signins.entities, signins.imports_as, signins.platform], [['sp'], 'AADServicePrincipalSignInLogs', 'sentinel'])
+  assert.ok(signins.query.includes('ServicePrincipalId in~ (dynamic(["0b7f0c1e-1111-4222-8333-444444444444"]))'))
+  assert.ok(signins.query.startsWith('let start = datetime(2026-09-17T10:10:00.000Z);') && signins.query.endsWith('| take 20000'))
+  assert.deepEqual(byRule['azure-activity'].entities.sort(), ['sp', 'user'])
+  assert.ok(byRule['azure-activity'].query.includes(`Caller in~ (dynamic(["${oid}", "0b7f0c1e-1111-4222-8333-444444444444"]))`))
+  const graphGap = byRule['graph-activity']
+  assert.ok(graphGap.query.includes(`UserId in~ (dynamic(["${oid}"]))`) && graphGap.query.includes('ServicePrincipalId in~'))
+  assert.equal(byRule['aad-graph-activity'].priority, 'high', 'the service principal signed in from the attacker IP: derived compromised')
+  assert.ok(!gaps.some(g => /^hunt:(sp-signins|sp-azure|sp-graph):/.test(g.id)))
+  // Rows from a table on the board cover the identity for it, also from a dropped export.
+  {
+    const more = [...ops]
+    more.push({
+      id: 'z1',
+      clock: 950,
+      at: '2026-10-04T00:00:00.000Z',
+      actor: 'me',
+      author: 'Analyst',
+      boardId: 'b',
+      type: 'fact.add',
+      payload: {
+        id: 'arm',
+        predicate: 'listkeys storage',
+        participants: [
+          { entity_id: 'user', role: 'identity' },
+          { entity_id: 'evil', role: 'source' },
+        ],
+      },
+    })
+    more.push({
+      id: 'z2',
+      clock: 951,
+      at: '2026-10-04T00:00:00.000Z',
+      actor: 'me',
+      author: 'Analyst',
+      boardId: 'b',
+      type: 'assertion.add',
+      payload: {
+        id: 'arm-e',
+        fact_id: 'arm',
+        stance: 'supports',
+        valid_from: '2026-10-01T11:00:00Z',
+        note: '{}',
+        locator: 'AzureActivity CorrelationId=c1',
+        source_id: null,
+      },
+    })
+    const covered = boardGaps(project('b', more).data).gaps.find(g => g.rule === 'azure-activity')
+    assert.deepEqual(covered.entities, ['sp'], 'the user has AzureActivity rows now')
+  }
+
   // An answer on the board (a source with the gap's URI) closes it for every browser; a new user opens a new gap.
   const answer = (gap, extra = {}) => ({
     id: `s${++clock}`,
@@ -182,4 +236,6 @@ const data = project('b', ops).data
   assert.equal(neighborhood(data, 'nobody'), null)
   assert.equal(neighborhood(data, 'user', 9).hops, 3)
 }
-console.log('Gaps: identity, device, app, process launch, hunts, answers, reopening; neighbourhood passed')
+console.log(
+  'Gaps: identity, device, app, process launch, sign-ins, Azure and Graph activity, hunts, answers, reopening; neighbourhood passed',
+)

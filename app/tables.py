@@ -195,6 +195,9 @@ class Part:
     # Processes: the column with the Windows process start key of this launch. With the DeviceId it says which process
     # entity a row means when the path is missing (DeviceNetworkEvents often has no InitiatingProcessFolderPath).
     start: tuple[str, ...] = ()
+    # A list in the row (a JSON column such as AssignedRoles): one participant per element (at most 50). Fields, IDs
+    # and the name function then read the element (a role name, or {"UserName", "DomainName", "Sid"}).
+    each: str = ""
 
 
 SCOPED_KINDS = ("File", "Process")
@@ -382,6 +385,45 @@ SIGN_IN_DETAILS = (
 def location(fields=("LocationDetails.countryOrRegion", "Location", "Country")) -> Part:
     """The country of a sign-in (LocationDetails.countryOrRegion); city and state go into the observation."""
     return Part("source", "Location", fields)
+
+
+# A path segment that names one object: a GUID, a long ID, a number or a user's address.
+GRAPH_ID = re.compile(r"/(?:[0-9a-fA-F]{8}-[0-9a-fA-F-]{27}|[^/@]+@[^/]+|[A-Za-z0-9+=_-]{20,}|\d+)(?=/|$)")
+
+
+def graph_operation(row: Row, g: Callable) -> str:
+    """ "GET /v1.0/users/{id}/messages": the request with object IDs replaced, so the same call on many objects is one
+    activity (its evidence keeps every original row). A non-2xx answer is named, so failed attempts stand apart."""
+    uri = text(g("RequestUri"))
+    path = re.sub(r"^[a-z]+://[^/]+", "", uri).split("?")[0] or uri
+    operation = f"{text(g('RequestMethod')).upper()} {GRAPH_ID.sub('/{id}', path)}".strip()
+    status = text(g("ResponseStatusCode"))
+    return operation + (f" (failed {status})" if status and not status.startswith("2") else "")
+
+
+def graph_parts(ip: str, resource: str) -> tuple[Part, ...]:
+    """Who called (a user, or a service principal for app-only calls), with which client app, from where, on what."""
+    return (
+        Part("identity", "User", ("UserId",), (Ident("UserId", namespace="entra-object-id"),)),
+        Part(
+            "identity",
+            "Service Principal",
+            ("ServicePrincipalId",),
+            (Ident("ServicePrincipalId", namespace="entra-object-id"), Ident("AppId", namespace="entra-app-id")),
+        ),
+        # The client app of a delegated call (an app-only call is the service principal itself).
+        Part(
+            "tool",
+            "Service",
+            ("AppId",),
+            (Ident("AppId", namespace="entra-app-id"),),
+            name=lambda r, g: "" if text(g("ServicePrincipalId")) else text(g("AppId")),
+        ),
+        Part("source", "IP", (ip,), (Ident(ip, "ip"),)),
+        # The calling device (its Entra device ID), when it is on the board already.
+        Part("via", "Device", ("DeviceId",), (Ident("DeviceId", namespace="entra-device-id"),), lower=True, create=False),
+        Part("target", "Service", ("RequestUri",), name=lambda r, g: resource),
+    )
 
 
 MAPPINGS: tuple[Mapping, ...] = (
@@ -703,6 +745,32 @@ MAPPINGS: tuple[Mapping, ...] = (
         operation=lambda r, g: f"alert evidence ({text(g('EvidenceRole')).lower() or 'related'})",
         locator=("AlertId", "ReportId"),
     ),
+    Mapping(
+        "GraphAPIAuditEvents",
+        "Defender XDR",
+        ("RequestMethod", "RequestUri", "ResponseStatusCode", "IpAddress", "UniqueTokenIdentifier"),
+        (
+            Part("identity", "User", ("AccountObjectId",), (Ident("AccountObjectId", namespace="entra-object-id"),)),
+            Part(
+                "identity",
+                "Service Principal",
+                ("ServicePrincipalId",),
+                (Ident("ServicePrincipalId", namespace="entra-object-id"), Ident("ApplicationId", namespace="entra-app-id")),
+            ),
+            Part(
+                "tool",
+                "Service",
+                ("ApplicationId",),
+                (Ident("ApplicationId", namespace="entra-app-id"),),
+                name=lambda r, g: "" if text(g("ServicePrincipalId")) else text(g("ApplicationId")),
+            ),
+            Part("source", "IP", ("IpAddress",), (Ident("IpAddress", "ip"),)),
+            Part("target", "Service", ("RequestUri",), name=lambda r, g: "Microsoft Graph"),
+        ),
+        operation=graph_operation,
+        locator=("ReportId", "RequestId"),
+        details=(("status", "ResponseStatusCode"), ("scopes", "Scopes")),
+    ),
     # Inventory: what a device, user or app is, for entities already on the board. A DeviceInfo row with a public IP
     # says where the device was online (the egress a baseline needs); the others only add IDs and names.
     Mapping(
@@ -712,8 +780,19 @@ MAPPINGS: tuple[Mapping, ...] = (
         (
             Part("actor", "Device", ("DeviceName",), DEVICE_IDS + (Ident("DeviceName", "fqdn"),), lower=True, create=False),
             Part("source", "IP", ("PublicIP",), (Ident("PublicIP", "ip"),)),
+            # Who was logged on, when those users are on the board (by their on-premises SID or DOMAIN\\name).
+            Part(
+                "identity",
+                "User",
+                ("UserName",),
+                (Ident("Sid", namespace="windows-sid"),),
+                name=account(domain="DomainName", name="UserName"),
+                lower=True,
+                create=False,
+                each="LoggedOnUsers",
+            ),
         ),
-        operation="reported from public IP",
+        operation=lambda r, g: "reported from public IP" if text(g("PublicIP")) else "reported logged-on users",
         locator=("ReportId", "DeviceId"),
         inventory=True,
         details=(("OS", "OSPlatform"), ("join type", "JoinType"), ("device group", "MachineGroup"), ("exposure", "ExposureLevel")),
@@ -735,8 +814,12 @@ MAPPINGS: tuple[Mapping, ...] = (
                 lower=True,
                 create=False,
             ),
+            # Entra roles held (active) and eligible through PIM: User → holds roles → Role, so who else holds a role is
+            # one hop away and a compromised privileged account stands out.
+            Part("target", "Role", ("value",), each="AssignedRoles"),
+            Part("other", "Role", ("value",), each="PrivilegedEntraPimRoles"),
         ),
-        operation="identity inventory",
+        operation="holds roles",
         locator=("ReportId", "AccountObjectId"),
         inventory=True,
     ),
@@ -758,8 +841,9 @@ MAPPINGS: tuple[Mapping, ...] = (
                 lower=True,
                 create=False,
             ),
+            Part("target", "Role", ("value",), each="AssignedRoles"),
         ),
-        operation="identity inventory",
+        operation="holds roles",
         time=("TimeGenerated",),
         locator=("AccountObjectId",),
         inventory=True,
@@ -882,6 +966,52 @@ MAPPINGS: tuple[Mapping, ...] = (
             ("user agent", "UserAgent"),
             ("session", "UniqueTokenIdentifier"),
         ),
+    ),
+    # Managed identities sign in like service principals; their own table says which identity and resource.
+    Mapping(
+        "AADManagedIdentitySignInLogs",
+        "Sentinel",
+        ("ServicePrincipalName", "ServicePrincipalId", "ResourceDisplayName", "ResultType", "ManagedServiceIdentity"),
+        (
+            Part(
+                "identity",
+                "Managed Identity",
+                ("ServicePrincipalName",),
+                (Ident("ServicePrincipalId", namespace="entra-object-id"), Ident("AppId", namespace="entra-app-id")),
+            ),
+            Part("source", "IP", ("IPAddress",), (Ident("IPAddress", "ip"),)),
+            Part(
+                "target",
+                "Service",
+                ("ResourceDisplayName",),
+                (Ident("ResourceIdentity", namespace="entra-app-id"), Ident("ResourceServicePrincipalId", namespace="entra-object-id")),
+            ),
+        ),
+        operation=sign_in,
+        time=("TimeGenerated", "CreatedDateTime"),
+        locator=("CorrelationId", "Id"),
+        details=(("credential", "ClientCredentialType"), ("session", "UniqueTokenIdentifier")),
+    ),
+    # Microsoft Graph and the legacy Azure AD Graph: what an identity read and changed in the directory, mail, files.
+    Mapping(
+        "MicrosoftGraphActivityLogs",
+        "Sentinel",
+        ("RequestMethod", "RequestUri", "ResponseStatusCode", "IPAddress", "SignInActivityId"),
+        graph_parts("IPAddress", "Microsoft Graph"),
+        operation=graph_operation,
+        time=("TimeGenerated",),
+        locator=("RequestId",),
+        details=(("status", "ResponseStatusCode"), ("user agent", "UserAgent"), ("scopes", "Scopes"), ("roles", "Roles")),
+    ),
+    Mapping(
+        "AADGraphActivityLogs",
+        "Sentinel",
+        ("RequestMethod", "RequestUri", "ResponseStatusCode", "CallerIpAddress", "SignInActivityId"),
+        graph_parts("CallerIpAddress", "Azure AD Graph"),
+        operation=graph_operation,
+        time=("TimeRequested", "TimeGenerated"),
+        locator=("RequestId",),
+        details=(("status", "ResponseStatusCode"), ("user agent", "UserAgent"), ("scopes", "Scopes")),
     ),
     Mapping(
         "AuditLogs",
@@ -1398,6 +1528,16 @@ def participants_of(mapping: Mapping, row: Row) -> list[dict]:
     g = lambda path: get(row, path, cache)  # noqa: E731
     out = []
     for part in mapping.parts:
+        if part.each:
+            items = g(part.each)
+            items = parse_json(items) if isinstance(items, str) else items
+            for item in (items if isinstance(items, list) else [])[:50]:
+                element = item if isinstance(item, dict) else {"value": item}
+                single = Part(
+                    part.role, part.kind, part.fields or ("value",), part.ids, part.lower, part.name, part.kind_of, create=part.create
+                )
+                out.extend(participants_of(Mapping(mapping.table, mapping.product, (), (single,)), element))
+            continue
         raw = next((text(g(f)) for f in part.fields if text(g(f))), "")
         name = text(part.name(row, g)) if part.name else raw
         if not name:

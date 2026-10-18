@@ -77,15 +77,16 @@ Workflow
 7. Large graphs: create_group bundles many similar entities into one collapsed node (members, or rule by kinds/name match, or a container's contents); excluded keeps anomalies visible on their own. Groups only change the view.
 8. Layers (identity, network, endpoint, workload = Kubernetes/containers, cloud = control plane/Key Vaults, data = buckets/blobs/databases, code = repositories/CI, other) are inferred from the kind; set layer only to correct it.
 9. export_image renders the graph as SVG (text) or PNG (base64) for reports.
-10. Next query: find_joins(table, column) says where a column of an evidence row leads (same token, session, user, device, app in other tables) with the KQL; follow its guidance (token IDs are case-sensitive, a missing match is no proof).
+10. What is missing: get_gaps lists questions the board cannot answer yet (who a user is and which roles they hold, what a device is and who uses it, where a process came from, open hunts), each with KQL. Run it (or ask the analyst to), then submit_gap_rows with the rows, also when there are none. Repeat until get_gaps is empty. get_neighbors reads one entity's surroundings instead of the whole board.
+11. Next query: find_joins(table, column) says where a column of an evidence row leads (same token, session, user, device, app in other tables) with the KQL; follow its guidance (token IDs are case-sensitive, a missing match is no proof).
 
 Editing: update tools change only the fields you pass; explicit null clears nullable fields. Pass expected_revision for sources and evidence; HTTP 409 means someone changed it — re-read and retry; 404 means the record does not exist. undo reverts the last change batch made through REST/MCP (never the analyst's own edits) and refuses when someone built on it since. Content changes reset affected reviews.
 Times: ISO 8601; a time without a zone is UTC. Compromise marks you set are "suspected" unless you pass level "confirmed" and the evidence proves it.
 Tool profile: this server shows a compact agent tool set by default; with FACTGRAPH_MCP_TOOLS=full it exposes one rest_<operation> tool per REST endpoint instead.
 """
-mcp = FastMCP("FactGraph Browser Boards", version="0.6.1", instructions=MCP_INSTRUCTIONS)
+mcp = FastMCP("FactGraph Browser Boards", version="0.6.2", instructions=MCP_INSTRUCTIONS)
 mcp_app = mcp.http_app(path="/")
-app = FastAPI(title="FactGraph API", version="0.6.1", lifespan=mcp_app.lifespan)
+app = FastAPI(title="FactGraph API", version="0.6.2", lifespan=mcp_app.lifespan)
 
 
 @dataclass

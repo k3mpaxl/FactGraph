@@ -84,6 +84,9 @@ class AgentGuidance(unittest.IsolatedAsyncioTestCase):
         'undo',
         'list_import_formats',
         'find_joins',
+        'get_gaps',
+        'submit_gap_rows',
+        'get_neighbors',
     }
 
     async def test_default_agent_profile_is_small_and_explained(self):
@@ -95,8 +98,10 @@ class AgentGuidance(unittest.IsolatedAsyncioTestCase):
         # 9,300: import_defender_rows (about 250 tokens) was added in v0.5.0; 9,500: get_impact and the compromise
         # marking on update_entity (about 250 tokens) for attack impact; 9,700: list_import_formats and the format of
         # import_defender_rows (about 500 tokens) for saved import formats; 9,900: find_joins (about 180 tokens) for the
-        # next query from an evidence row. Keep further growth deliberate.
-        self.assertLess(size // 4, 9900, f'agent tool definitions use about {size // 4} tokens')
+        # next query from an evidence row; 10,700: get_gaps, submit_gap_rows and get_neighbors (about 720 tokens) so an
+        # agent learns what is missing, answers it and reads one entity's surroundings instead of the whole board. Keep
+        # further growth deliberate.
+        self.assertLess(size // 4, 10700, f'agent tool definitions use about {size // 4} tokens')
         for tool in tools:
             self.assertGreater(len(tool.description or ''), 30, tool.name)
             self.assertNotIn('REST equivalent', tool.description, tool.name)

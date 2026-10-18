@@ -141,7 +141,7 @@ Notes:
 
 - **Exactly one instance.** The relay keeps the list of connected browsers in memory; with several instances, analysts on different instances would not see each other. Do not scale out.
 - **Web sockets must be on**, otherwise the board stays offline. **Always On** prevents the app from idling and dropping connections.
-- Prefer a pinned version (`k3mpaxl/factgraph:0.6.1`) over `latest` during an incident, so a restart never changes the version.
+- Prefer a pinned version (`k3mpaxl/factgraph:0.6.2`) over `latest` during an incident, so a restart never changes the version.
 - App Service **HTTP logging** is off by default. If you enable it, it records request URLs, which contain board IDs.
 - **WebSocket limits per plan:** every open FactGraph tab holds one connection. App Service allows 5 per instance on **F1 (Free)**, 35 on Shared and 350 from **B1**; above the limit, browsers get HTTP 429 and stay offline. Use B1 or higher. Browsers send a heartbeat, and the server closes connections that stay silent (closed laptops, changed networks), so slots are freed without restarting the app.
 - **App Service Authentication** (Entra ID sign-in) can be put in front of the UI. Agents and scripts then also need an Entra token, and if the incident involves your own tenant, an identity provider you cannot trust is no protection. IP access restrictions are often the better choice there.
@@ -307,7 +307,7 @@ The repository also contains [.vscode/mcp.json](.vscode/mcp.json); in VS Code ru
 
 ### MCP tools
 
-By default the server exposes a **compact agent profile with 28 tools** (about 9,850 tokens of tool descriptions). Fewer tools mean less context usage and better tool choice.
+By default the server exposes a **compact agent profile with 31 tools** (about 10,600 tokens of tool descriptions). Fewer tools mean less context usage and better tool choice.
 
 The board token in the `X-FactGraph-Token` header names the board (every browser tab makes its own token for each board), so agent tools take no board ID and agents never need to ask for one. A `board_id` passed anyway is accepted and must match the token. Clients that cannot send headers pass `board_token` in each call; the full profile also shows `board_id` as an optional parameter.
 
@@ -322,6 +322,8 @@ The board token in the `X-FactGraph-Token` header names the board (every browser
 | Attack impact | `get_impact`; mark with `update_entity` (`compromise: {from, to, note}`, `rotated_at`) | `GET /impact`, `PATCH /entities/{id}` |
 | Overview and export | `create_group`, `update_group`, `export_image` | `/groups…`, `/export` |
 | Next query: where a column leads | `find_joins` | `GET /api/relations?table=&column=` (no board, no token) |
+| What is missing, and answering it | `get_gaps`, `submit_gap_rows` | `GET /gaps`, `POST /gaps/{gap_id}/rows` |
+| One entity's surroundings | `get_neighbors` | `GET /entities/{id}/neighbors?hops=` |
 | Undo | `undo` | `/undo` |
 
 The REST API stays complete (types, perspectives, single-item reads, history, redo, raw actions …). With `FACTGRAPH_MCP_TOOLS=full` the MCP server instead exposes one `rest_<operation>` tool per REST operation, with identical parameters and validation:
@@ -331,6 +333,19 @@ docker run -e FACTGRAPH_MCP_TOOLS=full -p 8080:8080 k3mpaxl/factgraph:latest
 ```
 
 On connect the server sends binding **working rules** to the agent (also available via `GET /api/guidelines`): read first and reuse existing IDs; concrete entities; specific verbs; an activity for three or more participants; primary evidence for every important claim; keep uncertainty and contradictions; run imports as `dry_run` first. Agents may confirm evidence, but only after checking the original record and with a review note.
+
+### What is missing: gaps an agent answers
+
+`get_gaps` lists what the board still needs to make its entities and relationships clear, most important first, each as a question with filled-in KQL, the platform to run it on (Defender XDR advanced hunting or Sentinel) and the table mapping that imports the rows:
+
+- **Who is this user, which roles do they hold** (`IdentityInfo` by object ID or UPN): the name for a user known only by an ID, the on-premises SID (joins Windows logons and logged-on users to the same entity) and the Entra roles, active and PIM-eligible, as *holds roles* with a role entity, so who else holds Global Administrator is one hop away.
+- **What is this device, who uses it** (`DeviceInfo`): Defender and Entra device IDs, the public IPs it reported from (the legitimate egress) and the logged-on users already on the board.
+- **Which app is this** (`OAuthAppInfo`): the app behind a service principal or app ID, with privilege level and permissions in the row.
+- **Where did this process come from** (`DeviceProcessEvents` by process start key and device): the launch, its command line and parent, for activities whose process was never launched on the board.
+- **What did this identity do** in the sources the board has no rows from for it, as original rows (two weeks before the first evidence, for the baseline): **sign-ins** of a service principal (`AADServicePrincipalSignInLogs`: IPs, key IDs, resources) or managed identity (`AADManagedIdentitySignInLogs`), **Azure operations** of a user or service principal (`AzureActivity` by Caller: listKeys, role assignments, deletes), **Microsoft Graph calls** (`MicrosoftGraphActivityLogs`: enumeration, mailbox reads, new app credentials) and the **legacy Azure AD Graph** (`AADGraphActivityLogs`, used by AADInternals and ROADrecon). An identity counts as covered for a table as soon as evidence from it touches the identity, so a dropped export closes the gap too.
+- **Open hunts** of the attack impact for tables nothing was imported from yet (session tokens, sign-in sessions, the attacker's IPs …).
+
+Gaps cover what the attack touches (once something is marked compromised), otherwise every connected entity. The agent runs the query, or asks the analyst to, and sends the rows with `submit_gap_rows`: rows of a known table are imported and matched to the board's entities like a dropped export, rows of no known table are kept in the answer's source. **An empty result answers a gap too** (with a note such as "table not in this tenant"). Every answer is a source with the URI `factgraph:gap/<id>`, so the gap is closed for every browser and agent; the reply names the next gap. When the board changed between `get_gaps` and the answer (new entities widen a gap, so its ID changes), the answer is refused with the current gap's ID, and rows that fit a table are imported anyway; a repeated submission adds nothing twice. `get_neighbors` reads one entity's surroundings up to three hops instead of the whole board.
 
 ### REST examples
 
@@ -405,11 +420,11 @@ Every row becomes its own evidence item with its timestamp and locator; the same
 
 Export the results of an advanced hunting query (Defender XDR) or a Log Analytics query (Microsoft Sentinel) as CSV or JSON and **drop the files onto the board**. Each file is recognised by its columns and imported in the background, one after another, with an entry under the bell; an empty board is arranged afterwards. One file is one undo step.
 
-- **Recognised tables** with a curated mapping: `DeviceProcessEvents`, `DeviceNetworkEvents`, `DeviceFileEvents`, `DeviceLogonEvents`, `DeviceRegistryEvents`, `DeviceImageLoadEvents`, `DeviceEvents`, `IdentityLogonEvents`, `IdentityDirectoryEvents`, `IdentityQueryEvents`, `EntraIdSignInEvents`, `EntraIdSpnSignInEvents`, `CloudAppEvents`, `UrlClickEvents`, `EmailEvents`, `EmailUrlInfo`, `EmailAttachmentInfo`, `AlertEvidence`; Sentinel `SigninLogs`, `AADNonInteractiveUserSignInLogs`, `AADServicePrincipalSignInLogs`, `AuditLogs`, `AzureActivity`, `AzureDiagnostics` (Key Vault), `SecurityEvent`, `CommonSecurityLog`, `OfficeActivity`, the normalised **ASIM** fields (`SrcIpAddr`, `TargetUsername` …), and **GitLab audit events** (e.g. a custom table such as `GitLabAuditLogs_CL`: author, IP, repository, file, access token, SSH key, git push/pull/clone). Other documented advanced hunting tables (65 in total) are mapped from their column names.
+- **Recognised tables** with a curated mapping: `DeviceProcessEvents`, `DeviceNetworkEvents`, `DeviceFileEvents`, `DeviceLogonEvents`, `DeviceRegistryEvents`, `DeviceImageLoadEvents`, `DeviceEvents`, `IdentityLogonEvents`, `IdentityDirectoryEvents`, `IdentityQueryEvents`, `EntraIdSignInEvents`, `EntraIdSpnSignInEvents`, `GraphAPIAuditEvents`, `CloudAppEvents`, `UrlClickEvents`, `EmailEvents`, `EmailUrlInfo`, `EmailAttachmentInfo`, `AlertEvidence`; Sentinel `SigninLogs`, `AADNonInteractiveUserSignInLogs`, `AADServicePrincipalSignInLogs`, `AADManagedIdentitySignInLogs`, `MicrosoftGraphActivityLogs` and `AADGraphActivityLogs` (calls grouped by request with object IDs replaced, `GET /v1.0/users/{id}/messages`; failed ones apart), `AuditLogs`, `AzureActivity`, `AzureDiagnostics` (Key Vault), `SecurityEvent`, `CommonSecurityLog`, `OfficeActivity`, the normalised **ASIM** fields (`SrcIpAddr`, `TargetUsername` …), and **GitLab audit events** (e.g. a custom table such as `GitLabAuditLogs_CL`: author, IP, repository, file, access token, SSH key, git push/pull/clone). Other documented advanced hunting tables (65 in total) are mapped from their column names.
 - **Mapping:** every row becomes evidence for an activity whose participants carry roles, for example in `DeviceNetworkEvents` the device (source), the account (actor), the initiating process (via), the remote IP and URL (target). The operation comes from `ActionType`, `OperationName` or the sign-in result (“signed in”, “sign-in failed (50126)”); the time from `Timestamp`/`TimeGenerated`; the locator names the table and the record, for example `DeviceNetworkEvents ReportId=18842 DeviceId=…`. Columns that are not mapped stay in the evidence row.
 - **One process launch, one entity:** the Windows process start key (`ProcessUniqueId`, `InitiatingProcessUniqueId`, with the `DeviceId`) joins a process seen with its path in `DeviceProcessEvents` and without it in `DeviceNetworkEvents`. It is matched only after the stronger IDs, so a board imported before keeps its entities and a repeated import adds nothing.
 - **The same thing stays one entity:** devices, accounts, files, apps and Azure resources are stored with their identifiers (DeviceId, AadDeviceId, Entra object ID, SID, SHA-256/SHA-1/MD5, app ID, resource ID, FQDN, UPN, IP) and found by them on later imports, so `j.doe` from `DeviceProcessEvents` and from `SigninLogs` is one user. A different ID under the same name (another DeviceId, another hash) creates a separate entity instead of a wrong merge.
-- **Inventory tables** `DeviceInfo`, `IdentityInfo` (Defender XDR and Sentinel UEBA) and `OAuthAppInfo` describe what is already on the board and never fill it: a row is used only when its device, user or app is there. It adds that entity's IDs (Entra device ID, Entra object ID, on-premises SID, app and service principal IDs) and replaces a bare GUID by the display name; a `DeviceInfo` row with a public IP becomes *reported from public IP* (where the device was online, the egress a baseline needs), and an `OAuthAppInfo` row links an app's service principal to the app users sign in to when both are on the board. Rows about anything else are left out and counted.
+- **Inventory tables** `DeviceInfo`, `IdentityInfo` (Defender XDR and Sentinel UEBA) and `OAuthAppInfo` describe what is already on the board and never fill it: a row is used only when its device, user or app is there. It adds that entity's IDs (Entra device ID, Entra object ID, on-premises SID, app and service principal IDs) and replaces a bare GUID by the display name; an `IdentityInfo` row becomes *holds roles* with the user's active and PIM-eligible Entra roles as role entities; a `DeviceInfo` row with a public IP becomes *reported from public IP* (where the device was online, the egress a baseline needs) with the logged-on users already on the board; and an `OAuthAppInfo` row links an app's service principal to the app users sign in to when both are on the board. Rows about anything else are left out and counted.
 - **Nested JSON columns** are read too: the service principal's app ID from the token claims in `AzureActivity` (`Claims.appid`, object ID from the `Caller`), the RBAC role and error code, `LocationDetails.countryOrRegion` (country as a location entity; city, ASN and named network in the observation), and the credential a service principal signed in with (`ServicePrincipalCredentialKeyId`, thumbprint) as its own entity. A service principal first seen only by its object ID gets its display name from the next sign-in export. Evidence notes store the row with JSON columns as objects.
 - **Export quirks** are handled: the ` [UTC]` suffix and the US date format of Log Analytics exports, 7-digit fractions, JSON columns such as `DeviceDetail` or `InitiatedBy`, a byte-order mark.
 - **Not recognised?** A plain two-column log (`IPAddress` → `FilePath`) is imported as relationships as before. Anything else opens the import dialog with a suggested mapping (see above); saved as a format, the next export of that kind imports like a built-in table.
@@ -488,8 +503,8 @@ cd web && npm run build && DOCS_SCREENSHOTS=1 npx playwright test e2e/docs-scree
 - **Publish Docker image** builds the image for `linux/amd64` and `linux/arm64` on a version tag (`v*.*.*`) or via **Run workflow**, and publishes it as `latest` and with the version number. It requires the repository secrets `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` (a Docker Hub access token with write permission).
 
 ```bash
-git tag v0.6.1
-git push origin v0.6.1
+git tag v0.6.2
+git push origin v0.6.2
 ```
 
 A manual multi-arch build is possible with `./deploy/publish-multiarch.sh` (`FACTGRAPH_IMAGE` and `FACTGRAPH_VERSION` override namespace and version).

@@ -195,6 +195,9 @@ class Part:
     # Processes: the column with the Windows process start key of this launch. With the DeviceId it says which process
     # entity a row means when the path is missing (DeviceNetworkEvents often has no InitiatingProcessFolderPath).
     start: tuple[str, ...] = ()
+    # A list in the row (a JSON column such as AssignedRoles): one participant per element (at most 50). Fields, IDs
+    # and the name function then read the element (a role name, or {"UserName", "DomainName", "Sid"}).
+    each: str = ""
 
 
 SCOPED_KINDS = ("File", "Process")
@@ -712,8 +715,19 @@ MAPPINGS: tuple[Mapping, ...] = (
         (
             Part("actor", "Device", ("DeviceName",), DEVICE_IDS + (Ident("DeviceName", "fqdn"),), lower=True, create=False),
             Part("source", "IP", ("PublicIP",), (Ident("PublicIP", "ip"),)),
+            # Who was logged on, when those users are on the board (by their on-premises SID or DOMAIN\\name).
+            Part(
+                "identity",
+                "User",
+                ("UserName",),
+                (Ident("Sid", namespace="windows-sid"),),
+                name=account(domain="DomainName", name="UserName"),
+                lower=True,
+                create=False,
+                each="LoggedOnUsers",
+            ),
         ),
-        operation="reported from public IP",
+        operation=lambda r, g: "reported from public IP" if text(g("PublicIP")) else "reported logged-on users",
         locator=("ReportId", "DeviceId"),
         inventory=True,
         details=(("OS", "OSPlatform"), ("join type", "JoinType"), ("device group", "MachineGroup"), ("exposure", "ExposureLevel")),
@@ -735,8 +749,12 @@ MAPPINGS: tuple[Mapping, ...] = (
                 lower=True,
                 create=False,
             ),
+            # Entra roles held (active) and eligible through PIM: User → holds roles → Role, so who else holds a role is
+            # one hop away and a compromised privileged account stands out.
+            Part("target", "Role", ("value",), each="AssignedRoles"),
+            Part("other", "Role", ("value",), each="PrivilegedEntraPimRoles"),
         ),
-        operation="identity inventory",
+        operation="holds roles",
         locator=("ReportId", "AccountObjectId"),
         inventory=True,
     ),
@@ -758,8 +776,9 @@ MAPPINGS: tuple[Mapping, ...] = (
                 lower=True,
                 create=False,
             ),
+            Part("target", "Role", ("value",), each="AssignedRoles"),
         ),
-        operation="identity inventory",
+        operation="holds roles",
         time=("TimeGenerated",),
         locator=("AccountObjectId",),
         inventory=True,
@@ -1398,6 +1417,16 @@ def participants_of(mapping: Mapping, row: Row) -> list[dict]:
     g = lambda path: get(row, path, cache)  # noqa: E731
     out = []
     for part in mapping.parts:
+        if part.each:
+            items = g(part.each)
+            items = parse_json(items) if isinstance(items, str) else items
+            for item in (items if isinstance(items, list) else [])[:50]:
+                element = item if isinstance(item, dict) else {"value": item}
+                single = Part(
+                    part.role, part.kind, part.fields or ("value",), part.ids, part.lower, part.name, part.kind_of, create=part.create
+                )
+                out.extend(participants_of(Mapping(mapping.table, mapping.product, (), (single,)), element))
+            continue
         raw = next((text(g(f)) for f in part.fields if text(g(f))), "")
         name = text(part.name(row, g)) if part.name else raw
         if not name:

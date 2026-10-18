@@ -183,6 +183,54 @@ class Inventory(unittest.TestCase):
             {(d["payload"]["namespace"], d["payload"]["raw_value"]) for d in drafts if d["type"] == "identifier.add"},
         )
 
+    def test_roles_and_logged_on_users_become_relationships(self):
+        board, index = str(uuid4()), {"entities": [], "facts": [], "sources": []}
+        run(board, [dict(r) for r in NETWORK], index)  # user j.doe (object ID 11111111-…), device a1b2c3d4e5f6
+        identities = [
+            {
+                "AccountObjectId": "11111111-2222-3333-4444-555555555555",
+                "AccountUpn": "J.Doe@corp.example",
+                "OnPremSid": "S-1-5-21-1-2-3-1104",
+                "AssignedRoles": '["Global Administrator", "Security Reader"]',
+                "PrivilegedEntraPimRoles": '["Privileged Role Administrator"]',
+                "ReportId": "1",
+                "Timestamp": "2026-09-28T08:00:00Z",
+            }
+        ]
+        _, drafts, summary = run(board, identities, index)
+        user = next(e["id"] for e in index["entities"] if e["kind"] == "User")
+        holds = next(d["payload"] for d in drafts if d["type"] == "fact.add")
+        roles = {e["id"]: e["name"] for e in index["entities"] if e["kind"] == "Role"}
+        self.assertEqual(holds["predicate"], "holds roles")
+        self.assertEqual(
+            sorted((roles.get(p["entity_id"], p["entity_id"]), p["role"]) for p in holds["participants"]),
+            sorted(
+                [
+                    ("Global Administrator", "target"),
+                    ("Privileged Role Administrator", "other"),
+                    ("Security Reader", "target"),
+                    (user, "identity"),
+                ]
+            ),
+        )
+        self.assertEqual(summary["evidence"], 1)
+        # The on-premises SID IdentityInfo added joins DeviceInfo's logged-on user to the same entity.
+        devices = [
+            {
+                "Timestamp": "2026-09-28T09:00:00Z",
+                "DeviceId": "a1b2c3d4e5f6",
+                "DeviceName": "ws-0142.corp.example",
+                "OSPlatform": "Windows11",
+                "PublicIP": "198.51.100.20",
+                "LoggedOnUsers": '[{"UserName": "jdoe", "DomainName": "CORP", "Sid": "S-1-5-21-1-2-3-1104"}, {"UserName": "ghost", "Sid": "S-1-5-21-9"}]',
+                "ReportId": "7",
+            }
+        ]
+        _, drafts, _ = run(board, devices, index)
+        report = next(d["payload"] for d in drafts if d["type"] == "fact.add")
+        self.assertIn({"entity_id": user, "role": "identity"}, report["participants"])
+        self.assertNotIn("ghost", {d["payload"]["name"] for d in drafts if d["type"] == "entity.add"}, "unknown users are not added")
+
     def test_an_app_known_only_by_its_id_gets_its_name_and_both_sides_are_linked(self):
         board, index = str(uuid4()), {"entities": [], "facts": [], "sources": []}
         # The app as users sign in to it (Service "Azure Portal", app ID c44b4083-…) and its service principal, known only

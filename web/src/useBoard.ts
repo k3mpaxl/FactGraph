@@ -1,4 +1,5 @@
 import { rowKey } from './rowKey'
+import { boardGaps, neighborhood } from './gaps'
 import { impactReport } from './hunting'
 import { analyzeImpact, exportMarks } from './impact'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -617,6 +618,16 @@ export function useBoard(boardId: string, listener?: ChangeListener) {
                 })
               } else if (message.operation === 'impact') {
                 reply(requestId, { ok: true, impact: impactReport(projectCached(actionsRef.current).data) })
+              } else if (message.operation === 'gaps') {
+                reply(requestId, { ok: true, ...boardGaps(projectCached(actionsRef.current).data) })
+              } else if (message.operation === 'neighbors') {
+                const result = neighborhood(
+                  projectCached(actionsRef.current).data,
+                  String(message.entity_id ?? ''),
+                  Number(message.hops ?? 1),
+                  Math.min(Math.max(Number(message.limit ?? 200), 1), 1000),
+                )
+                reply(requestId, result ? { ok: true, ...result } : { ok: false, error: 'Entity does not exist on this board' })
               } else if (message.operation === 'query') {
                 const result = queryRecords(projectCached(actionsRef.current).data, {
                   collection: String(message.collection ?? ''),

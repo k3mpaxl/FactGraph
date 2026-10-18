@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import inspect
 from typing import Annotated, Literal, get_type_hints
-from uuid import uuid4
+import json
+from uuid import UUID, uuid4, uuid5
 from fastapi import HTTPException
 from fastapi.routing import APIRoute
 from fastmcp.tools import FunctionTool
@@ -13,7 +14,18 @@ from app.contracts import LAYER_HELP, Layer, StrictModel
 from app.descriptions import describe_routes, purpose, tool_description
 from app.tool_profiles import AGENT_TOOLS, annotations_for, configured_profile, set_tool_profile
 from app.ingest import action
+from app.tables import clean_rows
 from app.relations import find_joins
+
+
+class GapRowsInput(StrictModel):
+    rows: list[dict] = Field(
+        default_factory=list,
+        max_length=50_000,
+        description="The result rows of the gap's query as returned. An empty list says it found nothing, which answers the gap too.",
+    )
+    note: str = Field(default='', max_length=2000, description='What was run, or why nothing came back (e.g. "table not in this tenant").')
+    query: str = Field(default='', max_length=20_000, description="The KQL actually run, if it differs from the gap's query.")
 
 
 class ReviewInput(StrictModel):
@@ -224,6 +236,110 @@ def register_extensions(app, mcp, core):
         if not 1 <= limit <= 100:
             raise HTTPException(422, 'limit must be 1 to 100')
         return find_joins(table=table.strip(), column=column.strip(), family=family.strip(), limit=limit)
+
+    @app.get('/api/boards/{board_id}/gaps')
+    async def list_gaps(board_id: str, limit: int = 10):
+        if not 1 <= limit <= 50:
+            raise HTTPException(422, 'limit must be 1 to 50')
+        report = await command(board_id, 'gaps')
+        gaps = report.get('gaps', [])
+        return {
+            'board_id': board_id,
+            'total': len(gaps),
+            'answered': len(report.get('answered', [])),
+            'gaps': gaps[:limit],
+            'next': 'Run a gap\'s query (platform says where) and send its result rows with submit_gap_rows, also when it returns none.'
+            if gaps
+            else 'Nothing missing: every gap is answered.',
+        }
+
+    @app.post('/api/boards/{board_id}/gaps/{gap_id}/rows')
+    async def submit_gap_rows(board_id: str, gap_id: str, body: GapRowsInput):
+        report = await command(board_id, 'gaps')
+        gaps = report.get('gaps', [])
+        gap = next((g for g in gaps if g['id'] == gap_id), None)
+        try:
+            rows = clean_rows(body.rows) if body.rows else []
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from error
+        if gap is None:
+            if any(a['id'] == gap_id for a in report.get('answered', [])):
+                raise HTTPException(409, f'Gap {gap_id} is already answered; get_gaps lists what is still open')
+            # The board moved on since get_gaps (new entities widen a gap, so its ID changes). Rows that fit a table are
+            # still imported; a repeated submission adds nothing twice.
+            imported = None
+            if rows:
+                try:
+                    imported = await core['import_table'](board_id, rows, query=body.query)
+                except HTTPException:
+                    imported = None
+            now = [g for g in gaps if g['rule'] == gap_id.split(':')[0]]
+            raise HTTPException(
+                409,
+                f'Gap {gap_id} changed since get_gaps'
+                + (f'; {imported.get("evidence", 0)} evidence items were imported from the rows' if imported else '')
+                + (f'. It is now {now[0]["id"]}: run its query and submit to it.' if now else '. Call get_gaps again.'),
+            )
+        query = body.query or gap['query']
+        imported, stored = None, False
+        if rows:
+            try:
+                imported = await core['import_table'](board_id, rows, query=query)
+            except HTTPException as error:
+                if error.status_code != 422:
+                    raise
+                stored = True  # no table mapping reads these rows: they are kept in the answer's source
+        meta = {'gap': gap_id, 'rule': gap['rule'], 'entities': gap.get('entities', []), 'rows': len(rows), 'note': body.note}
+        excerpt = json.dumps(meta, ensure_ascii=False)
+        if stored:
+            excerpt += '\n' + json.dumps(rows, ensure_ascii=False, default=str)[:2_000_000]
+        source_id = str(uuid5(UUID(board_id), f'gap-answer\x1f{gap_id}'))
+        title = f'Answer: {gap["question"]} · ' + (f'{len(rows)} rows' if rows else 'nothing found')
+        await apply(
+            board_id,
+            [
+                action(
+                    'source.add',
+                    {
+                        'id': source_id,
+                        'title': title[:200],
+                        'uri': f'factgraph:gap/{gap_id}',
+                        'excerpt': excerpt,
+                        'query': query,
+                        'source_kind': 'primary' if stored else 'secondary',
+                    },
+                    action_id=str(uuid5(UUID(board_id), f'gap-answer-action\x1f{gap_id}')),
+                    author='Agent',
+                )
+            ],
+        )
+        remaining = [g for g in gaps if g['id'] != gap_id]
+        result = {
+            'board_id': board_id,
+            'gap_id': gap_id,
+            'rows': len(rows),
+            'answer_source_id': source_id,
+            'remaining': len(remaining),
+            **({'next_gap': {k: remaining[0][k] for k in ('id', 'priority', 'question')}} if remaining else {}),
+        }
+        if imported:
+            result['imported'] = {
+                k: imported.get(k)
+                for k in ('table', 'evidence', 'relations', 'new_entities', 'identifiers', 'enriched', 'already_on_board')
+                if imported.get(k) is not None
+            }
+        if stored:
+            result['stored'] = (
+                'No table mapping reads these rows: they are kept in the answer source. Model what they show with create_activity or add_evidence citing answer_source_id.'
+            )
+        return result
+
+    @app.get('/api/boards/{board_id}/entities/{entity_id}/neighbors')
+    async def get_neighbors(board_id: str, entity_id: str, hops: int = 1, limit: int = 200):
+        if not 1 <= hops <= 3 or not 1 <= limit <= 1000:
+            raise HTTPException(422, 'hops must be 1 to 3, limit 1 to 1000')
+        result = await command(board_id, 'neighbors', entity_id=entity_id, hops=hops, limit=limit)
+        return {k: v for k, v in result.items() if k not in ('ok', 'type', 'requestId')}
 
     def collection_routes(resource, key):
         # The browser filters and paginates, so only the requested slice crosses the WebSocket. Lists shorten long

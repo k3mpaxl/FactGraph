@@ -52,6 +52,18 @@ AGENT_TOOLS: dict[str, tuple[str, str | None]] = {
         'find_joins',
         'Where else a column of a Defender XDR / Sentinel row leads (token, session, user, device, app IDs): other table and column, join guidance, KQL. Plan the next query; no args lists key kinds.',
     ),
+    'list_gaps': (
+        'get_gaps',
+        'What the board still needs, most important first: each gap a question with filled-in KQL, the platform to run it on and the table that imports the rows. Answer with submit_gap_rows.',
+    ),
+    'submit_gap_rows': (
+        'submit_gap_rows',
+        "Send the result rows of a gap's query (also none: that answers it). Rows of a known table are imported and matched to the board's entities; the gap closes; returns the next gap.",
+    ),
+    'get_neighbors': (
+        'get_neighbors',
+        "An entity's neighbourhood up to 3 hops: entities with IDs and compromise marks, relationships and activities with evidence counts and times. Cheaper than get_graph.",
+    ),
     'create_group': ('create_group', None),
     'update_group': ('update_group', None),
     'export_image': ('export_image', None),

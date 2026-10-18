@@ -1581,3 +1581,78 @@ test('linked by ID: an activity leads to the process launch it ran in and to wha
   await expect(page.locator('.linked-list').getByText('Then the process it started')).toBeVisible()
   await expect(page.locator('.linked-list .linked-row', { hasText: 'connection success' })).toBeVisible()
 })
+
+test('agents: get_gaps names what is missing with KQL, submit_gap_rows imports the answer and closes the gap', async ({
+  page,
+  request,
+}) => {
+  const { id, token, call, graph } = await setup(page, request)
+  const oid = '11111111-2222-3333-4444-555555555555'
+  const graphApp = '00000003-0000-0000-c000-000000000000'
+  const user = (await call('POST', '/entities', { name: oid, kind: 'User' })).id
+  await call('POST', `/entities/${user}/identifiers`, { scheme: 'external_id', namespace: 'entra-object-id', raw_value: oid })
+  const ip = (await call('POST', '/entities', { name: '198.51.100.7', kind: 'IP' })).id
+  const app = (await call('POST', '/entities', { name: graphApp, kind: 'Service' })).id
+  await call('POST', `/entities/${app}/identifiers`, { scheme: 'external_id', namespace: 'entra-app-id', raw_value: graphApp })
+  await call('POST', '/activities', {
+    operation: 'signed in',
+    participants: [
+      { entity_id: user, role: 'identity' },
+      { entity_id: ip, role: 'source' },
+      { entity_id: app, role: 'target' },
+    ],
+    valid_from: '2026-09-28T10:00:00Z',
+  })
+  // The agent asks what is missing: the user known only by its object ID, with the KQL to run.
+  const listed = await mcp(token, 'get_gaps', {})
+  const identity = listed.gaps.find((g: any) => g.rule === 'identity-info')
+  expect([identity.priority, identity.imports_as, identity.entities]).toEqual(['high', 'IdentityInfo', [user]])
+  expect(identity.query).toContain(oid)
+  // It runs the query and sends the rows: imported, the gap closes, the next one is named.
+  const answer = await mcp(token, 'submit_gap_rows', {
+    gap_id: identity.id,
+    body: {
+      rows: [
+        {
+          AccountObjectId: oid,
+          AccountUpn: 'J.Doe@corp.example',
+          OnPremSid: 'S-1-5-21-1-2-3-1104',
+          AccountDisplayName: 'Jane Doe',
+          AssignedRoles: '["Global Administrator"]',
+          ReportId: '1',
+          Timestamp: '2026-09-28T08:00:00Z',
+        },
+      ],
+    },
+  })
+  expect([answer.imported.table, answer.imported.evidence]).toEqual(['IdentityInfo', 1])
+  expect(answer.next_gap.id).toMatch(/^app-info:/)
+  // Nothing found is an answer too.
+  const empty = await mcp(token, 'submit_gap_rows', {
+    gap_id: answer.next_gap.id,
+    body: { rows: [], note: 'first-party app, not in OAuthAppInfo' },
+  })
+  expect([empty.rows, empty.remaining]).toEqual([0, 0])
+  const after = await call('GET', '/gaps')
+  expect([after.total, after.answered]).toEqual([0, 2])
+  const board = await graph()
+  expect(board.entities.find((e: any) => e.id === user).name).toBe('j.doe@corp.example')
+  const holds = board.facts.find((f: any) => f.predicate === 'holds roles')
+  expect(holds.participants.map((p: any) => board.entities.find((e: any) => e.id === p.entity_id).name).sort()).toEqual([
+    'Global Administrator',
+    'j.doe@corp.example',
+  ])
+  expect(board.sources.filter((s: any) => s.uri.startsWith('factgraph:gap/')).map((s: any) => s.title)).toContainEqual(
+    expect.stringMatching(/nothing found$/),
+  )
+  // The user's neighbourhood instead of the whole board.
+  const around = await mcp(token, 'get_neighbors', { entity_id: user, hops: 1 })
+  expect(around.relations.map((r: any) => r.predicate).sort()).toEqual(['holds roles', 'signed in'])
+  // A gap that changed meanwhile is refused with the current one named.
+  const stale = await request.fetch(`${base}/api/boards/${id}/gaps/identity-info:000000000000/rows`, {
+    method: 'POST',
+    data: { rows: [] },
+    headers: { 'X-FactGraph-Token': token },
+  })
+  expect(stale.status()).toBe(409)
+})

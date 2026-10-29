@@ -347,6 +347,8 @@ On connect the server sends binding **working rules** to the agent (also availab
 
 Gaps cover what the attack touches (once something is marked compromised), otherwise every connected entity. The agent runs the query, or asks the analyst to, and sends the rows with `submit_gap_rows`: rows of a known table are imported and matched to the board's entities like a dropped export, rows of no known table are kept in the answer's source. **An empty result answers a gap too** (with a note such as "table not in this tenant"). Every answer is a source with the URI `factgraph:gap/<id>`, so the gap is closed for every browser and agent; the reply names the next gap. When the board changed between `get_gaps` and the answer (new entities widen a gap, so its ID changes), the answer is refused with the current gap's ID, and rows that fit a table are imported anyway; a repeated submission adds nothing twice. `get_neighbors` reads one entity's surroundings up to three hops instead of the whole board.
 
+Analysts see the same list under **Attack impact → What's missing**: each gap with its subjects (click to show them in the graph), **Copy** for the KQL and **Nothing found** to close it for everyone, agents included. Running the query and dropping the export on the board closes it as well: activity gaps once the table's rows touch the identity, the who/what gaps (`IdentityInfo`, `DeviceInfo`, `OAuthAppInfo`) for every entity on the board the export described, also when it only added IDs. The import records those entities in a source with the URI `factgraph:inventory/…`. With something marked compromised, the open hunts stay under *Hunt next*.
+
 ### REST examples
 
 ```bash

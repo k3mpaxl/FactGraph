@@ -182,6 +182,15 @@ class Inventory(unittest.TestCase):
             ("windows-sid", "S-1-5-21-1-2-3-1104"),
             {(d["payload"]["namespace"], d["payload"]["raw_value"]) for d in drafts if d["type"] == "identifier.add"},
         )
+        # The export names what it described (so the board's identity gap for the user closes), once per export.
+        user = next(e["id"] for e in index["entities"] if e["kind"] == "User")
+        record = next(d["payload"] for d in drafts if d["type"] == "source.add" and d["payload"]["uri"].startswith("factgraph:inventory/"))
+        self.assertEqual(json.loads(record["excerpt"]), {"table": "IdentityInfo", "entities": [user], "rows": 2})
+        _, again, _ = run(board, identities, index)
+        self.assertFalse([d for d in again if d["type"] == "source.add"], "importing the same export again records nothing new")
+        # An export that describes nothing on the board records nothing.
+        _, none, _ = run(board, identities[1:], index)
+        self.assertFalse([d for d in none if d["type"] == "source.add" and "inventory" in d["payload"]["uri"]])
 
     def test_roles_and_logged_on_users_become_relationships(self):
         board, index = str(uuid4()), {"entities": [], "facts": [], "sources": []}

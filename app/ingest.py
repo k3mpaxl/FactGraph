@@ -127,6 +127,10 @@ def _time_field(rows: list[dict]) -> str | None:
     return next((key for key in ("valid_from", "StartTime", *TIME_FIELDS) if any(row.get(key) for row in rows[:200])), None)
 
 
+# Which entities an inventory export (DeviceInfo, IdentityInfo, OAuthAppInfo) described; the browser's gaps read it.
+INVENTORY_URI = "factgraph:inventory/"
+
+
 def _stable(board_id: str, *parts: str) -> str:
     return str(uuid5(UUID(board_id), "\x1f".join(parts)))
 
@@ -595,6 +599,9 @@ def table_rows_to_actions(
     touched: set[str] = set()
     activities: set[str] = set()
     evidence = skipped = identifiers_added = enriched = not_on_board = on_board = 0
+    # Inventory: the entities on the board its rows describe, recorded so their gaps close (an export that only adds IDs
+    # the board already has leaves no other trace).
+    described: set[str] = set()
     known_rows = existing_rows or set()
     times: list[str] = []
     for row_number, row in enumerate(rows, 1):
@@ -642,6 +649,8 @@ def table_rows_to_actions(
                 if not entity_id or (entity_id not in existing_ids and entity_id not in created):
                     continue
                 anchored = True
+                if mapping.inventory and not part["create"]:
+                    described.add(entity_id)
             if not entity_id:
                 anchor = next((f"{k[1]}:{k[2]}:{k[3]}" for k, _ in keys if k[1] in GLOBAL_SCHEMES), name.casefold())
                 entity_id = _stable(board_id, "entity", kind, anchor)
@@ -764,6 +773,25 @@ def table_rows_to_actions(
             )
         )
         evidence += 1
+    record_id = _stable(board_id, "inventory", digest)
+    if described and record_id not in (existing_sources or set()):
+        meta = {"table": mapping.table, "entities": sorted(described)[:5000], "rows": len(rows)}
+        drafts.append(
+            action(
+                "source.add",
+                {
+                    "id": record_id,
+                    "title": f"{mapping.table}: describes {len(described)} entities on the board",
+                    "uri": f"{INVENTORY_URI}{digest[:16]}",
+                    "excerpt": json.dumps(meta, ensure_ascii=False),
+                    "query": query,
+                    "source_kind": "secondary",
+                    "created_at": now,
+                },
+                action_id=_stable(board_id, "source-action", record_id),
+                author="Import",
+            )
+        )
     return drafts, {
         "rows": len(rows),
         "skipped": skipped,

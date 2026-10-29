@@ -944,6 +944,12 @@ button.link:hover { text-decoration: underline }
 .proof-line { display: inline-flex; align-items: center; gap: 4px; color: var(--ok) !important; font-weight: 600 }
 .rotation-item.proven strong { text-decoration: none; color: var(--text-2) }
 .importable-tag { color: var(--accent) !important; font-weight: 600 }
+.gap-item { margin-bottom: 6px }
+.gap-item strong .advice-level { margin-right: 4px; vertical-align: 1px }
+.gap-subjects { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin: 3px 0 }
+.gap-subjects code { font-size: 11px; padding: 1px 5px; border-radius: 4px; background: var(--neutral-soft) }
+.gap-actions { display: flex; flex-direction: column; gap: 4px; flex: none }
+.gap-answered ul { margin: 6px 0 0; padding-left: 18px; font-size: 12px }
 .impact-callout.impacted.regular { background: var(--neutral-soft); color: var(--text-2) }
 .trace-mini { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; border-radius: var(--radius); background: var(--surface-2); font-size: 12px }
 .trace-mini small { color: var(--text-2) }

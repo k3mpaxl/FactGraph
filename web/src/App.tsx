@@ -53,6 +53,7 @@ import EvidenceReader, { EvidenceQueue } from './EvidenceReader'
 import { ImpactPanel } from './ImpactPanel'
 import { analyzeImpact } from './impact'
 import { huntingQueries } from './hunting'
+import { boardGaps } from './gaps'
 import { demoDrafts, factKey, legacyDrafts, normalizeIdentifier, type BoardAction } from './board'
 import { useBoard, type ChangeListener } from './useBoard'
 import { uuid } from './uuid'
@@ -980,6 +981,7 @@ export default function App() {
     () => (data && impact?.seeds.length && activeTab === 'impact' ? huntingQueries(data, impact) : []),
     [data, impact, activeTab],
   )
+  const gaps = useMemo(() => (data && impact && activeTab === 'impact' ? boardGaps(data, impact) : null), [data, impact, activeTab])
   const [impactLens, setImpactLens] = useState(false)
   useEffect(() => {
     if (!impact?.seeds.length) setImpactLens(false)
@@ -1752,6 +1754,7 @@ export default function App() {
                 data={data}
                 impact={impact}
                 queries={hunting}
+                gaps={gaps}
                 onCommand={board.emitMany}
                 onShow={id => setSelection({ kind: 'entity', id }, true)}
                 onShowFact={id => setSelection({ kind: 'fact', id }, true)}

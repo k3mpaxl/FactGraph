@@ -10,7 +10,8 @@ import { rowKey } from './rowKey'
  * service principal is, where a process came from, and the hunts the attack impact suggests that nothing answered yet.
  * Every gap carries filled-in KQL and says which built-in table mapping reads its result rows; submit_gap_rows imports
  * them and closes the gap. A gap answered (also with no rows: "nothing there" is an answer) is remembered on the board
- * as a source with the URI factgraph:gap/<id>, so every browser and agent sees it closed.
+ * as a source with the URI factgraph:gap/<id>, so every browser and agent sees it closed. An inventory export dropped on
+ * the board closes the who/what gaps of the entities it described the same way (factgraph:inventory/…).
  */
 export type Gap = {
   id: string
@@ -42,6 +43,14 @@ export type AnsweredGap = { id: string; rule: string; entities: string[]; rows: 
 export type GapReport = { gaps: Gap[]; answered: AnsweredGap[] }
 
 export const GAP_URI = 'factgraph:gap/'
+/** What an inventory export dropped on the board described (written by the import), whichever way it arrived. */
+export const INVENTORY_URI = 'factgraph:inventory/'
+const INVENTORY_RULES: [RegExp, GapRule][] = [
+  [/^IdentityInfo\b/, 'identity-info'],
+  [/^DeviceInfo$/, 'device-info'],
+  [/^OAuthAppInfo$/, 'app-info'],
+]
+export type InventoryRecord = { table: string; rule: GapRule; entities: string[]; rows: number; source_id: string }
 const MAX_VALUES = 200
 const literal = (value: string) => `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`
 const list = (values: string[]) => `dynamic([${values.map(literal).join(', ')}])`
@@ -70,6 +79,30 @@ export function answeredGaps(data: Pick<GraphData, 'sources'>): AnsweredGap[] {
       source_id: source.id,
       at: source.created_at,
     })
+  }
+  return out
+}
+
+/** Inventory exports on the board and the entities they described: those count as answered for the table's gap. */
+export function inventoryRecords(data: Pick<GraphData, 'sources'>): InventoryRecord[] {
+  const out: InventoryRecord[] = []
+  for (const source of data.sources) {
+    if (!source.uri?.startsWith(INVENTORY_URI)) continue
+    try {
+      const meta = JSON.parse(source.excerpt) as Record<string, unknown>
+      const table = typeof meta.table === 'string' ? meta.table : ''
+      const rule = INVENTORY_RULES.find(([pattern]) => pattern.test(table))?.[1]
+      if (!rule || !Array.isArray(meta.entities)) continue
+      out.push({
+        table,
+        rule,
+        entities: meta.entities.filter((e): e is string => typeof e === 'string'),
+        rows: typeof meta.rows === 'number' ? meta.rows : 0,
+        source_id: source.id,
+      })
+    } catch {
+      /* edited by hand */
+    }
   }
   return out
 }
@@ -103,7 +136,7 @@ function windowOf(facts: Fact[], daysBefore = 7): string {
 export function boardGaps(data: GraphData, impact: Impact = analyzeImpact(data)): GapReport {
   const answered = answeredGaps(data)
   const covered = new Map<string, Set<string>>()
-  for (const answer of answered) {
+  for (const answer of [...answered, ...inventoryRecords(data).map(r => ({ ...r, id: r.source_id }))]) {
     const set = covered.get(answer.rule) ?? new Set<string>()
     for (const id of answer.entities) set.add(id)
     set.add(answer.id)

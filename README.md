@@ -141,7 +141,7 @@ Notes:
 
 - **Exactly one instance.** The relay keeps the list of connected browsers in memory; with several instances, analysts on different instances would not see each other. Do not scale out.
 - **Web sockets must be on**, otherwise the board stays offline. **Always On** prevents the app from idling and dropping connections.
-- Prefer a pinned version (`k3mpaxl/factgraph:0.6.2`) over `latest` during an incident, so a restart never changes the version.
+- Prefer a pinned version (`k3mpaxl/factgraph:0.6.3`) over `latest` during an incident, so a restart never changes the version.
 - App Service **HTTP logging** is off by default. If you enable it, it records request URLs, which contain board IDs.
 - **WebSocket limits per plan:** every open FactGraph tab holds one connection. App Service allows 5 per instance on **F1 (Free)**, 35 on Shared and 350 from **B1**; above the limit, browsers get HTTP 429 and stay offline. Use B1 or higher. Browsers send a heartbeat, and the server closes connections that stay silent (closed laptops, changed networks), so slots are freed without restarting the app.
 - **App Service Authentication** (Entra ID sign-in) can be put in front of the UI. Agents and scripts then also need an Entra token, and if the incident involves your own tenant, an identity provider you cannot trust is no protection. IP access restrictions are often the better choice there.
@@ -347,6 +347,8 @@ On connect the server sends binding **working rules** to the agent (also availab
 
 Gaps cover what the attack touches (once something is marked compromised), otherwise every connected entity. The agent runs the query, or asks the analyst to, and sends the rows with `submit_gap_rows`: rows of a known table are imported and matched to the board's entities like a dropped export, rows of no known table are kept in the answer's source. **An empty result answers a gap too** (with a note such as "table not in this tenant"). Every answer is a source with the URI `factgraph:gap/<id>`, so the gap is closed for every browser and agent; the reply names the next gap. When the board changed between `get_gaps` and the answer (new entities widen a gap, so its ID changes), the answer is refused with the current gap's ID, and rows that fit a table are imported anyway; a repeated submission adds nothing twice. `get_neighbors` reads one entity's surroundings up to three hops instead of the whole board.
 
+Analysts see the same list under **Attack impact → What's missing**: each gap with its subjects (click to show them in the graph), **Copy** for the KQL and **Nothing found** to close it for everyone, agents included. Running the query and dropping the export on the board closes it as well: activity gaps once the table's rows touch the identity, the who/what gaps (`IdentityInfo`, `DeviceInfo`, `OAuthAppInfo`) for every entity on the board the export described, also when it only added IDs. The import records those entities in a source with the URI `factgraph:inventory/…`. With something marked compromised, the open hunts stay under *Hunt next*.
+
 ### REST examples
 
 ```bash
@@ -503,8 +505,8 @@ cd web && npm run build && DOCS_SCREENSHOTS=1 npx playwright test e2e/docs-scree
 - **Publish Docker image** builds the image for `linux/amd64` and `linux/arm64` on a version tag (`v*.*.*`) or via **Run workflow**, and publishes it as `latest` and with the version number. It requires the repository secrets `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` (a Docker Hub access token with write permission).
 
 ```bash
-git tag v0.6.2
-git push origin v0.6.2
+git tag v0.6.3
+git push origin v0.6.3
 ```
 
 A manual multi-arch build is possible with `./deploy/publish-multiarch.sh` (`FACTGRAPH_IMAGE` and `FACTGRAPH_VERSION` override namespace and version).

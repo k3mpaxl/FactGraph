@@ -147,6 +147,32 @@ const data = project('b', ops).data
     const covered = boardGaps(project('b', more).data).gaps.find(g => g.rule === 'azure-activity')
     assert.deepEqual(covered.entities, ['sp'], 'the user has AzureActivity rows now')
   }
+  // A dropped inventory export that only added IDs leaves its record: the entities it described are answered for its table.
+  {
+    const record = (id, table, entities) => ({
+      id,
+      clock: 960,
+      at: '2026-10-04T00:00:00.000Z',
+      actor: 'me',
+      author: 'Import',
+      boardId: 'b',
+      type: 'source.add',
+      payload: {
+        id,
+        title: `${table}: describes`,
+        uri: `factgraph:inventory/${id}`,
+        excerpt: JSON.stringify({ table, entities, rows: 3 }),
+      },
+    })
+    const dropped = boardGaps(
+      project('b', [...ops, record('r1', 'IdentityInfo (UEBA)', ['user']), record('r2', 'OAuthAppInfo', ['sp'])]).data,
+    )
+    const rules = dropped.gaps.map(g => g.rule)
+    assert.ok(!rules.includes('identity-info'), 'the user is described')
+    assert.deepEqual(dropped.gaps.find(g => g.rule === 'app-info').entities, ['app'], 'only the app is still open')
+    assert.ok(rules.includes('device-info'))
+    assert.deepEqual(dropped.answered, [], 'a record is not an answer to a gap')
+  }
 
   // An answer on the board (a source with the gap's URI) closes it for every browser; a new user opens a new gap.
   const answer = (gap, extra = {}) => ({

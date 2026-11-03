@@ -7,6 +7,7 @@ import {
   ChevronRight,
   Copy,
   Crosshair,
+  HelpCircle,
   KeyRound,
   Route,
   Search,
@@ -42,6 +43,8 @@ import {
   type Seed,
 } from './impact'
 import { evidenceQuery, type HuntQuery } from './hunting'
+import type { GapReport } from './gaps'
+import { GapList } from './Gaps'
 
 type Command = (drafts: ActionDraft[]) => Promise<unknown>
 const day = (t: string | null | undefined) => (t ? t.slice(0, 16).replace('T', ' ') : '—')
@@ -1005,6 +1008,7 @@ export function ImpactPanel({
   data,
   impact,
   queries,
+  gaps,
   onCommand,
   onShow,
   onShowFact,
@@ -1014,6 +1018,7 @@ export function ImpactPanel({
   data: GraphData
   impact: Impact
   queries: HuntQuery[]
+  gaps: GapReport | null
   onCommand: Command
   onShow: (entityId: string) => void
   onShowFact: (factId: string) => void
@@ -1350,6 +1355,18 @@ export function ImpactPanel({
               </div>
             ) : null
           })}
+        </Block>
+      )}
+
+      {gaps && (
+        <Block
+          id="gaps"
+          title="What's missing"
+          count={gaps.gaps.filter(g => !impact.seeds.length || g.rule !== 'hunt').length}
+          icon={<HelpCircle size={14} />}
+          open={gaps.gaps.some(g => g.priority === 'high' && g.rule !== 'hunt')}
+        >
+          <GapList data={data} report={gaps} hunts={!impact.seeds.length} onCommand={onCommand} onShow={onShow} onCopy={onCopy} />
         </Block>
       )}
 

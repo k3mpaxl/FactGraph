@@ -1663,3 +1663,58 @@ test('agents: get_gaps names what is missing with KQL, submit_gap_rows imports t
   })
   expect(stale.status()).toBe(409)
 })
+
+test("analysts: What's missing lists the gaps; a dropped inventory export and Nothing found close them", async ({ page, request }) => {
+  const { call, graph } = await setup(page, request)
+  const oid = '11111111-2222-3333-4444-555555555555'
+  const appId = 'c44b4083-3bb0-49c1-b47d-974e53cbdf3c'
+  const user = (await call('POST', '/entities', { name: oid, kind: 'User' })).id
+  await call('POST', `/entities/${user}/identifiers`, { scheme: 'external_id', namespace: 'entra-object-id', raw_value: oid })
+  const ip = (await call('POST', '/entities', { name: '198.51.100.7', kind: 'IP' })).id
+  const app = (await call('POST', '/entities', { name: appId, kind: 'Service' })).id
+  await call('POST', `/entities/${app}/identifiers`, { scheme: 'external_id', namespace: 'entra-app-id', raw_value: appId })
+  await call('POST', '/activities', {
+    operation: 'signed in',
+    participants: [
+      { entity_id: user, role: 'identity' },
+      { entity_id: ip, role: 'source' },
+      { entity_id: app, role: 'target' },
+    ],
+    valid_from: '2026-09-28T10:00:00Z',
+  })
+  await page.getByRole('tab', { name: 'Attack impact' }).click()
+  const identity = page.locator('.gap-item[data-gap="identity-info"]')
+  await expect(identity).toContainText('Who is this user')
+  await expect(identity.locator('.entity-chip')).toHaveText(oid)
+  await expect(page.locator('.gap-item[data-gap="app-info"]')).toBeVisible()
+  // The analyst runs the query and drops the export: the user is described (here without roles), the gap closes.
+  const transfer = await page.evaluateHandle(
+    text => {
+      const dt = new DataTransfer()
+      dt.items.add(new File([text], 'IdentityInfo.csv', { type: 'text/csv' }))
+      return dt
+    },
+    [
+      'Timestamp,AccountObjectId,AccountUpn,OnPremSid,AccountDisplayName,ReportId',
+      `2026-09-28T08:00:00Z,${oid},J.Doe@corp.example,S-1-5-21-1-2-3-1104,Jane Doe,1`,
+    ].join('\n'),
+  )
+  const target = page.locator('.workspace')
+  await target.dispatchEvent('dragenter', { dataTransfer: transfer })
+  await target.dispatchEvent('dragover', { dataTransfer: transfer })
+  await target.dispatchEvent('drop', { dataTransfer: transfer })
+  await expect
+    .poll(async () => (await graph()).sources.filter((s: any) => s.uri.startsWith('factgraph:inventory/')).length, { timeout: 15000 })
+    .toBe(1)
+  expect((await graph()).entities.find((e: any) => e.id === user).name).toBe('j.doe@corp.example')
+  await page.getByRole('tab', { name: 'Attack impact' }).click()
+  await expect(page.locator('.gap-item[data-gap="app-info"]')).toBeVisible()
+  await expect(identity).toHaveCount(0)
+  // The app is first-party and not in OAuthAppInfo: Nothing found closes it for everyone, agents included.
+  await page.locator('.gap-item[data-gap="app-info"]').getByRole('button', { name: 'Nothing found' }).click()
+  await expect(page.locator('.gap-item[data-gap="app-info"]')).toHaveCount(0)
+  await expect(page.locator('.gap-answered summary')).toHaveText('Answered 1 · 1 inventory export')
+  const left = await call('GET', '/gaps')
+  expect(left.gaps.map((g: any) => g.rule)).not.toContain('app-info')
+  expect(left.answered).toBe(1)
+})
